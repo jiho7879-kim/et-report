@@ -1,0 +1,142 @@
+"""사용자 설정 · 프리셋 저장소 (로컬 JSON).
+
+두 종류의 프리셋을 저장한다 — UI 목업 v12와 1:1 대응.
+- ExtractPreset : 데이터 워크스페이스. DB·리포메터·조건 묶음 (기간은 저장하지 않음)
+- AnalysisConfig: 분석 워크스페이스. DB·Plot 템플릿·Table 템플릿·Report 이름 묶음
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass, field
+from dataclasses import fields as dc_fields
+
+from etreport.paths import settings_file
+
+SCHEMA_VERSION = 3
+
+
+def _fields(cls, raw: dict) -> dict:
+    """dataclass가 아는 키만 추린다 — 구버전 settings.json 호환."""
+    known = {f.name for f in dc_fields(cls)}
+    return {k: v for k, v in raw.items() if k in known}
+
+
+def _only(cls, raw: dict):
+    return cls(**_fields(cls, raw))
+
+
+@dataclass
+class Condition:
+    col: str
+    val: str = ""
+    mode: str = "auto"        # auto | regexp  (숫자·timestamp 컬럼은 auto 고정)
+    required: bool = False    # line_id
+
+
+@dataclass
+class ExtractPreset:
+    name: str
+    db_path: str = ""
+    reformatter_path: str = ""
+    reformatter_sheet: str = ""       # 빈 값 = 첫 시트
+    out_dir: str = ""
+    conditions: list[Condition] = field(
+        default_factory=lambda: [Condition("line_id", required=True)]
+    )
+    save_csv: bool = True
+    save_sbdf: bool = False
+
+
+@dataclass
+class AnalysisConfig:
+    name: str
+    db_path: str = ""
+    plot_template_path: str = ""
+    table_template_path: str = ""
+    reformatter_path: str = ""
+    report: str = ""          # 템플릿의 Report 컬럼 값
+    table_slide_mode: str = "wide"     # wide | split
+    # 시트 이름 (빈 값 = 첫 시트)
+    plot_sheet: str = ""
+    table_sheet: str = ""
+    reformatter_sheet: str = ""
+    # 로그 축 판정은 plot 관심사 — 분석 설정에 속한다
+    log_patterns: list[str] = field(default_factory=lambda: ["Ioff*", "*Leak*", "Jg*"])
+    split_path: str = ""
+
+
+@dataclass
+class Settings:
+    schema: int = SCHEMA_VERSION
+    skipped_version: str | None = None          # 업데이트 건너뛰기
+    extract_presets: list[ExtractPreset] = field(default_factory=list)
+    analysis_configs: list[AnalysisConfig] = field(default_factory=list)
+    last_extract_preset: str = ""
+    last_analysis_config: str = ""
+
+    # ── 영속화 ────────────────────────────────────────────────
+    def save(self) -> None:
+        settings_file().write_text(
+            json.dumps(asdict(self), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    @classmethod
+    def load(cls) -> Settings:
+        f = settings_file()
+        if not f.exists():
+            return cls.defaults()
+        try:
+            raw = json.loads(f.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return cls.defaults()
+        raw.pop("schema", None)
+        s = cls(
+            skipped_version=raw.get("skipped_version"),
+            last_extract_preset=raw.get("last_extract_preset", ""),
+            last_analysis_config=raw.get("last_analysis_config", ""),
+        )
+        # 버전 간 필드가 늘거나 줄어도 설정 파일 때문에 앱이 죽지 않도록,
+        # 현재 dataclass가 아는 키만 남기고 나머지는 버린다.
+        for p in raw.get("extract_presets", []):
+            conds = [_only(Condition, c) for c in p.pop("conditions", [])]
+            s.extract_presets.append(
+                ExtractPreset(**_fields(ExtractPreset, p), conditions=conds))
+        for c in raw.get("analysis_configs", []):
+            s.analysis_configs.append(AnalysisConfig(**_fields(AnalysisConfig, c)))
+        if not s.extract_presets:
+            s.extract_presets = cls.defaults().extract_presets
+        if not s.analysis_configs:
+            s.analysis_configs = cls.defaults().analysis_configs
+        return s
+
+    @classmethod
+    def defaults(cls) -> Settings:
+        """첫 실행 — 바로 감을 잡을 수 있게 예시 조건을 채워 둔다."""
+        s = cls()
+        s.extract_presets.append(ExtractPreset(
+            name="M2 정기 모니터링",
+            conditions=[
+                Condition("line_id", "L1", required=True),
+                Condition("root_lot_id", "PA12* PB201 !PA125"),
+                Condition("temperature", ">=25"),
+            ]))
+        s.extract_presets.append(ExtractPreset(
+            name="신규 device 평가",
+            conditions=[
+                Condition("line_id", "L2", required=True),
+                Condition("device_id", "ND*"),
+                Condition("step_id", "M1 M2 M3"),
+            ]))
+        s.analysis_configs.append(AnalysisConfig(name="M2 정기 리포트",
+                                                report="M2_ET"))
+        s.analysis_configs.append(AnalysisConfig(name="신규 device 평가",
+                                                report="DEV_EVAL"))
+        return s
+
+    # ── 이름으로 찾기 ─────────────────────────────────────────
+    def extract_preset(self, name: str) -> ExtractPreset | None:
+        return next((p for p in self.extract_presets if p.name == name), None)
+
+    def analysis_config(self, name: str) -> AnalysisConfig | None:
+        return next((c for c in self.analysis_configs if c.name == name), None)

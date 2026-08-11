@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+myenv/
+
+# 빌드 산출물
+build/*.spec
+dist/
+*.zip
+
+# 로컬 에이전트 설정 / 캐시
+.claude/
+.codegraph/
+.pytest_cache/
+
+# Windows ADS 잔재 (WSL에서 복사 시 생성)
+*:Zone.Identifier
+
+# 사내 데이터 — 절대 커밋 금지
+*.duckdb
+*.parquet
+*.xlsx
+*.xls
+*.sbdf
+settings.json
+column_catalog.json
+staging/
+sessions/

@@ -1,0 +1,93 @@
+/* 애플풍 라이트 — 목업 v12 토큰 */
+QWidget { background:#f2f3f5; color:#1d1d1f;
+          font-family:%UI_FONT%;
+          font-size:13px; }
+
+#topbar { background:#ffffff; border-bottom:1px solid rgba(0,0,0,.08); }
+#logo   { font-size:14px; }
+#wsButton { background:transparent; color:#6e6e73; border:none; border-radius:8px;
+            padding:7px 18px; font-weight:600; }
+#wsButton:hover   { background:rgba(0,0,0,.04); color:#1d1d1f; }
+#wsButton:checked { background:#eaf3fd; color:#0071e3; }
+#dbPill { background:#f7f8fa; border:1px solid rgba(0,0,0,.08); border-radius:12px;
+          padding:5px 14px; color:#6e6e73; font-size:12px; }
+
+#card  { background:#ffffff; border:1px solid rgba(0,0,0,.06); border-radius:14px; }
+#cardTitle { font-size:14px; font-weight:600; }
+#cardSub, #hint { color:#a1a1a6; font-size:12px; }
+#sectionLabel { color:#a1a1a6; font-size:10px; font-weight:700;
+                letter-spacing:1px; margin-top:6px; }
+#warn  { color:#a85e00; font-size:12px; }
+#warnBox { background:#fff3e2; color:#a85e00; border-radius:9px; padding:10px 12px; }
+#warnBox[level="ok"] { background:#e9f6ee; color:#1d8341; }
+#bigNum { font-size:30px; font-weight:600; color:#d70015; }
+#bigNum[zero="true"] { color:#c7c7cc; }
+
+QPushButton { background:#0071e3; color:#ffffff; border:none; border-radius:14px;
+              padding:7px 18px; font-weight:600; }
+QPushButton:hover    { background:#0077ed; }
+QPushButton:disabled { background:#c4cdd6; color:#ffffff; }
+QPushButton[dirty="true"] { background:#ff9500; }
+QPushButton[dirty="true"]:hover { background:#ffa01a; }
+QPushButton[ghost="true"] { background:#ffffff; color:#1d1d1f;
+                            border:1px solid rgba(0,0,0,.14); font-weight:500;
+                            padding:6px 12px; }
+QPushButton[ghost="true"]:hover { background:#f7f8fa; border-color:#0071e3; }
+#cfgRow { text-align:left; padding:8px 12px; border-radius:9px;
+          background:#f7f8fa; border:1px solid transparent;
+          font-family:%MONO_FONT%; font-size:12px; }
+#cfgRow:hover { border-color:#0071e3; background:#eaf3fd; }
+
+QComboBox, QLineEdit, QDateEdit, QPlainTextEdit, QAbstractSpinBox {
+  background:#ffffff; border:1px solid rgba(0,0,0,.14); border-radius:9px;
+  padding:6px 10px; }
+QComboBox:focus, QLineEdit:focus, QDateEdit:focus { border-color:#0071e3; }
+#sqlBox { font-family:%MONO_FONT%; font-size:12px;
+          background:#f7f8fa; color:#3a5a3a; }
+#runFooter { background:#f2f3f5; border-top:1px solid rgba(0,0,0,.08); }
+#logBox { font-family:%MONO_FONT%; font-size:11.5px;
+          background:#1d1d1f; color:#d8d8dc; border:none; border-radius:9px;
+          padding:8px 10px; }
+QProgressBar { background:#e9eaee; border:none; border-radius:3px; }
+QProgressBar::chunk { background:#0071e3; border-radius:3px; }
+#typeBadge { border-radius:6px; padding:3px 6px; font-size:10px; font-weight:700;
+             background:#f0efec; color:#7a7168; }
+#typeBadge[kind="num"] { background:#eaf3fd; color:#0058b0; }
+#typeBadge[kind="ts"]  { background:#eef6ef; color:#1d8341; }
+
+QTabWidget::pane { border:none; background:#f2f3f5; }
+QTabBar::tab { background:transparent; padding:8px 22px; margin:6px 3px;
+               border-radius:8px; color:#6e6e73; }
+QTabBar::tab:selected { background:#eaf3fd; color:#0071e3; font-weight:600; }
+
+#dockScroll, #dock { background:#ffffff; border-right:1px solid rgba(0,0,0,.07); }
+#groupList { background:#ffffff; border:1px solid rgba(0,0,0,.10);
+             border-radius:9px; }
+#groupList::item { padding:5px 4px; }
+
+#slide { background:#ffffff; border-radius:12px; border:1px solid rgba(0,0,0,.07); }
+#slideTitle { font-size:16px; font-weight:600;
+              border-bottom:2px solid #1d1d1f; padding-bottom:6px; }
+#slot { background:#ffffff; border:1px solid rgba(0,0,0,.10); border-radius:8px; }
+#slot[selected="true"] { border:2px solid #0071e3; }
+#slot[dropTarget="true"] { border:2px dashed #0071e3; background:#f2f8ff; }
+#sqlEditor { font-family:%MONO_FONT%; font-size:12.5px;
+             background:#ffffff; border:1px solid rgba(0,0,0,.14);
+             border-radius:9px; padding:8px 10px; }
+#warnBox[level="err"] { background:#ffecee; color:#d70015; }
+#slotTitle { font-size:11px; font-weight:600; }
+
+#sumTable { background:#ffffff; border:1px solid rgba(0,0,0,.08);
+            border-radius:8px; gridline-color:rgba(0,0,0,.06);
+            font-family:%MONO_FONT%; font-size:12px; }
+#sumTable QHeaderView::section { background:#f7f8fa; border:none;
+            border-right:1px solid rgba(0,0,0,.06);
+            border-bottom:1px solid rgba(0,0,0,.10);
+            padding:5px 8px; font-family:%UI_FONT%;
+            font-weight:600; font-size:11px; }
+
+QScrollArea { border:none; }
+QListWidget { background:#ffffff; border:1px solid rgba(0,0,0,.10);
+              border-radius:9px; }
+QListWidget::item { padding:6px 8px; }
+QListWidget::item:selected { background:#eaf3fd; color:#0071e3; }

@@ -1,0 +1,2578 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ET Report</title>
+<style>
+:root{
+  --bg:#f2f3f5;
+  --surface:#ffffff;
+  --surface-2:#f7f8fa;
+  --line:rgba(0,0,0,.075);
+  --line-strong:rgba(0,0,0,.14);
+  --txt:#1d1d1f;
+  --dim:#6e6e73;
+  --faint:#a1a1a6;
+  --acc:#0071e3;
+  --acc-soft:#eaf3fd;
+  --ok:#1d8341;   --ok-soft:#e9f6ee;
+  --warn:#a85e00; --warn-soft:#fff3e2;
+  --bad:#d70015;  --bad-soft:#ffecee;
+  --mono:'SF Mono',ui-monospace,'Consolas','D2Coding',monospace;
+  --sans:-apple-system,BlinkMacSystemFont,'SF Pro Display','Pretendard','Apple SD Gothic Neo','Segoe UI','Malgun Gothic',sans-serif;
+  --sh-1:0 1px 2px rgba(0,0,0,.04),0 1px 1px rgba(0,0,0,.03);
+  --sh-2:0 4px 16px rgba(0,0,0,.06),0 1px 3px rgba(0,0,0,.04);
+  --sh-3:0 12px 40px rgba(0,0,0,.10);
+  --ease:cubic-bezier(.32,.72,0,1);
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-font-smoothing:antialiased}
+body{background:var(--bg);color:var(--txt);font:14px/1.5 var(--sans);height:100vh;display:flex;flex-direction:column;overflow:hidden;letter-spacing:-.01em}
+button,input,select{font-family:inherit;letter-spacing:inherit}
+
+/* ═══ 상단바 ═══ */
+.topbar{background:rgba(255,255,255,.82);backdrop-filter:saturate(180%) blur(20px);border-bottom:1px solid var(--line);
+  padding:0 24px;display:flex;align-items:stretch;gap:32px;flex-shrink:0;height:52px;position:relative;z-index:20}
+.logo{font-size:14.5px;font-weight:600;display:flex;align-items:center;letter-spacing:-.02em}
+.logo em{font-style:normal;color:var(--acc)}
+.ws-switch{display:flex;align-items:center;gap:4px}
+.ws{display:flex;align-items:center;gap:7px;padding:7px 16px;cursor:pointer;color:var(--dim);font-size:13.5px;font-weight:500;
+  border-radius:8px;transition:all .2s var(--ease)}
+.ws:hover{color:var(--txt);background:rgba(0,0,0,.035)}
+.ws.active{color:var(--acc);background:var(--acc-soft);font-weight:600}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:12px}
+.db-pill{font-size:12.5px;color:var(--dim);background:var(--surface-2);border:1px solid var(--line);border-radius:100px;padding:5px 14px}
+.db-pill b{color:var(--txt);font-weight:600;font-variant-numeric:tabular-nums}
+
+/* ═══ 공통 ═══ */
+.card{background:var(--surface);border-radius:14px;padding:22px;box-shadow:var(--sh-1)}
+.card h4{font-size:15px;margin-bottom:16px;font-weight:600;letter-spacing:-.015em}
+.card h4 .sub{font-size:12.5px;color:var(--faint);font-weight:400;margin-left:9px;letter-spacing:0}
+select,input[type=text]{background:var(--surface);border:1px solid var(--line-strong);color:var(--txt);border-radius:9px;
+  padding:9px 12px;font-size:13.5px;transition:.15s var(--ease)}
+select:focus,input:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 3.5px var(--acc-soft)}
+select{cursor:pointer}
+.btn{background:var(--acc);border:none;color:#fff;border-radius:100px;padding:10px 22px;font-size:13.5px;font-weight:600;
+  cursor:pointer;transition:.18s var(--ease)}
+.btn:hover{background:#0077ed;transform:translateY(-.5px)}
+.btn:active{transform:translateY(0);background:#0066cc}
+.btn.big{padding:13px 30px;font-size:15px}
+.btn.ghost{background:var(--surface);border:1px solid var(--line-strong);color:var(--txt);font-weight:500;box-shadow:var(--sh-1)}
+.btn.ghost:hover{background:var(--surface-2);border-color:var(--line-strong);transform:none}
+.btn.sm{padding:7px 15px;font-size:12.5px;font-weight:500}
+.btn:disabled{opacity:.4;cursor:default;transform:none}
+.btn.warn{background:#c26c00}
+.btn.warn:hover{background:#d47700}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+label.chk{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--dim);cursor:pointer;user-select:none}
+label.chk input{width:15px;height:15px;accent-color:var(--acc);cursor:pointer}
+.seg{display:inline-flex;background:rgba(0,0,0,.045);border-radius:9px;padding:2px;gap:2px}
+.seg button{background:none;border:none;color:var(--dim);padding:6px 15px;font-size:13px;cursor:pointer;
+  border-radius:7px;transition:.18s var(--ease);font-weight:500}
+.seg button.on{background:var(--surface);color:var(--txt);font-weight:600;box-shadow:var(--sh-1)}
+.seg button:not(.on):hover{color:var(--txt)}
+
+/* ═══ 워크스페이스 ═══ */
+.workspace{flex:1;display:none;min-height:0}
+.workspace.active{display:flex}
+
+/* ── ① 데이터 ── */
+.data-ws{flex-direction:column;overflow-y:auto;padding:28px;align-items:center}
+.data-col{width:100%;max-width:840px;display:flex;flex-direction:column;gap:16px}
+.gap-banner{background:var(--warn-soft);border-radius:14px;padding:18px 22px;display:flex;align-items:center;gap:16px;
+  color:var(--warn);font-size:14px}
+.gap-banner b{font-weight:600}
+.fixed-conds{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.fixed-chip{background:var(--surface-2);border:1px solid var(--line);border-radius:100px;padding:7px 15px;font-size:12.5px;color:var(--dim)}
+.fixed-chip b{color:var(--txt);font-weight:600}
+.cond-row{display:grid;grid-template-columns:170px 1fr 104px;gap:10px;align-items:start}
+.parse-chips{min-height:28px;padding:8px 0 2px}
+.pchip{display:inline-flex;background:var(--acc-soft);border-radius:6px;padding:3px 10px;margin:2px 5px 2px 0;
+  font-size:12px;font-family:var(--mono);color:#0058b0}
+.pchip.neg{background:var(--bad-soft);color:#b0000f}
+.syntax-help{font-size:12px;color:var(--faint)}
+.syntax-help code{background:var(--surface-2);border-radius:4px;padding:1px 5px;font-family:var(--mono);color:var(--dim)}
+.sql-toggle{font-size:13px;color:var(--acc);cursor:pointer;user-select:none;font-weight:500}
+.sqlbox{font-family:var(--mono);font-size:12px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;
+  padding:14px 16px;color:#3a5a3a;white-space:pre-wrap;line-height:1.65;margin-top:10px;display:none}
+.sqlbox.show{display:block}
+.estimate{margin-left:auto;font-size:12.5px;color:var(--dim)}
+.estimate b{color:var(--txt);font-weight:600;font-variant-numeric:tabular-nums}
+.db-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.stat{background:var(--surface-2);border-radius:11px;padding:16px;text-align:center}
+.stat .v{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.stat .k{font-size:12px;color:var(--faint);margin-top:3px}
+.load-log{font-size:12.5px;line-height:1.9;margin-top:14px;display:none}
+.load-log .ok{color:var(--ok)}
+.load-log .dim{color:var(--faint)}
+/* 프리셋 바 */
+.preset-bar{background:var(--surface);border-radius:14px;padding:14px 18px;box-shadow:var(--sh-1);display:flex;align-items:center;gap:10px}
+.preset-bar .pl{font-size:11px;letter-spacing:.05em;color:var(--faint);text-transform:uppercase;font-weight:600}
+.preset-bar select{min-width:230px;font-weight:600}
+.preset-bar .dirty-dot{width:7px;height:7px;border-radius:50%;background:#c26c00;display:none}
+.preset-bar .dirty-dot.show{display:block}
+/* 파일 경로 필드 */
+.path-row{display:grid;grid-template-columns:96px 1fr auto;gap:10px;align-items:center;margin-bottom:10px}
+.path-row:last-child{margin-bottom:0}
+.path-row .k{font-size:12.5px;color:var(--dim);font-weight:500}
+.path-val{background:var(--surface-2);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font-size:12.5px;
+  font-family:var(--mono);color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:8px}
+.path-val .tag{font-family:var(--sans);font-size:10.5px;border-radius:5px;padding:1px 7px;flex-shrink:0;font-weight:600}
+.tag.ok{background:var(--ok-soft);color:var(--ok)}
+.tag.warn{background:var(--warn-soft);color:var(--warn)}
+/* 날짜 */
+.date-range{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+input[type=date]{background:var(--surface);border:1px solid var(--line-strong);border-radius:9px;padding:9px 12px;
+  font-size:13.5px;font-family:var(--sans);color:var(--txt);cursor:pointer}
+input[type=date]:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 3.5px var(--acc-soft)}
+.date-sep{color:var(--faint)}
+.quick-range{display:flex;gap:6px}
+.quick-range button{background:var(--surface-2);border:1px solid var(--line);border-radius:100px;padding:5px 12px;
+  font-size:12px;color:var(--dim);cursor:pointer;transition:.15s}
+.quick-range button:hover{border-color:var(--acc);color:var(--acc)}
+/* 조건 목록 */
+.cond-item{display:grid;grid-template-columns:170px 1fr 104px 30px;gap:10px;align-items:start;margin-bottom:14px;
+  padding-bottom:14px;border-bottom:1px solid var(--line)}
+.cond-item:last-of-type{border-bottom:none;margin-bottom:6px;padding-bottom:0}
+.cond-del{background:none;border:none;color:var(--faint);font-size:15px;cursor:pointer;border-radius:7px;
+  width:30px;height:36px;transition:.15s}
+.cond-del:hover{background:var(--bad-soft);color:var(--bad)}
+.add-cond{border:1.5px dashed var(--line-strong);border-radius:10px;padding:11px;width:100%;background:none;
+  color:var(--faint);font-size:13px;cursor:pointer;transition:.15s}
+.add-cond:hover{border-color:var(--acc);color:var(--acc)}
+
+/* ── ② 분석 ── */
+.anal-ws{min-height:0}
+.dock{width:264px;background:var(--surface);border-right:1px solid var(--line);display:flex;flex-direction:column;
+  flex-shrink:0;transition:width .3s var(--ease);overflow:hidden}
+.dock.collapsed{width:52px}
+.dock-inner{width:264px;display:flex;flex-direction:column;overflow-y:auto;flex:1}
+.dock.collapsed .dock-inner{display:none}
+.dock-rail{display:none;flex-direction:column;align-items:center;gap:14px;padding-top:14px}
+.dock.collapsed .dock-rail{display:flex}
+.rail-item{width:36px;height:36px;border-radius:9px;background:var(--surface-2);display:flex;align-items:center;
+  justify-content:center;font-size:15px;cursor:pointer;position:relative;transition:.15s}
+.rail-item:hover{background:var(--acc-soft)}
+.rail-item .rb{position:absolute;top:-3px;right:-3px;background:var(--bad);color:#fff;border-radius:9px;font-size:9.5px;padding:1px 5px;font-weight:700}
+.dock-toggle{padding:9px;text-align:right;flex-shrink:0;border-top:1px solid var(--line)}
+.dock.collapsed .dock-toggle{text-align:center}
+.dock-toggle button{background:none;border:none;color:var(--faint);font-size:13px;cursor:pointer;padding:5px 9px;border-radius:7px;transition:.15s}
+.dock-toggle button:hover{background:var(--surface-2);color:var(--txt)}
+.dock section{padding:18px 18px;border-bottom:1px solid var(--line)}
+.dock h3{font-size:11px;letter-spacing:.05em;color:var(--faint);text-transform:uppercase;margin-bottom:11px;font-weight:600}
+.target-card{background:var(--surface-2);border-radius:11px;padding:13px 15px;cursor:pointer;transition:.2s var(--ease);border:1px solid transparent}
+.target-card:hover{border-color:var(--acc);background:var(--acc-soft)}
+.target-card .big{font-size:15px;font-weight:600;letter-spacing:-.015em}
+.target-card .sub{color:var(--dim);font-size:12.5px;margin-top:3px}
+.target-card .hint{color:var(--acc);font-size:12px;margin-top:9px;font-weight:500}
+.item-warn{margin-top:9px;font-size:12px;color:var(--warn);background:var(--warn-soft);border-radius:8px;padding:8px 11px;line-height:1.4}
+.grp-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:9px;cursor:pointer;transition:.15s;margin-bottom:2px}
+.grp-row:hover{background:var(--surface-2)}
+.grp-row .sw{width:14px;height:14px;border-radius:4px;flex-shrink:0;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08)}
+.grp-row .nm{flex:1;font-size:13.5px;font-weight:500}
+.grp-row .cnt{color:var(--faint);font-size:12.5px;font-variant-numeric:tabular-nums}
+.grp-row .ref-tag{font-size:9.5px;background:#e8e8ed;color:var(--dim);font-weight:700;border-radius:4px;padding:2px 6px;letter-spacing:.03em}
+.grp-row input[type=checkbox]{width:15px;height:15px;accent-color:var(--acc);cursor:pointer}
+.unassigned-note{font-size:12px;color:var(--faint);padding:5px 10px}
+.excl-card{background:var(--surface-2);border-radius:11px;padding:16px;text-align:center}
+.excl-card .num{font-size:34px;font-weight:600;line-height:1;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.excl-card .num.zero{color:var(--faint)}
+.excl-card .num:not(.zero){color:var(--bad)}
+.excl-card .lbl{font-size:11.5px;color:var(--faint);margin:6px 0 12px}
+
+.anal-content{flex:1;display:flex;flex-direction:column;min-width:0}
+.tabs{display:flex;background:var(--surface);border-bottom:1px solid var(--line);flex-shrink:0;padding:8px 16px;gap:4px}
+.tab{padding:8px 18px;cursor:pointer;color:var(--dim);position:relative;font-size:13.5px;font-weight:500;
+  border-radius:8px;transition:.18s var(--ease)}
+.tab:hover{color:var(--txt);background:rgba(0,0,0,.035)}
+.tab.active{color:var(--acc);background:var(--acc-soft);font-weight:600}
+.tab .dirty{display:none;position:absolute;top:4px;right:6px;width:7px;height:7px;border-radius:50%;background:#c26c00}
+.tab .dirty.show{display:block}
+.pane{flex:1;overflow:auto;display:none;padding:20px 24px}
+.pane.active{display:flex;flex-direction:column;gap:14px}
+
+/* ── 탐색 ── */
+.plot-layout{display:flex;gap:16px;flex:1;min-height:0}
+.plot-main{flex:1;display:flex;flex-direction:column;min-width:0;gap:12px}
+.plot-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.canvas-frame{background:var(--surface);border-radius:14px;padding:12px;box-shadow:var(--sh-2);flex:1;min-height:0;display:flex}
+canvas.big{background:#fff;border:1px solid var(--line);border-radius:8px;width:100%;flex:1;cursor:crosshair;min-height:0}
+.plot-footer{display:flex;gap:16px;font-size:12px;color:var(--faint)}
+.plot-side{width:262px;flex-shrink:0;display:flex;flex-direction:column;gap:12px;overflow-y:auto}
+.grp-edit{display:flex;align-items:center;gap:9px;padding:8px 2px;border-bottom:1px solid var(--line)}
+.grp-edit:last-child{border-bottom:none}
+.grp-edit input[type=color]{width:26px;height:26px;border:1px solid var(--line-strong);background:none;padding:2px;cursor:pointer;border-radius:7px}
+.grp-edit .nm{flex:1;font-size:13px;font-weight:500}
+.grp-edit select{padding:5px 7px;font-size:12.5px}
+.axis-row{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.axis-row .ax-lbl{width:16px;font-weight:600;color:var(--faint);font-size:13px}
+.axis-row select{flex:1;min-width:0}
+.scale-btn{background:var(--surface-2);border:1px solid var(--line-strong);color:var(--dim);border-radius:8px;
+  padding:7px 11px;font-size:12px;cursor:pointer;min-width:54px;transition:.15s var(--ease)}
+.scale-btn.log{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+.auto-range{background:var(--surface-2);border-radius:9px;padding:10px 12px;margin-top:4px}
+.ar-head{font-size:11px;color:var(--faint);font-weight:600;margin-bottom:5px}
+.ar-val{font-size:12px;font-family:var(--mono);color:var(--txt);line-height:1.6}
+.ar-note{font-size:11px;color:var(--faint);margin-top:5px}
+.ar-head{display:flex;align-items:center}
+.ar-edit-link{margin-left:auto;color:var(--acc);cursor:pointer;font-weight:600;font-size:11px;user-select:none}
+.ax-edit{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+.ax-line{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.ax-line>span{font-size:11.5px;color:var(--dim);width:52px;flex-shrink:0}
+.seg.tiny{padding:2px;border-radius:7px;flex:1}
+.seg.tiny button{padding:4px 0;font-size:11px;flex:1;border-radius:5px}
+.mm-grid{display:grid;grid-template-columns:52px 1fr 1fr;gap:6px;align-items:center;margin-top:7px}
+.mm-grid input{padding:6px 8px;font-size:12px;font-family:var(--mono);width:100%}
+.mm-grid span{font-size:11.5px;color:var(--dim)}
+.ovr-badge{font-size:9.5px;background:var(--warn-soft);color:var(--warn);border-radius:4px;padding:1px 6px;
+  font-weight:700;margin-left:6px}
+/* 도크 구성 파일 */
+.cfg-preset{display:flex;gap:6px;align-items:center;margin-bottom:12px}
+.cfg-preset select{flex:1;min-width:0;font-weight:600;font-size:13px;padding:7px 10px}
+.cfg-preset .dot{width:6px;height:6px;border-radius:50%;background:#c26c00;flex-shrink:0;display:none}
+.cfg-preset .dot.show{display:block}
+.cfg-row{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:9px;transition:.15s;cursor:pointer}
+.cfg-row:hover{background:var(--surface-2)}
+.cfg-row .ci{width:22px;font-size:11px;color:var(--faint);flex-shrink:0;font-weight:700}
+.cfg-row .cv{flex:1;min-width:0}
+.cfg-row .cn{font-size:12.5px;font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cfg-row .cs{font-size:11px;color:var(--faint);margin-top:1px}
+.cfg-row .cx{color:var(--acc);font-size:11px;font-weight:600;flex-shrink:0;opacity:0;transition:.15s}
+.cfg-row:hover .cx{opacity:1}
+/* 실험 조건 */
+.exp-chip{display:inline-flex;align-items:center;gap:6px;background:var(--surface-2);border:1px solid var(--line);
+  border-radius:100px;padding:5px 12px;font-size:12.5px;margin:3px 4px 3px 0;cursor:pointer;transition:.15s}
+.exp-chip:hover{border-color:var(--acc)}
+.exp-chip.on{background:var(--acc-soft);border-color:var(--acc);color:#0058b0;font-weight:600}
+.exp-chip .n{font-size:10.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+.exp-chip.on .n{color:#0058b0}
+.warn-box{background:var(--warn-soft);border-radius:10px;padding:11px 14px;font-size:12.5px;color:var(--warn);
+  line-height:1.6;margin-top:12px}
+.warn-box b{font-weight:700}
+.ok-box{background:var(--ok-soft);border-radius:10px;padding:11px 14px;font-size:12.5px;color:var(--ok);margin-top:12px}
+.mtx{border-collapse:collapse;font-size:12px;font-family:var(--mono);width:100%}
+.mtx th,.mtx td{border:1px solid var(--line);padding:5px 10px;text-align:center;white-space:nowrap}
+.mtx th{background:var(--surface-2);font-family:var(--sans);font-weight:600;font-size:12px}
+.mtx td.k{text-align:left;font-weight:600}
+.mtx td.f{background:var(--acc-soft);color:#0058b0;font-weight:600}
+.grp-preview{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
+.gp-item{display:flex;align-items:center;gap:7px;background:var(--surface-2);border-radius:9px;padding:7px 12px;font-size:12.5px}
+.gp-item .sw{width:12px;height:12px;border-radius:3px}
+.gp-item .n{color:var(--faint);font-size:11.5px}
+.exp-repeat{background:var(--surface-2);border-radius:11px;padding:12px 14px;margin-top:10px;font-size:12.5px}
+.pair-hint{font-size:11px;color:var(--faint);margin-top:4px;line-height:1.4}
+/* 자동완성 */
+.ac{position:relative;flex:1;min-width:0}
+.ac input{width:100%;background:transparent;position:relative;z-index:2}
+.ac-ghost{position:absolute;inset:0;padding:9px 12px;font-size:13.5px;font-family:var(--sans);
+  pointer-events:none;white-space:pre;overflow:hidden;z-index:1;line-height:1.5;border:1px solid transparent}
+.ac-ghost .typed{color:transparent}
+.ac-ghost .sug{color:#c0c2c6}
+.ac-menu{position:absolute;top:calc(100% + 5px);left:0;right:0;background:var(--surface);border:1px solid var(--line);
+  border-radius:11px;box-shadow:var(--sh-2);max-height:238px;overflow-y:auto;z-index:60;display:none;padding:5px}
+.ac-menu.show{display:block}
+.ac-item{padding:7px 11px;font-size:13px;border-radius:7px;cursor:pointer;display:flex;align-items:center;gap:9px}
+.ac-item:hover,.ac-item.on{background:var(--acc-soft)}
+.ac-item b{font-weight:700;color:var(--acc)}
+.ac-item .ty{margin-left:auto;font-size:10px;color:var(--faint);background:var(--surface-2);
+  border-radius:5px;padding:1px 7px;font-weight:600;letter-spacing:.02em}
+.ac-item .sp{margin-left:auto;font-size:10px;color:var(--faint);font-family:var(--mono)}
+.ac-empty{padding:12px;text-align:center;color:var(--faint);font-size:12.5px}
+.type-badge{font-size:10px;border-radius:5px;padding:2px 7px;font-weight:600;flex-shrink:0}
+.type-badge.num{background:#eaf3fd;color:#0058b0}
+.type-badge.str{background:#f0efec;color:#7a7168}
+.type-badge.ts{background:#eef6ef;color:#1d8341}
+
+/* ── 리포트(템플릿) ── */
+.report-layout{display:flex;gap:16px;flex:1;min-height:0}
+.page-rail{width:132px;flex-shrink:0;display:flex;flex-direction:column;gap:8px;overflow-y:auto;padding-right:2px}
+.page-thumb{background:var(--surface);border-radius:9px;padding:7px;cursor:pointer;border:2px solid transparent;
+  transition:.2s var(--ease);box-shadow:var(--sh-1)}
+.page-thumb:hover{border-color:var(--line-strong)}
+.page-thumb.on{border-color:var(--acc);box-shadow:var(--sh-2)}
+.page-thumb .mini{aspect-ratio:16/9;background:#fff;border:1px solid var(--line);border-radius:4px;
+  display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(2,1fr);gap:2px;padding:3px}
+.page-thumb .mini i{background:var(--acc-soft);border-radius:1.5px}
+.page-thumb .mini i.empty{background:#f0f0f2}
+.page-thumb .lbl{font-size:11px;color:var(--dim);text-align:center;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.page-add{border:1.5px dashed var(--line-strong);border-radius:9px;padding:14px;text-align:center;color:var(--faint);
+  font-size:12.5px;cursor:pointer;transition:.15s}
+.page-add:hover{border-color:var(--acc);color:var(--acc)}
+
+.slide-stage{flex:1;min-width:0;display:flex;flex-direction:column;gap:10px;align-items:center;justify-content:flex-start}
+.slide-title-bar{width:100%;display:flex;align-items:center;gap:10px}
+.slide-title-bar input{flex:1;font-size:16px;font-weight:600;border-color:transparent;background:transparent;padding:8px 10px;letter-spacing:-.02em}
+.slide-title-bar input:hover{background:var(--surface)}
+.slide-title-bar input:focus{background:var(--surface);border-color:var(--acc)}
+.slide{width:100%;max-width:860px;aspect-ratio:16/9;background:#fff;border-radius:12px;box-shadow:var(--sh-3);
+  padding:26px 28px;display:flex;flex-direction:column;gap:12px}
+.slide-head{font-size:17px;font-weight:600;letter-spacing:-.02em;padding-bottom:9px;border-bottom:1.5px solid #1d1d1f;flex-shrink:0}
+.slide-head span{float:right;font-size:11.5px;font-weight:400;color:var(--faint);padding-top:5px}
+.slot-grid{flex:1;display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(2,1fr);gap:10px;min-height:0}
+.slot{border:1px solid var(--line);border-radius:7px;overflow:hidden;cursor:pointer;position:relative;
+  transition:.18s var(--ease);display:flex;flex-direction:column;background:#fff}
+.slot:hover{border-color:var(--line-strong)}
+.slot.on{border-color:var(--acc);box-shadow:0 0 0 2.5px var(--acc-soft)}
+.slot .st{font-size:9.5px;font-weight:600;padding:4px 6px 2px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0}
+.slot canvas{flex:1;width:100%;min-height:0}
+.slot.empty{border-style:dashed;align-items:center;justify-content:center;color:var(--faint);font-size:11.5px}
+.slot.empty:hover{border-color:var(--acc);color:var(--acc)}
+.slot .tbl-mini{flex:1;padding:4px 6px;font-size:7px;font-family:var(--mono);color:var(--dim);overflow:hidden;line-height:1.5}
+
+.inspector{width:262px;flex-shrink:0;display:flex;flex-direction:column;gap:12px;overflow-y:auto}
+.insp-empty{text-align:center;color:var(--faint);font-size:12.5px;padding:40px 16px;line-height:1.6}
+.field{margin-bottom:11px}
+.field label{display:block;font-size:11.5px;color:var(--faint);margin-bottom:5px;font-weight:500}
+.field input,.field select{width:100%}
+
+/* ── Summary ── */
+.recalc-banner{background:var(--warn-soft);border-radius:12px;padding:14px 20px;display:none;align-items:center;gap:14px;font-size:13.5px;color:var(--warn)}
+.recalc-banner.show{display:flex}
+table.sum{border-collapse:collapse;font-size:12.5px;font-family:var(--mono);font-variant-numeric:tabular-nums}
+table.sum th,table.sum td{border:1px solid var(--line);padding:7px 13px;text-align:right;white-space:nowrap}
+table.sum th{background:var(--surface-2);font-family:var(--sans);font-weight:600;text-align:center;font-size:12.5px}
+table.sum td.lbl{text-align:left;font-family:var(--sans)}
+table.sum td.cat{background:#fafafb;text-align:center;font-family:var(--sans);vertical-align:middle;font-weight:600}
+table.sum td.ex{color:var(--bad);font-size:11px}
+table.sum td.spec{background:var(--bad-soft)}
+.caption{font-size:12px;color:var(--faint);margin-top:11px;line-height:1.55}
+/* 테이블 카드 */
+.table-card{padding:18px 20px}
+.tc-head{display:flex;align-items:center;margin-bottom:14px}
+.tc-actions{margin-left:auto;display:flex;gap:7px}
+/* 모달 */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.28);backdrop-filter:blur(6px);display:none;
+  align-items:center;justify-content:center;z-index:200}
+.overlay.show{display:flex}
+.modal{background:var(--surface);border-radius:18px;box-shadow:var(--sh-3);width:min(780px,92vw);
+  max-height:88vh;display:flex;flex-direction:column;overflow:hidden}
+.modal-head{padding:20px 24px 0;display:flex;align-items:center;gap:12px}
+.modal-head h3{font-size:18px;font-weight:600;letter-spacing:-.02em}
+.modal-head .x{margin-left:auto;background:none;border:none;font-size:17px;color:var(--faint);cursor:pointer;
+  width:30px;height:30px;border-radius:8px}
+.modal-head .x:hover{background:var(--surface-2);color:var(--txt)}
+.modal-body{padding:18px 24px;overflow-y:auto;flex:1}
+.modal-foot{padding:14px 24px;border-top:1px solid var(--line);display:flex;gap:8px;justify-content:flex-end;background:var(--surface-2)}
+/* wafer 배정 */
+.assign{display:grid;grid-template-columns:1fr 58px 1fr;gap:12px;align-items:center;margin-top:14px}
+.wlist{border:1px solid var(--line-strong);border-radius:11px;height:270px;overflow-y:auto;background:var(--surface)}
+.wlist-head{padding:9px 12px;font-size:12px;color:var(--dim);border-bottom:1px solid var(--line);
+  background:var(--surface-2);position:sticky;top:0;font-weight:600}
+.witem{padding:7px 12px;font-size:13px;font-family:var(--mono);cursor:pointer;display:flex;align-items:center;gap:8px;transition:.1s}
+.witem:hover{background:var(--surface-2)}
+.witem.sel{background:var(--acc-soft);color:#0058b0;font-weight:600}
+.witem .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.witem .bad{font-size:10px;color:var(--bad);margin-left:auto;font-family:var(--sans)}
+.arrows{display:flex;flex-direction:column;gap:8px}
+.arrows button{background:var(--surface-2);border:1px solid var(--line-strong);border-radius:9px;height:38px;
+  font-size:15px;cursor:pointer;color:var(--dim);transition:.15s}
+.arrows button:hover{background:var(--acc);border-color:var(--acc);color:#fff}
+.grp-picker{display:flex;gap:7px;align-items:center;margin-bottom:8px}
+.grp-picker select{flex:1}
+.bulk{background:var(--surface-2);border-radius:11px;padding:14px 16px;margin-top:16px}
+.bulk h5{font-size:13px;font-weight:600;margin-bottom:10px}
+.bulk .row{gap:8px}
+.bulk select{min-width:96px}
+.paste-area{width:100%;height:200px;border:1px solid var(--line-strong);border-radius:11px;padding:12px;
+  font-family:var(--mono);font-size:12.5px;resize:none;background:var(--surface)}
+.paste-area:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 3.5px var(--acc-soft)}
+
+.toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(6px);background:rgba(29,29,31,.94);
+  backdrop-filter:blur(20px);color:#f5f5f7;padding:12px 22px;border-radius:100px;font-size:13px;opacity:0;
+  transition:.3s var(--ease);pointer-events:none;max-width:460px;text-align:center;box-shadow:var(--sh-3);z-index:100}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">ET <em>Report</em></div>
+  <div class="ws-switch">
+    <div class="ws" data-w="data" onclick="showWs('data')">데이터</div>
+    <div class="ws active" data-w="anal" onclick="showWs('anal')">분석</div>
+  </div>
+  <div class="topbar-right">
+    <div class="db-pill">local.duckdb · <b>2,891</b> items · ~08-03</div>
+  </div>
+</div>
+
+<!-- ═══ ① 데이터 ═══ -->
+<div class="workspace data-ws" data-ws="data">
+  <div class="data-col">
+    <!-- 프리셋 -->
+    <div class="preset-bar">
+      <span class="pl">설정</span>
+      <select id="presetSel" onchange="loadPreset(this.value)"></select>
+      <span class="dirty-dot" id="presetDirty" title="저장되지 않은 변경"></span>
+      <div style="margin-left:auto;display:flex;gap:7px">
+        <button class="btn ghost sm" onclick="savePreset()">저장</button>
+        <button class="btn ghost sm" onclick="saveAsPreset()">다른 이름으로</button>
+        <button class="btn ghost sm" onclick="delPreset()">삭제</button>
+      </div>
+    </div>
+
+    <!-- 대상 파일 -->
+    <div class="card">
+      <h4>대상 <span class="sub">설정마다 다른 DB와 리포메터를 쓸 수 있습니다</span></h4>
+      <div class="path-row">
+        <span class="k">DuckDB</span>
+        <div class="path-val"><span id="dbPath">C:\ETReport\db\M2_routine.duckdb</span><span class="tag ok" id="dbTag">2,891 items</span></div>
+        <div style="display:flex;gap:6px">
+          <button class="btn ghost sm" onclick="pickDb()">변경</button>
+          <button class="btn ghost sm" onclick="newDb()">새로 만들기</button>
+        </div>
+      </div>
+      <div class="path-row">
+        <span class="k">리포메터</span>
+        <div class="path-val"><span id="rfPath">C:\ETReport\reformatter_M2_v14.xlsx</span><span class="tag ok" id="rfTag">REAL 2,412 · ADDP 479</span></div>
+        <div style="display:flex;gap:6px">
+          <button class="btn ghost sm" onclick="pickRf()">변경</button>
+          <button class="btn ghost sm" onclick="checkRf()">검증</button>
+        </div>
+      </div>
+      <div class="path-row">
+        <span class="k">컬럼 정보</span>
+        <div class="path-val" style="font-family:var(--sans)">
+          <span id="catInfo"></span>
+          <span class="tag ok">bdq.columninfo 캐시</span>
+        </div>
+        <div><button class="btn ghost sm" onclick="refreshCatalog()">새로고침</button></div>
+      </div>
+      <div class="path-row">
+        <span class="k">로그 축 item</span>
+        <div class="path-val" style="font-family:var(--sans)">
+          <input type="text" id="logPat" value="Ioff*, *Leak*, *LEAK*, Jg*"
+                 style="border:none;background:none;padding:0;width:100%;font-family:var(--mono);font-size:12.5px"
+                 onchange="setLogPatterns(this.value)">
+          <span class="tag ok">이름 규칙</span>
+        </div>
+        <div><button class="btn ghost sm" onclick="toast('패턴에 걸리는 item은 모든 plot에서 자동으로 로그 축이 됩니다')">?</button></div>
+      </div>
+      <div class="path-row">
+        <span class="k">저장 폴더</span>
+        <div class="path-val"><span>C:\ETReport\out</span></div>
+        <div><button class="btn ghost sm" onclick="toast('폴더 선택')">변경</button></div>
+      </div>
+    </div>
+
+    <!-- 기간 -->
+    <div class="card">
+      <h4>기간 <span class="sub">tkout_time 기준 · 파티션 컬럼이라 좁을수록 빠릅니다</span></h4>
+      <div class="date-range">
+        <input type="date" id="dFrom" value="2026-08-04" onchange="onCondChange()">
+        <span class="date-sep">—</span>
+        <input type="date" id="dTo" value="2026-08-10" onchange="onCondChange()">
+        <div class="quick-range" style="margin-left:6px">
+          <button onclick="quickRange(7)">최근 7일</button>
+          <button onclick="quickRange(30)">30일</button>
+          <button onclick="fillGap()">누락 구간</button>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--faint);margin-top:11px" id="gapNote">
+        마지막 적재는 <b style="color:var(--warn)">08-03</b>입니다. 겹치는 구간은 적재 시 자동으로 건너뜁니다.
+      </div>
+    </div>
+
+    <!-- 조회 조건 -->
+    <div class="card">
+      <h4>조회 조건 <span class="sub">line_id는 파티션 컬럼이라 필수입니다</span></h4>
+      <div id="condList"></div>
+      <button class="add-cond" onclick="addCond()">＋ 조건 추가</button>
+      <div style="margin-top:16px">
+        <span class="sql-toggle" onclick="document.getElementById('sqlPreview').classList.toggle('show')">SQL 미리보기</span>
+        <div class="sqlbox" id="sqlPreview"></div>
+      </div>
+    </div>
+
+    <!-- 실행 -->
+    <div class="card">
+      <div class="row">
+        <button class="btn big" onclick="runExtract(this)">추출하고 적재</button>
+        <label class="chk"><input type="checkbox" id="optCsv" checked onchange="onCondChange()"> 완료 후 CSV 저장</label>
+        <label class="chk"><input type="checkbox" id="optSbdf" onchange="onCondChange()"> SBDF</label>
+      </div>
+      <div class="load-log" id="loadLog">
+        <div class="ok">청크 12/12 완료 · 중복 스킵 3파일 · 신규 item 2개 컬럼 추가</div>
+        <div class="dim">raw_L1_0804-0810.csv 저장됨 (매니페스트 포함)</div>
+      </div>
+    </div>
+    <div class="card">
+      <h4>적재된 DB <span class="sub">분석은 이 데이터를 사용합니다</span></h4>
+      <div class="db-stats">
+        <div class="stat"><div class="v">14</div><div class="k">lots</div></div>
+        <div class="stat"><div class="v">312</div><div class="k">wafers</div></div>
+        <div class="stat"><div class="v">2,891</div><div class="k">items</div></div>
+        <div class="stat"><div class="v">1.2 GB</div><div class="k">크기</div></div>
+      </div>
+      <div class="row" style="margin-top:16px">
+        <button class="btn ghost sm" onclick="toast('읽기 전용 조회 창 — 조건 빌더 재사용, 미리보기 후 CSV/SBDF 저장')">데이터 조회 창</button>
+        <button class="btn ghost sm" onclick="toast('미사용 컬럼 리포트 · 캐시 정리')">관리</button>
+        <span style="margin-left:auto;font-size:12.5px;color:var(--faint)">적재 이력 12건</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ ② 분석 ═══ -->
+<div class="workspace anal-ws active" data-ws="anal">
+  <div class="dock" id="dock">
+    <div class="dock-rail">
+      <div class="rail-item" onclick="toggleDock()">☰</div>
+      <div class="rail-item">◍</div>
+      <div class="rail-item">✕<span class="rb" id="railBadge" style="display:none">0</span></div>
+    </div>
+    <div class="dock-inner">
+      <section>
+        <h3>설정</h3>
+        <div class="cfg-preset">
+          <select id="cfgSel" onchange="loadCfg(this.value)"></select>
+          <span class="dot" id="cfgDirty"></span>
+        </div>
+        <div class="row" style="gap:6px;margin-bottom:12px">
+          <button class="btn ghost sm" style="flex:1" onclick="saveCfg()">저장</button>
+          <button class="btn ghost sm" style="flex:1" onclick="saveAsCfg()">새 설정</button>
+        </div>
+        <div class="cfg-row" onclick="pickDb()">
+          <span class="ci">DB</span>
+          <span class="cv"><span class="cn" id="cfgDb"></span><span class="cs" id="cfgDbSub"></span></span>
+          <span class="cx">변경</span>
+        </div>
+        <div class="cfg-row" onclick="openTemplateModal()">
+          <span class="ci">Plot</span>
+          <span class="cv"><span class="cn" id="cfgPlot"></span><span class="cs" id="cfgPlotSub"></span></span>
+          <span class="cx">열기</span>
+        </div>
+        <div class="cfg-row" onclick="openTableTplModal()">
+          <span class="ci">Tbl</span>
+          <span class="cv"><span class="cn" id="cfgTable"></span><span class="cs" id="cfgTableSub"></span></span>
+          <span class="cx">열기</span>
+        </div>
+        <div class="cfg-row" onclick="openRfModal()">
+          <span class="ci">Rfm</span>
+          <span class="cv"><span class="cn" id="cfgRf">reformatter_M2_v14.xlsx</span>
+            <span class="cs" id="cfgRfSub"></span></span>
+          <span class="cx">열기</span>
+        </div>
+        <div style="margin-top:10px">
+          <div style="font-size:11px;color:var(--faint);margin-bottom:5px;font-weight:600">REPORT</div>
+          <select id="repSel" onchange="switchReport(this.value)" style="width:100%"></select>
+        </div>
+      </section>
+      <section>
+        <h3>분석 대상</h3>
+        <div class="target-card" onclick="toast('DB에 적재된 lot에서 다중선택 → 온도·step·seq 캐스케이딩')">
+          <div class="big">PA123 외 2개</div>
+          <div class="sub">25℃ · M2 · seq 1 · 최신측정</div>
+          <div class="sub">62 wafers · 41,203 rows</div>
+          <div class="hint">대상 변경</div>
+        </div>
+        <div class="item-warn">PB201에 44개 item 없음</div>
+      </section>
+      <section>
+        <h3>실험 조건</h3>
+        <div class="cfg-row" onclick="openSplitModal()">
+          <span class="ci">Exp</span>
+          <span class="cv"><span class="cn" id="splitFile">split_M2_0810.xlsx</span>
+            <span class="cs" id="splitSub"></span></span>
+          <span class="cx">열기</span>
+        </div>
+        <div id="factorChips" style="margin-top:8px"></div>
+        <div id="confoundNote"></div>
+      </section>
+      <section>
+        <h3>그룹</h3>
+        <div id="dockGroups"></div>
+        <div class="unassigned-note" id="unassignedNote">미배정 4장 · 회색 표시</div>
+        <button class="btn ghost sm" style="width:100%;margin-top:9px" onclick="openGroupModal()">그룹 편집</button>
+      </section>
+      <section>
+        <h3>제외 포인트</h3>
+        <div class="excl-card">
+          <div class="num zero" id="exclCount">0</div>
+          <div class="lbl">통계에도 반영됩니다</div>
+          <div class="row" style="justify-content:center;gap:7px">
+            <button class="btn ghost sm" id="undoBtn" onclick="undoExcl()" disabled>되돌리기</button>
+            <button class="btn ghost sm" onclick="toast('제외 이력은 PPT 마지막 슬라이드에 자동 첨부')">이력</button>
+          </div>
+        </div>
+      </section>
+      <section style="border-bottom:none">
+        <h3>세션</h3>
+        <div class="row" style="gap:7px">
+          <button class="btn ghost sm" style="flex:1" onclick="toast('세션 JSON 저장')">저장</button>
+          <button class="btn ghost sm" style="flex:1" onclick="toast('지난 세션을 새 lot에 재적용')">열기</button>
+        </div>
+        <div style="font-size:11.5px;color:var(--faint);margin-top:10px">자동저장 2분 전</div>
+      </section>
+    </div>
+    <div class="dock-toggle"><button onclick="toggleDock()" id="dockBtn">◀ 접기</button></div>
+  </div>
+
+  <div class="anal-content">
+    <div class="tabs">
+      <div class="tab active" data-t="explore" onclick="showTab('explore')">탐색</div>
+      <div class="tab" data-t="summary" onclick="showTab('summary')">Summary<span class="dirty" id="sumDirty"></span></div>
+      <div class="tab" data-t="report" onclick="showTab('report')">리포트 구성</div>
+    </div>
+
+    <!-- ── 탐색: 자유 xy ── -->
+    <div class="pane active" data-p="explore">
+      <div class="plot-layout">
+        <div class="plot-main">
+          <div class="plot-toolbar">
+            <div class="seg">
+              <button class="on" id="mExc" onclick="setMode('exc')">제외</button>
+              <button id="mRes" onclick="setMode('res')">복원</button>
+            </div>
+            <button class="btn ghost sm" onclick="addToReport()">＋ 리포트에 추가</button>
+            <span style="margin-left:auto;font-size:12px;color:var(--faint)" id="maskInfo"></span>
+          </div>
+          <div class="canvas-frame"><canvas id="cv" class="big" width="960" height="600"></canvas></div>
+          <div class="plot-footer">
+            <span>점 클릭 → 제외 (회색 원으로 남습니다)</span>
+            <span>제외는 Summary 통계에도 반영됩니다</span>
+          </div>
+        </div>
+        <div class="plot-side">
+          <div class="card" style="padding:16px">
+            <h4 style="font-size:13.5px;margin-bottom:12px">축</h4>
+            <div class="axis-row">
+              <span class="ax-lbl">X</span>
+              <input type="text" id="axX" value="Vtlin N SVT" oninput="draw()" placeholder="alias 입력">
+            </div>
+            <div class="axis-row">
+              <span class="ax-lbl">Y</span>
+              <input type="text" id="axY" value="Idsat N SVT" oninput="draw()" placeholder="alias 입력">
+            </div>
+            <div class="pair-hint">타이핑하면 뒤가 회색으로 채워집니다 · <b>Tab</b> 완성 · <b>↑↓</b> 목록<br>쉼표로 여러 xy쌍 → 한 그림에 겹쳐 그립니다</div>
+            <div class="auto-range">
+              <div class="ar-head">축 범위<span id="ovrExp"></span>
+                <span class="ar-edit-link" onclick="toggleAxEdit('Exp')" id="lnkExp">수정</span></div>
+              <div class="ar-val" id="rangeInfo"></div>
+              <div class="ar-note" id="specInfo"></div>
+              <div class="ax-edit" id="axEditExp" style="display:none"></div>
+            </div>
+            <label class="chk" style="margin-top:12px"><input type="checkbox" id="refBand" onchange="draw()" checked> REF μ±3σ 밴드</label>
+          </div>
+          <div class="card" style="padding:16px">
+            <h4 style="font-size:13.5px;margin-bottom:4px">그룹 스타일</h4>
+            <div style="font-size:11.5px;color:var(--faint);margin-bottom:8px">모든 plot과 PPT에 공통 적용</div>
+            <div id="grpEditor"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Summary ── -->
+    <div class="pane" data-p="summary">
+      <div class="recalc-banner" id="recalcBanner">
+        <span style="flex:1">제외 포인트가 바뀌어 표가 최신이 아닙니다</span>
+        <button class="btn warn sm" onclick="recalc()">재계산</button>
+      </div>
+      <div class="card" style="padding:16px 20px">
+        <div class="row">
+          <div class="seg">
+            <button class="on" id="aggAvg" onclick="setAgg('avg')">평균</button>
+            <button id="aggStd" onclick="setAgg('std')">산포 (wafer 내)</button>
+          </div>
+          <label class="chk"><input type="checkbox" id="showDelta" onchange="renderTables()"> Δ vs REF</label>
+          <div style="margin-left:auto;display:flex;gap:7px">
+            <button class="btn ghost sm" onclick="exportAllXls()">전체 xlsx 내보내기</button>
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--faint);margin-top:9px">cat 하나당 표 하나 · Excel 내보내기는 표마다 시트를 나눕니다</div>
+      </div>
+      <div id="catTables" style="display:flex;flex-direction:column;gap:14px"></div>
+    </div>
+
+    <!-- ── 리포트 구성: 템플릿 6슬롯 ── -->
+    <div class="pane" data-p="report">
+      <div class="report-layout">
+        <div class="page-rail" id="pageRail"></div>
+        <div class="slide-stage">
+          <div class="slide-title-bar">
+            <input type="text" id="pageTitle" oninput="setPageTitle(this.value)" placeholder="페이지 제목">
+            <button class="btn ghost sm" onclick="openTemplateModal()">템플릿 다시 읽기</button>
+            <button class="btn" onclick="pptGen(this)">PPT 생성</button>
+          </div>
+          <div class="slide" id="slide">
+            <div class="slide-head" id="slideHead">—<span id="slideMeta"></span></div>
+            <div class="slot-grid" id="slotGrid"></div>
+          </div>
+          <div class="card" style="padding:14px 18px;width:100%;max-width:860px">
+            <div class="row" style="gap:10px">
+              <span style="font-size:12.5px;color:var(--dim);font-weight:600">표 슬라이드</span>
+              <div class="seg">
+                <button class="on" id="twWide" onclick="setTblWidth('wide')">덱 전체를 넓게</button>
+                <button id="twSplit" onclick="setTblWidth('split')">여러 장으로 분할</button>
+              </div>
+              <span style="font-size:12px;color:var(--faint)" id="twNote"></span>
+            </div>
+            <div style="font-size:11.5px;color:var(--faint);line-height:1.65;margin-top:9px" id="twDetail"></div>
+            <div style="font-size:11.5px;color:var(--dim);margin-top:10px;padding-top:10px;border-top:1px solid var(--line)" id="pptStatus"></div>
+          </div>
+        </div>
+        <div class="inspector" id="inspector"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- ═══ 그룹 편집 모달 ═══ -->
+<div class="overlay" id="grpModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>그룹 편집</h3>
+      <div class="seg" style="margin-left:14px">
+        <button class="on" id="gmSingle" onclick="setGrpMode('single')">단일 lot</button>
+        <button id="gmMulti" onclick="setGrpMode('multi')">멀티 lot</button>
+      </div>
+      <button class="x" onclick="closeGroupModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- 단일 lot -->
+      <div id="gmSinglePane">
+        <div class="row">
+          <span style="font-size:12.5px;color:var(--dim)">lot</span>
+          <input type="text" id="gmLot" value="PA123" placeholder="lot ID 입력" style="width:200px"
+                 onkeydown="if(event.key==='Enter')lookupLot()">
+          <button class="btn ghost sm" onclick="lookupLot()">조회</button>
+          <span style="font-size:12px;color:var(--faint);margin-left:6px" id="gmValid"></span>
+        </div>
+        <div style="font-size:11.5px;color:var(--faint);margin-top:6px" id="gmRecent"></div>
+        <div class="assign">
+          <div>
+            <div class="grp-picker"><span style="font-size:12.5px;color:var(--dim);flex:1">미배정 wafer</span></div>
+            <div class="wlist" id="poolList"><div class="wlist-head">유효 wafer</div></div>
+          </div>
+          <div class="arrows">
+            <button onclick="moveWafers('to')" title="선택 항목을 그룹으로">→</button>
+            <button onclick="moveWafers('from')" title="그룹에서 빼기">←</button>
+            <button onclick="moveAll('to')" title="전체 이동" style="font-size:12px">≫</button>
+            <button onclick="moveAll('from')" title="전체 빼기" style="font-size:12px">≪</button>
+          </div>
+          <div>
+            <div class="grp-picker">
+              <select id="gmGroup" onchange="renderAssign()"></select>
+              <button class="btn ghost sm" onclick="addGroup()">＋</button>
+            </div>
+            <div class="wlist" id="grpList"><div class="wlist-head">그룹 소속</div></div>
+          </div>
+        </div>
+      </div>
+      <!-- 멀티 lot -->
+      <div id="gmMultiPane" style="display:none">
+        <div style="font-size:12.5px;color:var(--dim);margin-bottom:9px">
+          엑셀에서 <b>lot · wafer · group</b> 표를 복사해 붙여넣으세요. wafer 열이 없으면 해당 lot 전체가 그 그룹이 됩니다.
+        </div>
+        <textarea class="paste-area" id="pasteBox" placeholder="lot&#9;wafer&#9;group&#10;PA123&#9;01&#9;Split_A&#10;PA123&#9;02&#9;Split_A&#10;PA124&#9;&#9;Split_B&#10;PB201&#9;&#9;BASE"></textarea>
+        <div class="row" style="margin-top:10px">
+          <label class="chk"><input type="checkbox" checked> 첫 행은 헤더</label>
+          <label class="chk"><input type="checkbox" checked> 빈 셀은 위 값 상속</label>
+          <label class="chk"><input type="checkbox" checked> 앞자리 0 자동 보정 (W1→W01)</label>
+          <button class="btn ghost sm" style="margin-left:auto" onclick="toast('현재 배정을 TSV로 클립보드에 복사했습니다')">현재 배정 복사</button>
+        </div>
+      </div>
+      <!-- 스타일 일괄 적용 -->
+      <div class="bulk">
+        <h5>스타일 일괄 적용</h5>
+        <div class="row">
+          <select id="bulkSym"><option value="">심볼 —</option><option value="o">● 원</option><option value="s">■ 사각</option><option value="t">▲ 삼각</option><option value="d">◆ 마름모</option><option value="+">＋ 십자</option></select>
+          <select id="bulkSize"><option value="">크기 —</option><option>4</option><option>6</option><option>8</option><option>10</option></select>
+          <button class="btn ghost sm" onclick="applyBulk()">모든 그룹에 적용</button>
+          <span style="width:14px"></span>
+          <select id="bulkPal">
+            <option value="okabe">Okabe-Ito (색약 안전)</option>
+            <option value="apple">System</option>
+            <option value="mono">그레이스케일</option>
+          </select>
+          <button class="btn ghost sm" onclick="applyPalette()">색 다시 배정</button>
+        </div>
+        <div style="font-size:11.5px;color:var(--faint);margin-top:9px">
+          심볼은 흑백 출력 대비 보조 채널입니다 · 색 재배정은 그룹 순서대로 팔레트를 다시 깔아줍니다
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeGroupModal()">닫기</button>
+      <button class="btn" onclick="applyGroupModal()">적용</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ 실험 조건 모달 ═══ -->
+<div class="overlay" id="splitModal">
+  <div class="modal" style="width:min(880px,94vw)">
+    <div class="modal-head">
+      <h3>실험 조건</h3>
+      <span style="font-size:12.5px;color:var(--faint);margin-left:6px">lot·wafer별 step 조건 코드</span>
+      <button class="x" onclick="closeSplitModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="row" style="margin-bottom:12px">
+        <button class="btn ghost sm" onclick="toast('엑셀/CSV 파일 선택 — long·wide 두 형식 모두 인식합니다')">파일 열기</button>
+        <button class="btn ghost sm" onclick="toast('클립보드 붙여넣기 — 컬럼 역할을 드롭다운으로 확인 후 적용')">붙여넣기</button>
+        <button class="btn ghost sm" onclick="downloadSplitSample()">빈 양식 내려받기</button>
+        <span style="margin-left:auto;font-size:12.5px;color:var(--faint)" id="splitStat"></span>
+      </div>
+
+      <div style="overflow-x:auto;border:1px solid var(--line);border-radius:11px">
+        <table class="mtx" id="splitTable"></table>
+      </div>
+
+      <h4 style="font-size:13.5px;margin:18px 0 8px">실험 축 (factor)</h4>
+      <div style="font-size:12.5px;color:var(--dim);margin-bottom:8px">
+        비교하고 싶은 step을 고르세요. 선택한 step의 조건 코드로 그룹이 자동 생성됩니다.
+      </div>
+      <div id="factorPick"></div>
+
+      <div id="confoundBox"></div>
+
+      <h4 style="font-size:13.5px;margin:18px 0 8px">자동 생성될 그룹</h4>
+      <div id="grpPreview" class="grp-preview"></div>
+
+      <div class="exp-repeat">
+        <label class="chk" style="font-size:13px;color:var(--txt)">
+          <input type="checkbox" id="expRepeat" checked onchange="renderSplitUI()">
+          <b>실험별 페이지 반복 생성</b>
+        </label>
+        <div style="font-size:12px;color:var(--faint);margin-top:7px;line-height:1.6" id="repeatNote"></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeSplitModal()">닫기</button>
+      <button class="btn" onclick="applySplit()">그룹에 적용</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ 테이블 템플릿 모달 ═══ -->
+<div class="overlay" id="tblTplModal">
+  <div class="modal">
+    <div class="modal-head"><h3>테이블 템플릿</h3>
+      <span style="font-size:12.5px;color:var(--faint);margin-left:6px">item_id · CAT1 · CAT2 · CAT3 · Report</span>
+      <button class="x" onclick="closeTableTplModal()">✕</button></div>
+    <div class="modal-body">
+      <div style="font-size:13px;color:var(--dim);margin-bottom:12px">
+        <b>item_id</b>는 리포메터의 <b>ALIAS</b>와 같은 값입니다.
+        <b>CAT1</b>이 표를 나누는 기준(표 하나 = 시트 하나)이고, <b>CAT2·CAT3</b>는 세로 병합 계층입니다.
+      </div>
+      <div style="overflow-x:auto;border:1px solid var(--line);border-radius:11px">
+        <table class="sum" style="font-size:11.5px;width:100%" id="tblTplPreview"></table>
+      </div>
+      <div style="font-size:12px;color:var(--faint);margin-top:11px;line-height:1.7">
+        · <b>Report</b>로 한 파일에 여러 리포트를 담고 UI에서 골라 씁니다<br>
+        · 행 순서가 곧 표시 순서입니다 · 같은 CAT2가 연속되면 자동 병합됩니다<br>
+        · 평균/산포 전환은 UI 토글로 합니다 (템플릿에 값 컬럼 없음)<br>
+        · 자릿수는 리포메터 <b>UNIT</b>에서, 붉은 셀은 <b>SPECLOW/SPECHIGH</b>에서 자동으로 결정됩니다<br>
+        · 컬럼(wafer)은 분석 대상에서 자동으로 정해집니다
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="downloadTblSample()">현재 구성 내려받기</button>
+      <button class="btn ghost" onclick="closeTableTplModal()">닫기</button>
+      <button class="btn" onclick="loadTableTpl()">템플릿 파일 열기</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Plot 템플릿 모달 ═══ -->
+<div class="overlay" id="tplModal">
+  <div class="modal" style="width:min(940px,94vw)">
+    <div class="modal-head"><h3>Plot 템플릿</h3>
+      <span style="font-size:12.5px;color:var(--faint);margin-left:6px">page · x · y · order · title1 · title2 · Report · Type · x_name · y_name</span>
+      <button class="x" onclick="closeTemplateModal()">✕</button></div>
+    <div class="modal-body">
+      <div style="overflow-x:auto;border:1px solid var(--line);border-radius:11px">
+        <table class="sum" style="font-size:11px;width:100%" id="plotTplPreview"></table>
+      </div>
+      <div style="font-size:12px;color:var(--faint);margin-top:11px;line-height:1.8">
+        · <b>title1</b> = 페이지 제목 (같은 page의 첫 행에만 적으면 됩니다) · <b>title2</b> = plot 제목<br>
+        · <b>order</b> = 페이지 안 위치 1~6, <b>왼쪽에서 오른쪽</b> 순서 (1·2·3 윗줄 / 4·5·6 아랫줄)<br>
+        · <b>x·y</b>는 리포메터 <b>ALIAS</b>로 적습니다 · <b>쉼표로 여러 개</b>를 적으면 순서대로 xy 쌍이 맺어져 한 그림에 겹칩니다<br>
+        · <b>x_name·y_name</b>은 축 표시 이름 · 비우면 ALIAS + UNIT이 자동으로 붙습니다<br>
+        · <b>Type</b>: scatter / table / box(예정)<br>
+        · <b>Report</b>로 한 파일에 여러 리포트를 담습니다 — 테이블 템플릿의 Report와 짝을 이룹니다<br>
+        · 로그 축과 축 범위 컬럼은 없습니다 — 로그는 item 이름 규칙, 범위는 SPEC∪데이터 ×1.2가 기본이고
+          필요하면 UI에서 plot마다 바꿀 수 있습니다
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="downloadTplSample()">현재 구성 내려받기</button>
+      <button class="btn ghost" onclick="closeTemplateModal()">닫기</button>
+      <button class="btn" onclick="loadTemplate()">템플릿 파일 열기</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ 리포메터 모달 ═══ -->
+<div class="overlay" id="rfModal">
+  <div class="modal" style="width:min(980px,95vw)">
+    <div class="modal-head"><h3>리포메터</h3>
+      <span style="font-size:12.5px;color:var(--faint);margin-left:6px">CATEGORY · ITEMID · ALIAS · ABSOLUTE · SCALE FACTOR · ADDP FORM · UNIT · SPECLOW · SPECHIGH · TARGET</span>
+      <button class="x" onclick="closeRfModal()">✕</button></div>
+    <div class="modal-body">
+      <div style="overflow-x:auto;border:1px solid var(--line);border-radius:11px">
+        <table class="sum" style="font-size:11px;width:100%" id="rfPreview"></table>
+      </div>
+      <div style="font-size:12px;color:var(--faint);margin-top:11px;line-height:1.8">
+        · <b>CATEGORY</b> = REAL(실측) / ADDP(계산) · ADDP는 <b>ADDP FORM</b>에 수식을 적습니다<br>
+        · 수식의 item 참조는 <code style="background:var(--surface-2);padding:1px 5px;border-radius:4px">{ALIAS}</code> ·
+          다른 ADDP를 쓰려면 그 행이 <b>위쪽</b>에 있어야 합니다<br>
+        · <b>ABSOLUTE</b> = Y면 절대값을 취합니다 (PMOS 전류·Ioff 등) · <b>SCALE FACTOR</b>는 수식 계산 <b>전</b>에 적용됩니다<br>
+        · <b>SPECLOW·SPECHIGH</b>는 표의 규격 이탈 표시와 <b>plot 축 범위 산정</b>에 쓰입니다 (SPEC∪데이터 ×1.2)<br>
+        · <b>Std({A},{B},…)</b> = 인자들을 각각 하나의 포인트로 보는 산포 · 엑셀 STDEV(n−1) 기준 · NULL은 빼고 계산
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeRfModal()">닫기</button>
+      <button class="btn" onclick="closeRfModal();toast('검증 통과 · REAL 8 · ADDP 2 · 순환참조 없음')">검증</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- ═══ 그룹 편집 모달 ═══ -->
+<div class="overlay" id="grpModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>그룹 편집</h3>
+      <div class="seg" style="margin-left:14px">
+        <button class="on" id="gmSingle" onclick="setGrpMode('single')">단일 lot</button>
+        <button id="gmMulti" onclick="setGrpMode('multi')">멀티 lot</button>
+      </div>
+      <button class="x" onclick="closeGroupModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- 단일 lot -->
+      <div id="gmSinglePane">
+        <div class="row">
+          <span style="font-size:12.5px;color:var(--dim)">lot</span>
+          <input type="text" id="gmLot" value="PA123" placeholder="lot ID 입력" style="width:200px"
+                 onkeydown="if(event.key==='Enter')lookupLot()">
+          <button class="btn ghost sm" onclick="lookupLot()">조회</button>
+          <span style="font-size:12px;color:var(--faint);margin-left:6px" id="gmValid"></span>
+        </div>
+        <div style="font-size:11.5px;color:var(--faint);margin-top:6px" id="gmRecent"></div>
+        <div class="assign">
+          <div>
+            <div class="grp-picker"><span style="font-size:12.5px;color:var(--dim);flex:1">미배정 wafer</span></div>
+            <div class="wlist" id="poolList"><div class="wlist-head">유효 wafer</div></div>
+          </div>
+          <div class="arrows">
+            <button onclick="moveWafers('to')" title="선택 항목을 그룹으로">→</button>
+            <button onclick="moveWafers('from')" title="그룹에서 빼기">←</button>
+            <button onclick="moveAll('to')" title="전체 이동" style="font-size:12px">≫</button>
+            <button onclick="moveAll('from')" title="전체 빼기" style="font-size:12px">≪</button>
+          </div>
+          <div>
+            <div class="grp-picker">
+              <select id="gmGroup" onchange="renderAssign()"></select>
+              <button class="btn ghost sm" onclick="addGroup()">＋</button>
+            </div>
+            <div class="wlist" id="grpList"><div class="wlist-head">그룹 소속</div></div>
+          </div>
+        </div>
+      </div>
+      <!-- 멀티 lot -->
+      <div id="gmMultiPane" style="display:none">
+        <div style="font-size:12.5px;color:var(--dim);margin-bottom:9px">
+          엑셀에서 <b>lot · wafer · group</b> 표를 복사해 붙여넣으세요. wafer 열이 없으면 해당 lot 전체가 그 그룹이 됩니다.
+        </div>
+        <textarea class="paste-area" id="pasteBox" placeholder="lot&#9;wafer&#9;group&#10;PA123&#9;01&#9;Split_A&#10;PA123&#9;02&#9;Split_A&#10;PA124&#9;&#9;Split_B&#10;PB201&#9;&#9;BASE"></textarea>
+        <div class="row" style="margin-top:10px">
+          <label class="chk"><input type="checkbox" checked> 첫 행은 헤더</label>
+          <label class="chk"><input type="checkbox" checked> 빈 셀은 위 값 상속</label>
+          <label class="chk"><input type="checkbox" checked> 앞자리 0 자동 보정 (W1→W01)</label>
+          <button class="btn ghost sm" style="margin-left:auto" onclick="toast('현재 배정을 TSV로 클립보드에 복사했습니다')">현재 배정 복사</button>
+        </div>
+      </div>
+      <!-- 스타일 일괄 적용 -->
+      <div class="bulk">
+        <h5>스타일 일괄 적용</h5>
+        <div class="row">
+          <select id="bulkSym"><option value="">심볼 —</option><option value="o">● 원</option><option value="s">■ 사각</option><option value="t">▲ 삼각</option><option value="d">◆ 마름모</option><option value="+">＋ 십자</option></select>
+          <select id="bulkSize"><option value="">크기 —</option><option>4</option><option>6</option><option>8</option><option>10</option></select>
+          <button class="btn ghost sm" onclick="applyBulk()">모든 그룹에 적용</button>
+          <span style="width:14px"></span>
+          <select id="bulkPal">
+            <option value="okabe">Okabe-Ito (색약 안전)</option>
+            <option value="apple">System</option>
+            <option value="mono">그레이스케일</option>
+          </select>
+          <button class="btn ghost sm" onclick="applyPalette()">색 다시 배정</button>
+        </div>
+        <div style="font-size:11.5px;color:var(--faint);margin-top:9px">
+          심볼은 흑백 출력 대비 보조 채널입니다 · 색 재배정은 그룹 순서대로 팔레트를 다시 깔아줍니다
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeGroupModal()">닫기</button>
+      <button class="btn" onclick="applyGroupModal()">적용</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ 실험 조건 모달 ═══ -->
+<div class="overlay" id="splitModal">
+  <div class="modal" style="width:min(880px,94vw)">
+    <div class="modal-head">
+      <h3>실험 조건</h3>
+      <span style="font-size:12.5px;color:var(--faint);margin-left:6px">lot·wafer별 step 조건 코드</span>
+      <button class="x" onclick="closeSplitModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="row" style="margin-bottom:12px">
+        <button class="btn ghost sm" onclick="toast('엑셀/CSV 파일 선택 — long·wide 두 형식 모두 인식합니다')">파일 열기</button>
+        <button class="btn ghost sm" onclick="toast('클립보드 붙여넣기 — 컬럼 역할을 드롭다운으로 확인 후 적용')">붙여넣기</button>
+        <button class="btn ghost sm" onclick="downloadSplitSample()">빈 양식 내려받기</button>
+        <span style="margin-left:auto;font-size:12.5px;color:var(--faint)" id="splitStat"></span>
+      </div>
+
+      <div style="overflow-x:auto;border:1px solid var(--line);border-radius:11px">
+        <table class="mtx" id="splitTable"></table>
+      </div>
+
+      <h4 style="font-size:13.5px;margin:18px 0 8px">실험 축 (factor)</h4>
+      <div style="font-size:12.5px;color:var(--dim);margin-bottom:8px">
+        비교하고 싶은 step을 고르세요. 선택한 step의 조건 코드로 그룹이 자동 생성됩니다.
+      </div>
+      <div id="factorPick"></div>
+
+      <div id="confoundBox"></div>
+
+      <h4 style="font-size:13.5px;margin:18px 0 8px">자동 생성될 그룹</h4>
+      <div id="grpPreview" class="grp-preview"></div>
+
+      <div class="exp-repeat">
+        <label class="chk" style="font-size:13px;color:var(--txt)">
+          <input type="checkbox" id="expRepeat" checked onchange="renderSplitUI()">
+          <b>실험별 페이지 반복 생성</b>
+        </label>
+        <div style="font-size:12px;color:var(--faint);margin-top:7px;line-height:1.6" id="repeatNote"></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeSplitModal()">닫기</button>
+      <button class="btn" onclick="applySplit()">그룹에 적용</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ 테이블 템플릿 모달 ═══ -->
+<div class="overlay" id="tblTplModal">
+  <div class="modal">
+    <div class="modal-head"><h3>테이블 템플릿</h3>
+      <span style="font-size:12.5px;color:var(--faint);margin-left:6px">item_id · CAT1 · CAT2 · CAT3 · Report</span>
+      <button class="x" onclick="closeTableTplModal()">✕</button></div>
+    <div class="modal-body">
+      <div style="font-size:13px;color:var(--dim);margin-bottom:12px">
+        <b>item_id</b>는 리포메터의 <b>ALIAS</b>와 같은 값입니다.
+        <b>CAT1</b>이 표를 나누는 기준(표 하나 = 시트 하나)이고, <b>CAT2·CAT3</b>는 세로 병합 계층입니다.
+      </div>
+      <div style="overflow-x:auto;border:1px solid var(--line);border-radius:11px">
+        <table class="sum" style="font-size:11.5px;width:100%" id="tblTplPreview"></table>
+      </div>
+      <div style="font-size:12px;color:var(--faint);margin-top:11px;line-height:1.7">
+        · <b>Report</b>로 한 파일에 여러 리포트를 담고 UI에서 골라 씁니다<br>
+        · 행 순서가 곧 표시 순서입니다 · 같은 CAT2가 연속되면 자동 병합됩니다<br>
+        · 평균/산포 전환은 UI 토글로 합니다 (템플릿에 값 컬럼 없음)<br>
+        · 자릿수는 리포메터 <b>UNIT</b>에서, 붉은 셀은 <b>SPECLOW/SPECHIGH</b>에서 자동으로 결정됩니다<br>
+        · 컬럼(wafer)은 분석 대상에서 자동으로 정해집니다
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="downloadTblSample()">현재 구성 내려받기</button>
+      <button class="btn ghost" onclick="closeTableTplModal()">닫기</button>
+      <button class="btn" onclick="loadTableTpl()">템플릿 파일 열기</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ 엑셀 템플릿 모달 ═══ -->
+<div class="overlay" id="tplModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>엑셀 템플릿으로 구성</h3>
+      <button class="x" onclick="closeTemplateModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:13px;color:var(--dim);margin-bottom:12px">
+        아래 컬럼을 가진 시트를 만들어 두면 페이지 구성 전체가 자동으로 그려집니다.
+        멀티스캐터는 <b>한 행</b>에서 x축·y축을 <b>쉼표로 구분</b>해 적습니다 — 순서대로 xy 쌍이 맺어집니다.
+      </div>
+      <div style="overflow-x:auto;border:1px solid var(--line);border-radius:11px">
+        <table class="sum" style="font-size:11.5px;width:100%">
+          <tr><th>페이지타이틀</th><th>플롯페이지</th><th>플롯위치</th><th>플롯타이틀</th><th>플롯종류</th><th>x축</th><th>y축</th><th>x축라벨</th><th>y축라벨</th></tr>
+          <tr><td class="lbl">NMOS 특성 비교</td><td>1</td><td>1</td><td class="lbl">Idsat vs Vtlin</td><td class="lbl">scatter</td><td class="lbl">Vtlin N SVT</td><td class="lbl">Idsat N SVT</td><td class="lbl">Vtlin [V]</td><td class="lbl">Idsat [µA]</td></tr>
+          <tr><td class="lbl"></td><td>1</td><td>2</td><td class="lbl">SVT+LVT 중첩</td><td class="lbl">scatter</td><td class="lbl">Vtlin N SVT, Vtsat N SVT</td><td class="lbl">Idsat N SVT, Idsat N LVT</td><td class="lbl">Vt [V]</td><td class="lbl">Idsat [µA]</td></tr>
+          <tr><td class="lbl"></td><td>1</td><td>3</td><td class="lbl">요약 — NMOS</td><td class="lbl">table</td><td class="lbl"></td><td class="lbl"></td><td class="lbl"></td><td class="lbl"></td></tr>
+          <tr><td class="lbl">PMOS 특성 비교</td><td>2</td><td>1</td><td class="lbl">Idsat vs Vtlin (P)</td><td class="lbl">scatter</td><td class="lbl">Vtlin P SVT</td><td class="lbl">Idsat P SVT</td><td class="lbl"></td><td class="lbl"></td></tr>
+        </table>
+      </div>
+      <div style="font-size:12px;color:var(--faint);margin-top:11px;line-height:1.7">
+        · 페이지타이틀은 첫 행만 적으면 됩니다 (빈 칸은 위 값 상속)<br>
+        · 축은 <b>alias</b>로 적습니다 · 축라벨이 비면 alias + 단위가 자동으로 붙습니다<br>
+        · <b>x축 <code style="background:var(--surface-2);padding:1px 5px;border-radius:4px">A, B</code> · y축 <code style="background:var(--surface-2);padding:1px 5px;border-radius:4px">C, D</code></b> → (A,C)·(B,D) 두 쌍이 한 그림에 겹칩니다 · 쉼표 개수가 다르면 오류<br>
+        · <b>로그 축과 축 범위 컬럼은 없습니다</b> — 불러온 뒤 기본값은 로그 = item 이름 규칙, 범위 = 규격∪데이터 ×1.2 입니다.
+          필요하면 <b>UI에서 plot마다 개별로 변경</b>할 수 있고, 바꾼 값은 구성 저장에 함께 남습니다<br>
+        · 플롯종류: <code style="background:var(--surface-2);padding:1px 5px;border-radius:4px">scatter</code>
+        <code style="background:var(--surface-2);padding:1px 5px;border-radius:4px">box</code>
+        <code style="background:var(--surface-2);padding:1px 5px;border-radius:4px">table</code><br>
+        · 불러오면 검증 결과를 행 번호와 함께 먼저 보여줍니다
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="downloadTplSample()">빈 템플릿 내려받기</button>
+      <button class="btn ghost" onclick="closeTemplateModal()">닫기</button>
+      <button class="btn" onclick="loadTemplate()">템플릿 파일 열기</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ═══════ 상태 ═══════ */
+
+const groups=[
+  {id:'g1',name:'Split_A',color:'#ff9500',sym:'o',size:6,visible:true,ref:false},
+  {id:'g2',name:'Split_B',color:'#0071e3',sym:'s',size:6,visible:true,ref:false},
+  {id:'g3',name:'BASE',   color:'#8e8e93',sym:'d',size:6,visible:true,ref:true},
+];
+let excluded=new Set(),exclStack=[],mode='exc';
+let explore={x:'Vtlin N SVT',y:'Idsat N SVT',ref:true,logxMode:'auto',logyMode:'auto',rangeMode:'auto',xmin:'',xmax:'',ymin:'',ymax:''};
+
+const pts=[];
+(function(){let id=0;
+  for(const c of [{g:'g1',cx:.42,cy:.62,n:60},{g:'g2',cx:.55,cy:.48,n:60},{g:'g3',cx:.48,cy:.55,n:40},{g:null,cx:.5,cy:.5,n:8}])
+    for(let i=0;i<c.n;i++){
+      const x=c.cx+(Math.random()-.5)*.18+(Math.random()-.5)*.1,y=c.cy+(Math.random()-.5)*.16+(Math.random()-.5)*.1;
+      pts.push({id:'k'+id++,g:c.g,x:Math.max(.05,x),y:Math.max(.05,y),
+        alt:Math.max(.05,c.cy+(Math.random()-.5)*.2)});
+    }
+  pts.push({id:'k'+id++,g:'g1',x:.15,y:.92,alt:.5},{id:'k'+id++,g:'g2',x:.9,y:.12,alt:.5});
+  const flat=[];for(const[l,ws]of [['PA123',['W01','W02','W03']],['PA124',['W01','W02']]])for(const w of ws)flat.push([l,w]);
+  pts.forEach((p,i)=>{p.lot=flat[i%flat.length][0];p.waf=flat[i%flat.length][1];});
+})();
+
+/* 리포트 페이지 — plot 템플릿에서 생성됨 */
+let pages=[];
+let curPage=0,curSlot=null;
+
+/* ═══════ 컬럼 카탈로그 ═══════
+   앱 최초 실행 시 bdq.columninfo('eds.f_et_test') 결과를 로컬 JSON으로 캐시하고,
+   이후에는 캐시를 읽어 조건 빌더를 구성한다. [새로고침]으로 재조회. */
+let CATALOG=[
+  {name:'line_id',        type:'STRING'},
+  {name:'tkout_time',     type:'TIMESTAMP'},
+  {name:'root_lot_id',    type:'STRING'},
+  {name:'lot_id',         type:'STRING'},
+  {name:'wafer_id',       type:'STRING'},
+  {name:'slot_no',        type:'INT'},
+  {name:'chip_x_pos',     type:'INT'},
+  {name:'chip_y_pos',     type:'INT'},
+  {name:'site_no',        type:'INT'},
+  {name:'total_site_cnt', type:'INT'},
+  {name:'temperature',    type:'FLOAT'},
+  {name:'step_id',        type:'STRING'},
+  {name:'step_seq',       type:'INT'},
+  {name:'device_id',      type:'STRING'},
+  {name:'product_id',     type:'STRING'},
+  {name:'mask_set',       type:'STRING'},
+  {name:'flow_id',        type:'STRING'},
+  {name:'recipe_id',      type:'STRING'},
+  {name:'eqp_id',         type:'STRING'},
+  {name:'chamber_id',     type:'STRING'},
+  {name:'lot_type',       type:'STRING'},
+  {name:'item_id',        type:'STRING'},
+  {name:'value',          type:'DOUBLE'},
+  {name:'meas_flag',      type:'INT'},
+  {name:'oper_id',        type:'STRING'},
+  {name:'test_pgm',       type:'STRING'},
+  {name:'bin_code',       type:'STRING'},
+  {name:'retest_cnt',     type:'INT'},
+  {name:'create_dttm',    type:'TIMESTAMP'},
+];
+let catalogFetchedAt='2026-08-11 08:14';
+const NUM=['INT','BIGINT','FLOAT','DOUBLE','DECIMAL','SMALLINT','TINYINT'];
+function colType(n){const c=CATALOG.find(x=>x.name===n);return c?c.type:'STRING';}
+function typeClass(t){return NUM.includes(t)?'num':t==='TIMESTAMP'?'ts':'str';}
+function isNumCol(n){return NUM.includes(colType(n));}
+function refreshCatalog(){
+  toast("bdq.columninfo('eds.f_et_test') 조회 중…");
+  setTimeout(()=>{catalogFetchedAt=new Date().toISOString().slice(0,16).replace('T',' ');
+    renderCatalogRow();toast(`컬럼 ${CATALOG.length}개 · 캐시 갱신 완료`);},700);
+}
+function renderCatalogRow(){
+  const e=document.getElementById('catInfo');
+  if(e)e.innerHTML=`<b>${CATALOG.length}</b>개 컬럼 · 조회 ${catalogFetchedAt}`;
+}
+
+/* ═══════ 자동완성 (로컬 접두/부분 일치 — 외부 호출 없음) ═══════ */
+function attachAC(input,getList,opts){
+  opts=opts||{};
+  const wrap=document.createElement('div');wrap.className='ac';
+  input.parentNode.insertBefore(wrap,input);wrap.appendChild(input);
+  const ghost=document.createElement('div');ghost.className='ac-ghost';wrap.appendChild(ghost);
+  const menu=document.createElement('div');menu.className='ac-menu';wrap.appendChild(menu);
+  let items=[],idx=-1;
+
+  const seg=()=>{ /* 쉼표 구분 시 마지막 토큰만 대상 */
+    if(!opts.comma)return {head:'',tok:input.value};
+    const i=input.value.lastIndexOf(',');
+    return i<0?{head:'',tok:input.value}:{head:input.value.slice(0,i+1),tok:input.value.slice(i+1).replace(/^\s+/,'')};
+  };
+  const match=q=>{
+    const all=getList();if(!q)return all.slice(0,10);
+    const lq=q.toLowerCase();
+    const pre=all.filter(o=>o.name.toLowerCase().startsWith(lq));
+    const mid=all.filter(o=>!o.name.toLowerCase().startsWith(lq)&&o.name.toLowerCase().includes(lq));
+    return [...pre,...mid].slice(0,10);
+  };
+  const paint=()=>{
+    const{tok}=seg();
+    items=match(tok.trim());idx=items.length?0:-1;
+    /* 인라인 고스트: 접두 일치일 때만 */
+    const top=items[0];
+    if(tok&&top&&top.name.toLowerCase().startsWith(tok.trim().toLowerCase())&&top.name.length>tok.trim().length){
+      ghost.innerHTML=`<span class="typed">${esc(input.value)}</span><span class="sug">${esc(top.name.slice(tok.trim().length))}</span>`;
+    }else ghost.innerHTML='';
+    menu.innerHTML=items.length?items.map((o,i)=>{
+      const q=tok.trim(),k=o.name.toLowerCase().indexOf(q.toLowerCase());
+      const nm=q&&k>=0?esc(o.name.slice(0,k))+'<b>'+esc(o.name.slice(k,k+q.length))+'</b>'+esc(o.name.slice(k+q.length)):esc(o.name);
+      const tail=o.type?`<span class="ty">${o.type}</span>`:(o.hint?`<span class="sp">${o.hint}</span>`:'');
+      return `<div class="ac-item ${i===idx?'on':''}" data-i="${i}">${nm}${tail}</div>`;
+    }).join(''):`<div class="ac-empty">일치하는 항목이 없습니다</div>`;
+    menu.classList.add('show');
+  };
+  const accept=o=>{
+    const{head}=seg();
+    input.value=(head?head+' ':'')+o.name+(opts.comma?'':'');
+    ghost.innerHTML='';menu.classList.remove('show');
+    input.dispatchEvent(new Event('input',{bubbles:true}));
+    if(opts.onPick)opts.onPick(input.value);
+  };
+  input.addEventListener('input',paint);
+  input.addEventListener('focus',paint);
+  input.addEventListener('blur',()=>setTimeout(()=>{menu.classList.remove('show');ghost.innerHTML='';},150));
+  input.addEventListener('keydown',e=>{
+    if(e.key==='ArrowDown'){e.preventDefault();idx=Math.min(idx+1,items.length-1);paintSel();}
+    else if(e.key==='ArrowUp'){e.preventDefault();idx=Math.max(idx-1,0);paintSel();}
+    else if(e.key==='Tab'||e.key==='ArrowRight'){
+      if(ghost.innerHTML&&input.selectionStart===input.value.length){e.preventDefault();accept(items[0]);}
+    }
+    else if(e.key==='Enter'){if(idx>=0&&items[idx]&&menu.classList.contains('show')){e.preventDefault();accept(items[idx]);}}
+    else if(e.key==='Escape'){menu.classList.remove('show');ghost.innerHTML='';}
+  });
+  menu.addEventListener('mousedown',e=>{
+    const el=e.target.closest('.ac-item');if(!el)return;e.preventDefault();accept(items[+el.dataset.i]);
+  });
+  function paintSel(){[...menu.children].forEach((c,i)=>c.classList.toggle('on',i===idx));
+    const on=menu.querySelector('.ac-item.on');if(on)on.scrollIntoView({block:'nearest'});}
+  function esc(t){return (t||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+}
+
+/* ═══════ 리포메터 ═══════
+   실제 컬럼: CATEGORY · ITEMID · ALIAS · ABSOLUTE · SCALE FACTOR · ADDP FORM
+              UNIT · SPECLOW · SPECHIGH · TARGET                              */
+const REFORMATTER=[
+  {CATEGORY:'REAL',ITEMID:'ET_IDSAT_N_SVT', ALIAS:'Idsat N SVT', ABSOLUTE:'N',ADDP:'',                       UNIT:'uA',SPECLOW:.34,SPECHIGH:.86,TARGET:.60,SCALE:1e6},
+  {CATEGORY:'REAL',ITEMID:'ET_IDSAT_N_LVT', ALIAS:'Idsat N LVT', ABSOLUTE:'N',ADDP:'',                       UNIT:'uA',SPECLOW:null,SPECHIGH:null,TARGET:null,SCALE:1e6},
+  {CATEGORY:'REAL',ITEMID:'ET_VTLIN_N_SVT', ALIAS:'Vtlin N SVT', ABSOLUTE:'N',ADDP:'',                       UNIT:'V', SPECLOW:.30,SPECHIGH:.62,TARGET:.46,SCALE:1},
+  {CATEGORY:'REAL',ITEMID:'ET_VTSAT_N_SVT', ALIAS:'Vtsat N SVT', ABSOLUTE:'N',ADDP:'',                       UNIT:'V', SPECLOW:.36,SPECHIGH:.70,TARGET:.53,SCALE:1},
+  {CATEGORY:'REAL',ITEMID:'ET_IOFF_N_SVT',  ALIAS:'Ioff N SVT',  ABSOLUTE:'Y',ADDP:'',                       UNIT:'nA',SPECLOW:null,SPECHIGH:.90,TARGET:null,SCALE:1e9},
+  {CATEGORY:'REAL',ITEMID:'ET_IDSAT_P_SVT', ALIAS:'Idsat P SVT', ABSOLUTE:'Y',ADDP:'',                       UNIT:'uA',SPECLOW:.32,SPECHIGH:null,TARGET:.50,SCALE:1e6},
+  {CATEGORY:'REAL',ITEMID:'ET_VTLIN_P_SVT', ALIAS:'Vtlin P SVT', ABSOLUTE:'Y',ADDP:'',                       UNIT:'V', SPECLOW:.28,SPECHIGH:.66,TARGET:.47,SCALE:1},
+  {CATEGORY:'REAL',ITEMID:'ET_CAP_MIM',     ALIAS:'Cap MIM unit',ABSOLUTE:'N',ADDP:'',                       UNIT:'fF',SPECLOW:null,SPECHIGH:null,TARGET:null,SCALE:1e15},
+  {CATEGORY:'ADDP',ITEMID:'CALC_RATIO_NP',  ALIAS:'Idsat N/P',   ABSOLUTE:'N',ADDP:'{Idsat N SVT}/{Idsat P SVT}',UNIT:'',SPECLOW:1.8,SPECHIGH:2.6,TARGET:2.2,SCALE:1},
+  {CATEGORY:'ADDP',ITEMID:'CALC_VT_SPREAD', ALIAS:'Vt spread N', ABSOLUTE:'N',ADDP:'Std({Vtlin N SVT},{Vtsat N SVT})',UNIT:'V',SPECLOW:null,SPECHIGH:.06,TARGET:null,SCALE:1},
+];
+const byAlias={};REFORMATTER.forEach(r=>byAlias[r.ALIAS]=r);
+/* 기존 코드 호환용 뷰 */
+const ITEM_META={};
+REFORMATTER.forEach(r=>ITEM_META[r.ALIAS]={lsl:r.SPECLOW,usl:r.SPECHIGH,tgt:r.TARGET,unit:r.UNIT});
+function decOf(alias){
+  const u=(byAlias[alias]||{}).UNIT||'';
+  return ['V',''].includes(u)?4:2;
+}
+
+/* 로그 축은 item 이름 패턴으로 자동 판정 (설정에서 관리) */
+let LOG_PATTERNS=['Ioff*','*Leak*','*LEAK*','Jg*'];
+function isLog(item){
+  return LOG_PATTERNS.some(p=>{
+    const re=new RegExp('^'+p.replace(/[.+?^${}()|[\]\\]/g,'\\$&').replace(/\*/g,'.*')+'$','i');
+    return re.test(item);
+  });
+}
+/* item별 값 (목업용 결정적 생성) */
+function seedOf(s){let h=0;for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;return h;}
+function valOf(p,item){
+  const h=seedOf(item), base=(h%3===0)?p.x:(h%3===1)?p.y:p.alt;
+  const sc=.75+((h>>3)%40)/100, off=((h>>7)%22)/100;
+  return Math.max(.02,base*sc+off);
+}
+/* 축 범위: (USL/LSL ∪ 데이터 범위) × 1.2, 중심 기준 확장 */
+function computeRange(items){
+  let lo=Infinity,hi=-Infinity;
+  for(const it of items){
+    for(const p of pts){
+      const g=groups.find(x=>x.id===p.g);
+      if(g&&!g.visible)continue;
+      const v=valOf(p,it); if(v<lo)lo=v; if(v>hi)hi=v;
+    }
+    const m=ITEM_META[it];
+    if(m){ if(m.lsl!=null&&m.lsl<lo)lo=m.lsl; if(m.usl!=null&&m.usl>hi)hi=m.usl; }
+  }
+  if(!isFinite(lo)||!isFinite(hi)){lo=0;hi=1;}
+  if(hi-lo<1e-9){lo-=.5;hi+=.5;}
+  const c=(lo+hi)/2, half=(hi-lo)/2*1.2;
+  return [Math.max(c-half,1e-4), c+half];
+}
+/* 리포메터 alias 목록 — 실제로는 수천 개 */
+const ITEM_LIST=(()=>{
+  const base=REFORMATTER.map(r=>r.ALIAS);
+  const gen=[];
+  for(const dev of ['N','P']) for(const vt of ['SVT','LVT','HVT'])
+    for(const par of ['Idsat','Idlin','Ioff','Vtlin','Vtsat','Gm max','SS','DIBL','Rout'])
+      gen.push(`${par} ${dev} ${vt}`);
+  for(const t of ['MIM','Poly','MOS']) gen.push(`Cap ${t} unit`);
+  for(const t of ['M1','M2','M3','V1','V2']) gen.push(`Rs ${t}`,`Rc ${t}`);
+  for(const t of ['NW','PW','DNW']) gen.push(`Rsheet ${t}`);
+  gen.push('Jg NMOS','Jg PMOS','Leak N junction','Leak P junction','ISO Leak N','ISO Leak P');
+  return [...new Set([...base,...gen])].sort();
+})();
+function itemOptions(){
+  return ITEM_LIST.map(n=>{
+    const m=ITEM_META[n];
+    const parts=[];
+    if(m&&(m.lsl!=null||m.usl!=null))parts.push('spec');
+    if(isLog(n))parts.push('log');
+    return {name:n,hint:parts.join(' · ')};
+  });
+}
+/* 축 스케일: auto = item 이름 규칙, 그 외는 plot별 강제 */
+function resolveLog(mode,items){
+  if(mode==='log')return true;
+  if(mode==='linear')return false;
+  return items.some(isLog);
+}
+/* 축 범위: manual이면 직접 값, 아니면 (규격 ∪ 데이터) × 1.2 */
+function resolveRange(spec,ax,items){
+  const lo=spec[ax+'min'],hi=spec[ax+'max'];
+  if(spec.rangeMode==='manual'&&lo!==''&&hi!==''&&lo!=null&&hi!=null&&+hi>+lo)return [+lo,+hi];
+  return computeRange(items);
+}
+function isAxisOverridden(spec){
+  return (spec.logxMode&&spec.logxMode!=='auto')||(spec.logyMode&&spec.logyMode!=='auto')||spec.rangeMode==='manual';
+}
+function pairsOf(spec){
+  const xs=(spec.x||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const ys=(spec.y||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const n=Math.max(xs.length,ys.length);
+  const out=[];
+  for(let i=0;i<n;i++) out.push({x:xs[Math.min(i,xs.length-1)],y:ys[Math.min(i,ys.length-1)]});
+  return out;
+}
+function unitOf(it){return (ITEM_META[it]||{}).unit||'';}
+
+/* ═══════ 공용 렌더러 (스펙 하나 → 어디에나) ═══════ */
+function drawPlot(ctx,W,H,spec,opt){
+  opt=opt||{};
+  const mini=!!opt.mini;
+  const M=mini?{l:26,r:6,t:5,b:18}:{l:70,r:22,t:16,b:48};
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);
+  const pw=W-M.l-M.r,ph=H-M.t-M.b;
+  const prs=pairsOf(spec);
+  if(!prs.length)return;
+  const xIt=[...new Set(prs.map(p=>p.x))], yIt=[...new Set(prs.map(p=>p.y))];
+  const lgx=resolveLog(spec.logxMode,xIt), lgy=resolveLog(spec.logyMode,yIt);
+  const RX=resolveRange(spec,'x',xIt), RY=resolveRange(spec,'y',yIt);
+  const tr=(v,lg,R)=>lg
+    ? (Math.log10(Math.max(v,R[0]))-Math.log10(R[0]))/(Math.log10(R[1])-Math.log10(R[0]))
+    : (v-R[0])/(R[1]-R[0]);
+  const P=(vx,vy)=>[M.l+tr(vx,lgx,RX)*pw, H-M.b-tr(vy,lgy,RY)*ph];
+
+  /* grid */
+  ctx.strokeStyle='#ececee';ctx.lineWidth=1;
+  const n=mini?3:5;
+  for(let i=0;i<=n;i++){
+    const gx=M.l+i/n*pw,gy=M.t+i/n*ph;
+    ctx.beginPath();ctx.moveTo(gx,M.t);ctx.lineTo(gx,H-M.b);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(M.l,gy);ctx.lineTo(W-M.r,gy);ctx.stroke();
+  }
+  ctx.strokeStyle='#d2d2d7';ctx.strokeRect(M.l,M.t,pw,ph);
+  /* ticks */
+  ctx.fillStyle='#86868b';ctx.font=(mini?7:11)+'px ui-monospace,Consolas';ctx.textAlign='center';
+  const fmt=v=>Math.abs(v)>=100?v.toFixed(0):Math.abs(v)>=1?v.toFixed(2):v.toFixed(3);
+  for(let i=0;i<=n;i++){
+    const gx=M.l+i/n*pw,gy=M.t+i/n*ph;
+    const vx=lgx?Math.pow(10,Math.log10(RX[0])+i/n*(Math.log10(RX[1])-Math.log10(RX[0]))):RX[0]+i/n*(RX[1]-RX[0]);
+    const vy=lgy?Math.pow(10,Math.log10(RY[0])+(1-i/n)*(Math.log10(RY[1])-Math.log10(RY[0]))):RY[0]+(1-i/n)*(RY[1]-RY[0]);
+    ctx.fillText(fmt(vx),gx,H-M.b+(mini?9:17));
+    ctx.save();ctx.textAlign='right';ctx.fillText(fmt(vy),M.l-(mini?3:8),gy+(mini?2:4));ctx.restore();
+  }
+  /* 규격선 */
+  const spl=(items,horiz)=>{
+    for(const it of items){
+      const m=ITEM_META[it];if(!m)continue;
+      for(const [k,v] of [['LSL',m.lsl],['USL',m.usl]]){
+        if(v==null)continue;
+        ctx.strokeStyle='rgba(215,0,21,.42)';ctx.setLineDash([mini?2:6,mini?2:4]);ctx.lineWidth=1;
+        ctx.beginPath();
+        if(horiz){const[,y]=P(RX[0],v);ctx.moveTo(M.l,y);ctx.lineTo(W-M.r,y);}
+        else{const[x]=P(v,RY[0]);ctx.moveTo(x,M.t);ctx.lineTo(x,H-M.b);}
+        ctx.stroke();ctx.setLineDash([]);
+        if(!mini){ctx.fillStyle='rgba(215,0,21,.75)';ctx.font='9.5px ui-monospace';
+          if(horiz){const[,y]=P(RX[0],v);ctx.textAlign='left';ctx.fillText(k,M.l+4,y-3);}
+          else{const[x]=P(v,RY[0]);ctx.textAlign='center';ctx.fillText(k,x,M.t+10);}}
+      }
+    }
+  };
+  spl(xIt,false); spl(yIt,true);
+  /* axis labels */
+  if(!mini){
+    ctx.fillStyle='#1d1d1f';ctx.font='13px -apple-system,Segoe UI';ctx.textAlign='center';
+    const xl=spec.xlabel||(xIt.join(', ')+(unitOf(xIt[0])?` [${unitOf(xIt[0])}]`:''))+(lgx?'  (log)':'');
+    const yl=spec.ylabel||(yIt.join(', ')+(unitOf(yIt[0])?` [${unitOf(yIt[0])}]`:''))+(lgy?'  (log)':'');
+    ctx.fillText(xl,M.l+pw/2,H-9);
+    ctx.save();ctx.translate(15,M.t+ph/2);ctx.rotate(-Math.PI/2);ctx.fillText(yl,0,0);ctx.restore();
+  }
+  /* REF 밴드 */
+  if(spec.ref){
+    const it=yIt[0];
+    const rf=pts.filter(p=>p.g==='g3'&&!excluded.has(p.id));
+    if(rf.length>1){
+      const ys=rf.map(p=>valOf(p,it)),mu=ys.reduce((a,b)=>a+b)/ys.length;
+      const sd=Math.sqrt(ys.reduce((a,b)=>a+(b-mu)**2,0)/(ys.length-1));
+      const[,y1]=P(RX[0],mu+3*sd),[,y2]=P(RX[0],mu-3*sd),[,ym]=P(RX[0],mu);
+      const top=Math.max(Math.min(y1,y2),M.t), bot=Math.min(Math.max(y1,y2),H-M.b);
+      ctx.fillStyle='rgba(142,142,147,.10)';ctx.fillRect(M.l,top,pw,Math.max(0,bot-top));
+      ctx.strokeStyle='rgba(142,142,147,.6)';ctx.setLineDash([mini?2:5,mini?2:4]);ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(M.l,ym);ctx.lineTo(W-M.r,ym);ctx.stroke();ctx.setLineDash([]);
+    }
+  }
+  /* 포인트 — 모든 xy쌍이 그룹 스타일을 공유 */
+  const scale=mini?.52:1;
+  ctx.save();ctx.beginPath();ctx.rect(M.l,M.t,pw,ph);ctx.clip();
+  for(const pr of prs){
+    for(const p of pts){
+      const g=groups.find(x=>x.id===p.g);
+      if(g&&!g.visible)continue;
+      const[X,Y]=P(valOf(p,pr.x),valOf(p,pr.y));
+      const r=(g?g.size:4)*scale;
+      if(excluded.has(p.id)) sym(ctx,X,Y,g?g.sym:'o',r*.92,'#c7c7cc',true);
+      else sym(ctx,X,Y,g?g.sym:'o',r,g?g.color:'#c7c7cc',false);
+    }
+  }
+  ctx.restore();
+  return {RX,RY,lgx,lgy,M,pw,ph,prs};
+}
+function sym(ctx,x,y,s,r,c,hollow){
+  ctx.beginPath();ctx.lineWidth=1.3;
+  if(s==='o')ctx.arc(x,y,r,0,7);
+  else if(s==='s')ctx.rect(x-r,y-r,2*r,2*r);
+  else if(s==='t'){ctx.moveTo(x,y-r);ctx.lineTo(x+r,y+r);ctx.lineTo(x-r,y+r);ctx.closePath();}
+  else if(s==='d'){ctx.moveTo(x,y-r);ctx.lineTo(x+r,y);ctx.lineTo(x,y+r);ctx.lineTo(x-r,y);ctx.closePath();}
+  else{ctx.moveTo(x-r,y);ctx.lineTo(x+r,y);ctx.moveTo(x,y-r);ctx.lineTo(x,y+r);}
+  if(hollow){ctx.strokeStyle=c;ctx.stroke();}else{ctx.fillStyle=c;ctx.fill();}
+}
+
+/* ═══════ 축 오버라이드 패널 (탐색·슬롯 공용) ═══════ */
+let axEditOpen={Exp:false,Slot:false};
+function targetSpec(which){return which==='Exp'?explore:pages[curPage].slots[curSlot];}
+function toggleAxEdit(which){axEditOpen[which]=!axEditOpen[which];renderAxEdit(which);}
+function renderAxEdit(which){
+  const box=document.getElementById('axEdit'+which);if(!box)return;
+  const sp=targetSpec(which);if(!sp)return;
+  const lnk=document.getElementById('lnk'+which);
+  box.style.display=axEditOpen[which]?'block':'none';
+  if(lnk)lnk.textContent=axEditOpen[which]?'닫기':'수정';
+  const bdg=document.getElementById('ovr'+which);
+  if(bdg)bdg.innerHTML=isAxisOverridden(sp)?'<span class="ovr-badge">직접 지정</span>':'';
+  if(!axEditOpen[which])return;
+  const seg=(ax)=>{
+    const cur=sp[ax==='x'?'logxMode':'logyMode']||'auto';
+    return ['auto','log','linear'].map(m=>
+      `<button class="${cur===m?'on':''}" onclick="setAx('${which}','${ax==='x'?'logxMode':'logyMode'}','${m}')">${m==='auto'?'자동':m==='log'?'log':'선형'}</button>`).join('');
+  };
+  const man=sp.rangeMode==='manual';
+  box.innerHTML=`
+    <div class="ax-line"><span>X 스케일</span><div class="seg tiny">${seg('x')}</div></div>
+    <div class="ax-line"><span>Y 스케일</span><div class="seg tiny">${seg('y')}</div></div>
+    <label class="chk" style="margin-top:2px"><input type="checkbox" ${man?'checked':''}
+      onchange="setAx('${which}','rangeMode',this.checked?'manual':'auto')"> 범위 직접 지정</label>
+    ${man?`<div class="mm-grid">
+      <span>X</span><input type="text" value="${sp.xmin??''}" placeholder="min" onchange="setAx('${which}','xmin',this.value)">
+                    <input type="text" value="${sp.xmax??''}" placeholder="max" onchange="setAx('${which}','xmax',this.value)">
+      <span>Y</span><input type="text" value="${sp.ymin??''}" placeholder="min" onchange="setAx('${which}','ymin',this.value)">
+                    <input type="text" value="${sp.ymax??''}" placeholder="max" onchange="setAx('${which}','ymax',this.value)">
+     </div>
+     <button class="btn ghost sm" style="width:100%;margin-top:8px" onclick="fillFromAuto('${which}')">현재 자동값 채우기</button>`:''}
+    ${isAxisOverridden(sp)?`<button class="btn ghost sm" style="width:100%;margin-top:8px" onclick="resetAx('${which}')">기본 규칙으로 되돌리기</button>`:''}
+    <div style="font-size:10.5px;color:var(--faint);margin-top:8px;line-height:1.45">
+      자동 = 이름 규칙(로그) · 규격∪데이터 ×1.2(범위)<br>여기서 바꾼 값은 이 plot에만 적용되고 PPT에도 그대로 나갑니다
+    </div>`;
+}
+function setAx(which,k,v){
+  const sp=targetSpec(which);if(!sp)return;
+  sp[k]=v;
+  if(k==='rangeMode'&&v==='manual'&&(sp.xmin==null||sp.xmin===''))fillFromAuto(which,true);
+  renderAxEdit(which);
+  if(which==='Exp')draw(); else {renderSlots();renderInspector();axEditOpen.Slot=true;renderAxEdit('Slot');}
+}
+function fillFromAuto(which,silent){
+  const sp=targetSpec(which);if(!sp)return;
+  const prs=pairsOf(sp);
+  const RX=computeRange([...new Set(prs.map(p=>p.x))]),RY=computeRange([...new Set(prs.map(p=>p.y))]);
+  const r=v=>Math.abs(v)>=1?v.toFixed(3):v.toFixed(4);
+  sp.xmin=r(RX[0]);sp.xmax=r(RX[1]);sp.ymin=r(RY[0]);sp.ymax=r(RY[1]);
+  if(!silent){renderAxEdit(which);if(which==='Exp')draw();else renderSlots();}
+}
+function resetAx(which){
+  const sp=targetSpec(which);if(!sp)return;
+  sp.logxMode='auto';sp.logyMode='auto';sp.rangeMode='auto';
+  sp.xmin=sp.xmax=sp.ymin=sp.ymax='';
+  renderAxEdit(which);if(which==='Exp')draw();else{renderSlots();renderInspector();}
+}
+
+/* ═══════ 탐색 ═══════ */
+const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
+let lastGeom=null;
+function draw(){
+  explore.x=document.getElementById('axX').value;
+  explore.y=document.getElementById('axY').value;
+  explore.ref=document.getElementById('refBand').checked;
+  lastGeom=drawPlot(ctx,cv.width,cv.height,explore,{});
+  const xIt=[...new Set(pairsOf(explore).map(p=>p.x))],yIt=[...new Set(pairsOf(explore).map(p=>p.y))];
+  const f=v=>Math.abs(v)>=1?v.toFixed(2):v.toFixed(3);
+  document.getElementById('rangeInfo').innerHTML=
+    `X ${f(lastGeom.RX[0])} – ${f(lastGeom.RX[1])}${lastGeom.lgx?' · log':''}<br>`+
+    `Y ${f(lastGeom.RY[0])} – ${f(lastGeom.RY[1])}${lastGeom.lgy?' · log':''}`;
+  document.getElementById('specInfo').textContent= explore.rangeMode==='manual' ? '직접 지정한 범위'
+    : ([...xIt,...yIt].some(i=>ITEM_META[i]&&(ITEM_META[i].lsl!=null||ITEM_META[i].usl!=null))
+       ? '규격 포함 범위 × 1.2' : '데이터 범위 × 1.2 (규격 없음)');
+  renderAxEdit('Exp');
+}
+cv.addEventListener('click',e=>{
+  if(!lastGeom)return;
+  const r=cv.getBoundingClientRect();
+  const mx=(e.clientX-r.left)*cv.width/r.width,my=(e.clientY-r.top)*cv.height/r.height;
+  const{RX,RY,lgx,lgy,M,pw,ph,prs}=lastGeom;
+  const tr=(v,lg,R)=>lg?(Math.log10(Math.max(v,R[0]))-Math.log10(R[0]))/(Math.log10(R[1])-Math.log10(R[0])):(v-R[0])/(R[1]-R[0]);
+  let best=null,bd=130;
+  for(const pr of prs)for(const p of pts){
+    const g=groups.find(x=>x.id===p.g); if(g&&!g.visible)continue;
+    const X=M.l+tr(valOf(p,pr.x),lgx,RX)*pw, Y=cv.height-M.b-tr(valOf(p,pr.y),lgy,RY)*ph;
+    const d=(X-mx)**2+(Y-my)**2; if(d<bd){bd=d;best=p;}
+  }
+  if(!best)return;
+  if(mode==='exc'&&!excluded.has(best.id)){
+    excluded.add(best.id);exclStack.push(best.id);markDirty();
+    if(excluded.size===1)toast('이 점은 다른 plot과 Summary 통계에서도 빠집니다');
+  }else if(mode==='res'&&excluded.has(best.id)){excluded.delete(best.id);markDirty();}
+  syncExcl();draw();renderSlots();
+});
+function setMode(m){mode=m;
+  document.getElementById('mExc').classList.toggle('on',m==='exc');
+  document.getElementById('mRes').classList.toggle('on',m==='res');}
+function addToReport(){
+  const pg=pages[curPage],idx=pg.slots.findIndex(s=>!s);
+  if(idx<0){toast('이 페이지의 슬롯 6개가 모두 찼습니다');return;}
+  pg.slots[idx]={kind:'plot',title:`${explore.y} vs ${explore.x}`,x:explore.x,y:explore.y,ref:explore.ref,
+    logxMode:explore.logxMode,logyMode:explore.logyMode,rangeMode:explore.rangeMode,
+    xmin:explore.xmin,xmax:explore.xmax,ymin:explore.ymin,ymax:explore.ymax};
+  renderPages();renderSlots();
+  toast(`Page ${curPage+1} 슬롯 ${idx+1}에 추가되었습니다`);
+}
+
+/* ═══════ 리포트(템플릿) ═══════ */
+function renderPages(){
+  const rep=document.getElementById('expRepeat');
+  const multi=rep&&rep.checked&&factors.length>1;
+  const head=multi?`<div style="font-size:11px;color:var(--faint);padding:4px 2px 8px;line-height:1.5">
+      실험 ${factors.length}개 x ${pages.length}페이지<br><b style="color:var(--acc)">= ${factors.length*pages.length}페이지</b></div>`:'';
+  document.getElementById('pageRail').innerHTML=head+pages.map((p,i)=>`
+    <div class="page-thumb ${i===curPage?'on':''}" onclick="selPage(${i})">
+      <div class="mini">${p.slots.map(s=>`<i class="${s?'':'empty'}"></i>`).join('')}</div>
+      <div class="lbl">${i+1}. ${p.title||'제목 없음'}</div>
+    </div>`).join('')
+    +`<div class="page-add" onclick="addPage()">＋ 페이지</div>`;
+}
+function selPage(i){curPage=i;curSlot=null;renderPages();renderSlots();renderInspector();
+  document.getElementById('pageTitle').value=pages[i].title;}
+function addPage(){pages.push({title:'새 페이지',slots:[null,null,null,null,null,null]});selPage(pages.length-1);}
+function setPageTitle(v){pages[curPage].title=v;
+  document.getElementById('slideHead').firstChild.textContent=v||'—';renderPages();}
+function renderSlots(){
+  const pg=pages[curPage];
+  document.getElementById('slideHead').innerHTML=(pg.title||'—')+`<span>25℃ · M2 · seq1 · 제외 ${excluded.size}점</span>`;
+  const grid=document.getElementById('slotGrid');
+  grid.innerHTML=pg.slots.map((s,i)=>{
+    if(!s)return `<div class="slot empty ${curSlot===i?'on':''}" onclick="selSlot(${i})">＋ 비어 있음</div>`;
+    if(s.kind==='table')return `<div class="slot ${curSlot===i?'on':''}" onclick="selSlot(${i})">
+      <div class="st">${s.title}</div>
+      <div class="tbl-mini">cat&nbsp;&nbsp;alias&nbsp;&nbsp;W01&nbsp;&nbsp;W02&nbsp;&nbsp;W03<br>
+      NMOS&nbsp;Idsat&nbsp;12.31&nbsp;12.48&nbsp;12.12<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Idsat&nbsp;15.22&nbsp;15.41&nbsp;15.02<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Vt&nbsp;&nbsp;&nbsp;&nbsp;0.451&nbsp;0.449&nbsp;0.453<br>
+      PMOS&nbsp;Idsat&nbsp;6.12&nbsp;&nbsp;6.25&nbsp;&nbsp;6.02</div></div>`;
+    return `<div class="slot ${curSlot===i?'on':''}" onclick="selSlot(${i})">
+      <div class="st">${s.title}</div><canvas id="sc${i}"></canvas></div>`;
+  }).join('');
+  requestAnimationFrame(()=>{
+    pg.slots.forEach((s,i)=>{
+      if(!s||s.kind!=='plot')return;
+      const c=document.getElementById('sc'+i);if(!c)return;
+      const r=c.getBoundingClientRect();
+      c.width=Math.max(60,r.width*2);c.height=Math.max(40,r.height*2);
+      const cx=c.getContext('2d');cx.scale(2,2);
+      drawPlot(cx,r.width,r.height,s,{mini:true});
+    });
+  });
+}
+function selSlot(i){curSlot=i;renderSlots();renderInspector();}
+function renderInspector(){
+  const el=document.getElementById('inspector');
+  if(curSlot===null){el.innerHTML=`<div class="card"><div class="insp-empty">슬롯을 선택하면<br>제목과 축을 편집할 수 있습니다</div></div>`;return;}
+  const s=pages[curPage].slots[curSlot];
+  if(!s){el.innerHTML=`<div class="card"><h4 style="font-size:13.5px">슬롯 ${curSlot+1}</h4>
+    <div style="font-size:12.5px;color:var(--faint);margin-bottom:12px">비어 있습니다</div>
+    <button class="btn ghost sm" style="width:100%;margin-bottom:7px" onclick="fillSlot('plot')">＋ Plot 추가</button>
+    <button class="btn ghost sm" style="width:100%" onclick="fillSlot('table')">＋ Table 추가</button></div>`;return;}
+  if(s.kind==='table'){el.innerHTML=`<div class="card">
+    <h4 style="font-size:13.5px">슬롯 ${curSlot+1} · Table</h4>
+    <div class="field"><label>제목</label><input type="text" value="${s.title}" oninput="upd('title',this.value)"></div>
+    <div class="field"><label>값</label><select><option>평균</option><option>산포 (wafer 내)</option></select></div>
+    <label class="chk" style="margin-bottom:12px"><input type="checkbox"> Δ vs REF</label>
+    <button class="btn ghost sm" style="width:100%" onclick="clearSlot()">슬롯 비우기</button></div>`;return;}
+  const np=pairsOf(s).length;
+  const lg=resolveLog(s.logxMode,[...new Set(pairsOf(s).map(p=>p.x))])||resolveLog(s.logyMode,[...new Set(pairsOf(s).map(p=>p.y))]);
+  el.innerHTML=`<div class="card">
+    <h4 style="font-size:13.5px">슬롯 ${curSlot+1} · Plot${np>1?` · ${np}쌍`:''}</h4>
+    <div class="field"><label>제목</label><input type="text" value="${s.title}" oninput="upd('title',this.value)"></div>
+    <div class="field"><label>X 축 (alias · 쉼표로 여러 개)</label><input type="text" value="${s.x}" oninput="upd('x',this.value)"></div>
+    <div class="field"><label>Y 축 (alias · 쉼표로 여러 개)</label><input type="text" value="${s.y}" oninput="upd('y',this.value)"></div>
+    <div class="field"><label>X 라벨 (비우면 자동)</label><input type="text" value="${s.xlabel||''}" oninput="upd('xlabel',this.value)"></div>
+    <div class="field"><label>Y 라벨 (비우면 자동)</label><input type="text" value="${s.ylabel||''}" oninput="upd('ylabel',this.value)"></div>
+    <div class="auto-range" style="margin-bottom:12px">
+      <div class="ar-head">축<span id="ovrSlot"></span>
+        <span class="ar-edit-link" onclick="toggleAxEdit('Slot')" id="lnkSlot">수정</span></div>
+      <div class="ar-note" id="slotAxNote">${s.rangeMode==='manual'?'직접 지정한 범위':'규격(USL/LSL)과 데이터 범위 중 넓은 쪽 × 1.2'}${lg?'<br>로그 축 적용 중':''}</div>
+      <div class="ax-edit" id="axEditSlot" style="display:none"></div>
+    </div>
+    <label class="chk" style="margin-bottom:12px"><input type="checkbox" ${s.ref?'checked':''} onchange="upd('ref',this.checked)"> REF μ±3σ 밴드</label>
+    <button class="btn ghost sm" style="width:100%" onclick="clearSlot()">슬롯 비우기</button>
+  </div>
+  <div class="card" style="padding:16px">
+    <h4 style="font-size:13.5px;margin-bottom:4px">그룹 스타일</h4>
+    <div style="font-size:11.5px;color:var(--faint);margin-bottom:8px">세션 공통 · 모든 슬롯에 동시 반영</div>
+    <div id="grpEditor2"></div>
+  </div>`;
+  renderEditor();
+  el.querySelectorAll('input').forEach(inp=>{
+    const lbl=inp.closest('.field')&&inp.closest('.field').querySelector('label');
+    if(lbl&&/^[XY] 축/.test(lbl.textContent)) attachAC(inp,itemOptions,{comma:true});
+  });
+  renderAxEdit('Slot');
+}
+function upd(k,v){pages[curPage].slots[curSlot][k]=v;renderSlots();renderInspector();}
+function fillSlot(kind){
+  pages[curPage].slots[curSlot]= kind==='plot'
+    ? {kind:'plot',title:'제목 없음',x:ITEM_LIST[0],y:ITEM_LIST[1],xlabel:'',ylabel:'',ref:false,logxMode:'auto',logyMode:'auto',rangeMode:'auto'}
+    : {kind:'table',title:'요약'};
+  renderPages();renderSlots();renderInspector();
+}
+function clearSlot(){pages[curPage].slots[curSlot]=null;renderPages();renderSlots();renderInspector();updateCfgRows();markCfgDirty();}
+function pptGen(btn){
+  renderPptInfo();
+  btn.disabled=true;const o=btn.textContent;let p=0;
+  const iv=setInterval(()=>{p+=20;btn.textContent=`생성 중 ${p}%`;
+    if(p>=100){clearInterval(iv);btn.textContent=o;btn.disabled=false;toast('report_20260810.pptx 생성 완료');}},380);
+}
+
+/* ═══════ 도크 · 그룹 ═══════ */
+function toggleDock(){
+  const d=document.getElementById('dock');d.classList.toggle('collapsed');
+  document.getElementById('dockBtn').textContent=d.classList.contains('collapsed')?'▶':'◀ 접기';
+  setTimeout(()=>{draw();renderSlots();},320);
+}
+function renderDock(){
+  document.getElementById('dockGroups').innerHTML=groups.map(g=>`
+    <div class="grp-row" onclick="toggleVis('${g.id}')">
+      <input type="checkbox" ${g.visible?'checked':''} onclick="event.stopPropagation()" onchange="toggleVis('${g.id}')">
+      <span class="sw" style="background:${g.color}"></span>
+      <span class="nm">${g.name}</span>
+      ${g.ref?'<span class="ref-tag">REF</span>':''}
+      <span class="cnt">${pts.filter(p=>p.g===g.id&&!excluded.has(p.id)).length}</span>
+    </div>`).join('');
+  const tot=Object.keys(LOT_WAFERS).reduce((a,l)=>a+LOT_WAFERS[l].filter(w=>!INVALID[l].includes(w)).length,0);
+  const un=tot-Object.keys(assign).length;
+  const el=document.getElementById('unassignedNote');
+  if(el)el.textContent=un>0?`미배정 ${un}장 · 회색 표시`:'모든 wafer가 배정되었습니다';
+}
+function toggleVis(id){const g=groups.find(x=>x.id===id);g.visible=!g.visible;renderDock();renderEditor();draw();renderSlots();}
+function renderEditor(){
+  const html=groups.map(g=>`
+    <div class="grp-edit">
+      <input type="color" value="${g.color}" onchange="setStyle('${g.id}','color',this.value)">
+      <span class="nm">${g.name}</span>
+      <select onchange="setStyle('${g.id}','sym',this.value)">
+        ${[['o','● 원'],['s','■ 사각'],['t','▲ 삼각'],['d','◆ 마름모'],['+','＋ 십자']].map(([v,l])=>`<option value="${v}" ${g.sym===v?'selected':''}>${l}</option>`).join('')}
+      </select>
+      <select onchange="setStyle('${g.id}','size',+this.value)">
+        ${[4,6,8,10].map(s=>`<option ${g.size===s?'selected':''}>${s}</option>`).join('')}
+      </select>
+    </div>`).join('');
+  const a=document.getElementById('grpEditor'),b=document.getElementById('grpEditor2');
+  if(a)a.innerHTML=html; if(b)b.innerHTML=html;
+}
+function setStyle(id,k,v){groups.find(g=>g.id===id)[k]=v;renderDock();renderEditor();draw();renderSlots();}
+function undoExcl(){const id=exclStack.pop();if(id){excluded.delete(id);markDirty();syncExcl();draw();renderSlots();}}
+function syncExcl(){
+  const n=excluded.size,el=document.getElementById('exclCount');
+  el.textContent=n;el.classList.toggle('zero',n===0);
+  document.getElementById('undoBtn').disabled=exclStack.length===0;
+  const rb=document.getElementById('railBadge');rb.style.display=n?'block':'none';rb.textContent=n;
+  renderDock();
+}
+function markDirty(){document.getElementById('sumDirty').classList.add('show');
+  document.getElementById('recalcBanner').classList.add('show');}
+function recalc(){document.getElementById('sumDirty').classList.remove('show');
+  document.getElementById('recalcBanner').classList.remove('show');renderTables();toast('재계산 완료 — 제외 반영됨');}
+
+/* ═══════ 추출: 조건 목록 ═══════ */
+/* 조건 컬럼 후보는 카탈로그에서 (item_id·value 제외) */
+function condCols(){return CATALOG.filter(c=>!['item_id','value'].includes(c.name));}
+let conds=[
+  {col:'line_id',   val:'L1',                  mode:'auto', required:true},
+  {col:'root_lot_id',val:'PA12* PB201 !PA125', mode:'auto'},
+];
+function renderConds(){
+  document.getElementById('condList').innerHTML=conds.map((c,i)=>{
+    const t=colType(c.col), num=isNumCol(c.col), ts=t==='TIMESTAMP';
+    return `
+    <div class="cond-item">
+      <div>
+        ${c.required
+          ? `<input type="text" value="${c.col}" disabled>`
+          : `<input type="text" value="${c.col}" data-ac="col" data-i="${i}" placeholder="컬럼 이름">`}
+        <div style="margin-top:6px"><span class="type-badge ${typeClass(t)}">${t}</span></div>
+      </div>
+      <div>
+        <input type="text" value="${c.val}" oninput="setCond(${i},'val',this.value)" style="width:100%"
+               placeholder="${ts?'2026-08-01 ~ 2026-08-10':num?'예: >=25   또는  25 85   또는  25~85':c.required?'필수 — 파티션 프루닝에 사용됩니다':'값 입력'}">
+        <div class="parse-chips">${chipsFor(c)}</div>
+        <div class="syntax-help">${
+          num ? `숫자 · 부등호 <code>&gt;=25</code> <code>&lt;85</code> · 범위 <code>25~85</code> · 여러 값 <code>25 85 125</code> · 제외 <code>!0</code>`
+          : ts ? `<code>2026-08-01 ~ 2026-08-10</code> 형식`
+          : `띄어쓰기 = 여러 값 · <code>!</code> 제외 · <code>*</code> 와일드카드 · <code>"..."</code> 공백 포함`}</div>
+      </div>
+      <select onchange="setCond(${i},'mode',this.value)" ${num||ts?'disabled':''}>
+        <option value="auto" ${c.mode==='auto'?'selected':''}>일반</option>
+        <option value="regexp" ${c.mode==='regexp'?'selected':''}>정규식</option>
+      </select>
+      ${c.required?'<span></span>':`<button class="cond-del" onclick="delCond(${i})" title="조건 삭제">✕</button>`}
+    </div>`;}).join('');
+  document.querySelectorAll('#condList input[data-ac="col"]').forEach(inp=>{
+    const i=+inp.dataset.i;
+    attachAC(inp,()=>condCols(),{onPick:v=>setCond(i,'col',v.trim())});
+    inp.addEventListener('change',()=>setCond(i,'col',inp.value.trim()));
+  });
+}
+/* 숫자형 토큰 파서 */
+function numTokens(v){
+  return v.split(/\s+/).filter(Boolean).map(t=>{
+    let m;
+    if(m=t.match(/^(>=|<=|>|<)\s*(-?[\d.]+)$/))return{k:'cmp',op:m[1],v:m[2]};
+    if(m=t.match(/^(-?[\d.]+)~(-?[\d.]+)$/))     return{k:'range',a:m[1],b:m[2]};
+    if(m=t.match(/^!(-?[\d.]+)$/))               return{k:'not',v:m[1]};
+    if(/^-?[\d.]+$/.test(t))                     return{k:'eq',v:t};
+    return{k:'bad',v:t};
+  });
+}
+function chipsFor(c){
+  const v=(c.val||'').trim();
+  if(!v)return c.required?`<span class="pchip neg">값이 없습니다</span>`:'';
+  if(isNumCol(c.col))return numTokens(v).map(t=>
+     t.k==='cmp'  ?`<span class="pchip">${t.op} ${t.v}</span>`
+    :t.k==='range'?`<span class="pchip">${t.a} ~ ${t.b}</span>`
+    :t.k==='not'  ?`<span class="pchip neg">제외 ${t.v}</span>`
+    :t.k==='eq'   ?`<span class="pchip">= ${t.v}</span>`
+    :`<span class="pchip neg">숫자가 아님: ${t.v}</span>`).join('');
+  if(colType(c.col)==='TIMESTAMP')return `<span class="pchip">${v.replace('~','—')}</span>`;
+  if(c.mode==='regexp')return `<span class="pchip">REGEXP '${v}' · RE2 · 부분매칭</span>`;
+  return v.split(/\s+/).filter(Boolean).map(t=>
+    t.startsWith('!')?`<span class="pchip neg">제외 ${t.slice(1)}</span>`
+    :t.includes('*')?`<span class="pchip">패턴 ${t}</span>`
+    :`<span class="pchip">${t}</span>`).join('');
+}
+function sqlFor(c){
+  const v=(c.val||'').trim();if(!v)return null;
+  if(isNumCol(c.col)){
+    const eq=[],parts=[];
+    for(const t of numTokens(v)){
+      if(t.k==='cmp')parts.push(`${c.col} ${t.op} ${t.v}`);
+      else if(t.k==='range')parts.push(`${c.col} BETWEEN ${t.a} AND ${t.b}`);
+      else if(t.k==='not')parts.push(`(${c.col} <> ${t.v} OR ${c.col} IS NULL)`);
+      else if(t.k==='eq')eq.push(t.v);
+    }
+    if(eq.length)parts.unshift(eq.length>1?`${c.col} IN (${eq.join(',')})`:`${c.col} = ${eq[0]}`);
+    if(!parts.length)return null;
+    return parts.length>1?`(${parts.join(' AND ')})`:parts[0];
+  }
+  if(colType(c.col)==='TIMESTAMP'){
+    const[a,b]=v.split('~').map(x=>x.trim());
+    return b?`${c.col} >= '${a}' AND ${c.col} < '${b}'`:`${c.col} >= '${a}'`;
+  }
+  if(c.mode==='regexp')return `${c.col} REGEXP '${v}'`;
+  const inc=[],exc=[],lk=[];
+  for(const t of v.split(/\s+/).filter(Boolean)){
+    if(t.startsWith('!'))exc.push(t.slice(1));
+    else if(t.includes('*'))lk.push(t.replace(/\*/g,'%'));
+    else inc.push(t);
+  }
+  const parts=[],pos=[];
+  if(lk.length)pos.push(...lk.map(l=>`${c.col} LIKE '${l}'`));
+  if(inc.length)pos.push(inc.length>1?`${c.col} IN (${inc.map(x=>`'${x}'`).join(',')})`:`${c.col} = '${inc[0]}'`);
+  if(pos.length)parts.push(pos.length>1?`(${pos.join(' OR ')})`:pos[0]);
+  if(exc.length)parts.push(`(${c.col} NOT IN (${exc.map(x=>`'${x}'`).join(',')}) OR ${c.col} IS NULL)`);
+  return parts.join(' AND ');
+}
+function setCond(i,k,v){conds[i][k]=v;renderConds();buildSql();markPresetDirty();}
+function addCond(){
+  const used=conds.map(c=>c.col);
+  const next=(condCols().find(c=>!used.includes(c.name))||{name:'device_id'}).name;
+  conds.push({col:next,val:'',mode:'auto'});
+  renderConds();buildSql();markPresetDirty();
+}
+function delCond(i){conds.splice(i,1);renderConds();buildSql();markPresetDirty();}
+function onCondChange(){buildSql();markPresetDirty();}
+function buildSql(){
+  const from=document.getElementById('dFrom').value,to=document.getElementById('dTo').value;
+  const end=new Date(to);end.setDate(end.getDate()+1);
+  const extra=conds.filter(c=>!c.required).map(sqlFor).filter(Boolean);
+  const line=conds.find(c=>c.required);
+  document.getElementById('sqlPreview').textContent=
+`SELECT line_id, tkout_time, <키 8종>, item_id, value
+FROM   eds.f_et_test
+WHERE  ${sqlFor(line)||"line_id = ?"}
+  AND  tkout_time >= '${from} 00:00:00'
+  AND  tkout_time <  '${end.toISOString().slice(0,10)} 00:00:00'
+${extra.map(x=>'  AND  '+x).join('\n')}`;
+}
+function quickRange(n){
+  const to=new Date('2026-08-10'),from=new Date(to);from.setDate(from.getDate()-n+1);
+  document.getElementById('dFrom').value=from.toISOString().slice(0,10);
+  document.getElementById('dTo').value=to.toISOString().slice(0,10);
+  onCondChange();
+}
+function fillGap(){
+  document.getElementById('dFrom').value='2026-08-04';
+  document.getElementById('dTo').value='2026-08-10';
+  onCondChange();toast('마지막 적재 다음날부터 채웠습니다');
+}
+function runExtract(btn){
+  const line=conds.find(c=>c.required);
+  if(!line.val.trim()){toast('line_id는 필수입니다 · 없으면 전 라인을 스캔합니다');return;}
+  btn.disabled=true;let p=0;const o=btn.textContent;
+  const iv=setInterval(()=>{p+=25;btn.textContent=`청크 ${Math.min(p/25*3,12)|0}/12`;
+    if(p>=100){clearInterval(iv);btn.textContent=o;btn.disabled=false;
+      document.getElementById('loadLog').style.display='block';toast('적재 완료 · 분석에서 사용할 수 있습니다');}},480);
+}
+
+/* ═══════ 대상 파일 ═══════ */
+function setLogPatterns(v){
+  LOG_PATTERNS=v.split(',').map(x=>x.trim()).filter(Boolean);
+  markPresetDirty();draw();renderSlots();
+  toast(`로그 축 규칙 ${LOG_PATTERNS.length}개 적용`);
+}
+function pickDb(){toast('DuckDB 파일 선택 — 바꾸면 분석 대상 데이터가 통째로 바뀝니다');markCfgDirty();}
+function newDb(){toast('빈 DuckDB 생성 · 첫 적재 때 스키마가 만들어집니다');}
+function pickRf(){toast('리포메터 엑셀 선택 → 즉시 파싱·검증 후 JSON 캐시로 전환');}
+function checkRf(){toast('검증 통과 · REAL 2,412 · ADDP 479 · 순환참조 없음 · 미정의 참조 없음');}
+
+/* ═══════ 프리셋 ═══════ */
+let presets=[
+  {name:'M2 ET 정기 모니터링',db:'C:\\ETReport\\db\\M2_routine.duckdb',rf:'C:\\ETReport\\reformatter_M2_v14.xlsx',
+   conds:[{col:'line_id',val:'L1',mode:'auto',required:true},{col:'root_lot_id',val:'PA12* PB201 !PA125',mode:'auto'}]},
+  {name:'신규 device 평가',db:'C:\\ETReport\\db\\newdev.duckdb',rf:'C:\\ETReport\\reformatter_dev_v3.xlsx',
+   conds:[{col:'line_id',val:'L2',mode:'auto',required:true},{col:'device_id',val:'ND*',mode:'auto'},
+          {col:'step_id',val:'M1 M2 M3',mode:'auto'},{col:'temperature',val:'25 85',mode:'auto'}]},
+  {name:'수율 이슈 조사 (임시)',db:'C:\\ETReport\\db\\adhoc.duckdb',rf:'C:\\ETReport\\reformatter_M2_v14.xlsx',
+   conds:[{col:'line_id',val:'L1',mode:'auto',required:true},{col:'eqp_id',val:'ETX0[12]',mode:'regexp'},
+          {col:'total_site_cnt',val:'>=5',mode:'auto'}]},
+];
+let curPreset=0,presetDirty=false;
+function renderPresetList(){
+  document.getElementById('presetSel').innerHTML=
+    presets.map((p,i)=>`<option value="${i}" ${i===curPreset?'selected':''}>${p.name}</option>`).join('');
+}
+function loadPreset(i){
+  curPreset=+i;const p=presets[curPreset];
+  conds=JSON.parse(JSON.stringify(p.conds));
+  document.getElementById('dbPath').textContent=p.db;
+  document.getElementById('rfPath').textContent=p.rf;
+  document.getElementById('dbTag').textContent=p.db.includes('newdev')?'412 items':p.db.includes('adhoc')?'1,204 items':'2,891 items';
+  renderConds();buildSql();clearPresetDirty();
+  document.querySelector('.db-pill').innerHTML=
+    p.db.split('\\').pop()+' · <b>'+document.getElementById('dbTag').textContent.split(' ')[0]+'</b> items';
+  toast(`'${p.name}' 설정을 불러왔습니다`);
+}
+function markPresetDirty(){presetDirty=true;document.getElementById('presetDirty').classList.add('show');}
+function clearPresetDirty(){presetDirty=false;document.getElementById('presetDirty').classList.remove('show');}
+function savePreset(){
+  presets[curPreset].conds=JSON.parse(JSON.stringify(conds));
+  clearPresetDirty();toast(`'${presets[curPreset].name}'에 저장했습니다`);
+}
+function saveAsPreset(){
+  const n=prompt('새 설정 이름','복사본 — '+presets[curPreset].name);
+  if(!n)return;
+  presets.push({name:n,db:document.getElementById('dbPath').textContent,
+    rf:document.getElementById('rfPath').textContent,conds:JSON.parse(JSON.stringify(conds))});
+  curPreset=presets.length-1;renderPresetList();clearPresetDirty();
+  toast(`'${n}' 설정을 만들었습니다`);
+}
+function delPreset(){
+  if(presets.length<2){toast('마지막 설정은 삭제할 수 없습니다');return;}
+  const n=presets[curPreset].name;
+  presets.splice(curPreset,1);curPreset=0;renderPresetList();loadPreset(0);
+  toast(`'${n}' 설정을 삭제했습니다`);
+}
+
+/* ═══════ 템플릿 ═══════
+   plot  : page · x · y · order · title1 · title2 · Report · Type · x_name · y_name
+   table : item_id(=ALIAS) · CAT1 · CAT2 · CAT3 · Report                          */
+let plotTpl=[
+  {Report:'M2_ET',page:1,order:1,title1:'NMOS 특성 비교',title2:'Idsat vs Vtlin',Type:'scatter',x:'Vtlin N SVT',y:'Idsat N SVT',x_name:'Vtlin [V]',y_name:'Idsat [uA]'},
+  {Report:'M2_ET',page:1,order:2,title1:'',title2:'SVT+LVT 중첩',Type:'scatter',x:'Vtlin N SVT, Vtsat N SVT',y:'Idsat N SVT, Idsat N LVT',x_name:'Vt [V]',y_name:'Idsat [uA]'},
+  {Report:'M2_ET',page:1,order:3,title1:'',title2:'요약 — NMOS',Type:'table',x:'',y:'',x_name:'',y_name:''},
+  {Report:'M2_ET',page:1,order:4,title1:'',title2:'Ioff (log)',Type:'scatter',x:'Vtlin N SVT',y:'Ioff N SVT',x_name:'',y_name:''},
+  {Report:'M2_ET',page:2,order:1,title1:'PMOS 특성 비교',title2:'Idsat vs Vtlin (P)',Type:'scatter',x:'Vtlin P SVT',y:'Idsat P SVT',x_name:'',y_name:''},
+  {Report:'M2_ET',page:2,order:2,title1:'',title2:'요약 — PMOS',Type:'table',x:'',y:'',x_name:'',y_name:''},
+  {Report:'M2_ET',page:3,order:1,title1:'N/P 상관',title2:'Idsat N vs P',Type:'scatter',x:'Idsat N SVT',y:'Idsat P SVT',x_name:'',y_name:''},
+  {Report:'M2_ET',page:3,order:2,title1:'',title2:'N/P ratio 분포',Type:'scatter',x:'Vtlin N SVT',y:'Idsat N/P',x_name:'',y_name:'N/P ratio'},
+  {Report:'DEV_EVAL',page:1,order:1,title1:'신규 device 1차',title2:'Idsat vs Vtlin',Type:'scatter',x:'Vtlin N SVT',y:'Idsat N SVT',x_name:'',y_name:''},
+  {Report:'DEV_EVAL',page:1,order:2,title1:'',title2:'요약',Type:'table',x:'',y:'',x_name:'',y_name:''},
+];
+let tableTpl=[
+  {Report:'M2_ET',item_id:'Idsat N SVT', CAT1:'NMOS',   CAT2:'Idsat',CAT3:'SVT'},
+  {Report:'M2_ET',item_id:'Idsat N LVT', CAT1:'NMOS',   CAT2:'Idsat',CAT3:'LVT'},
+  {Report:'M2_ET',item_id:'Vtlin N SVT', CAT1:'NMOS',   CAT2:'Vt',   CAT3:'lin'},
+  {Report:'M2_ET',item_id:'Vtsat N SVT', CAT1:'NMOS',   CAT2:'Vt',   CAT3:'sat'},
+  {Report:'M2_ET',item_id:'Idsat P SVT', CAT1:'PMOS',   CAT2:'Idsat',CAT3:'SVT'},
+  {Report:'M2_ET',item_id:'Vtlin P SVT', CAT1:'PMOS',   CAT2:'Vt',   CAT3:'lin'},
+  {Report:'M2_ET',item_id:'Ioff N SVT',  CAT1:'Leakage',CAT2:'Ioff', CAT3:'N'},
+  {Report:'M2_ET',item_id:'Idsat N/P',   CAT1:'Ratio',  CAT2:'N/P',  CAT3:'Idsat'},
+  {Report:'M2_ET',item_id:'Vt spread N', CAT1:'Ratio',  CAT2:'Spread',CAT3:'Vt'},
+  {Report:'DEV_EVAL',item_id:'Idsat N SVT',CAT1:'NMOS', CAT2:'Idsat',CAT3:'SVT'},
+  {Report:'DEV_EVAL',item_id:'Vtlin N SVT',CAT1:'NMOS', CAT2:'Vt',   CAT3:'lin'},
+];
+let curReport='M2_ET';
+function reportList(){return [...new Set([...plotTpl,...tableTpl].map(r=>r.Report))];}
+function plotRows(){return plotTpl.filter(r=>r.Report===curReport);}
+function tableRows(){return tableTpl.filter(r=>r.Report===curReport);}
+
+/* plot 템플릿 → pages (order 1~6, 왼→오 / 위→아래) */
+function buildPages(){
+  const rows=plotRows();
+  const byPage={};
+  for(const r of rows)(byPage[r.page]=byPage[r.page]||[]).push(r);
+  pages=Object.keys(byPage).sort((a,b)=>a-b).map(pg=>{
+    const rs=byPage[pg];
+    const title=(rs.find(r=>r.title1)||{}).title1||`Page ${pg}`;
+    const slots=[null,null,null,null,null,null];
+    for(const r of rs){
+      const i=Math.min(5,Math.max(0,(+r.order||1)-1));
+      slots[i]= r.Type==='table'
+        ? {kind:'table',title:r.title2||'요약'}
+        : {kind:'plot',title:r.title2||'',x:r.x,y:r.y,xlabel:r.x_name,ylabel:r.y_name,
+           type:r.Type||'scatter',ref:false,logxMode:'auto',logyMode:'auto',rangeMode:'auto'};
+    }
+    return {title,slots};
+  });
+  curPage=0;curSlot=null;
+}
+function switchReport(v){
+  curReport=v;buildPages();renderPages();renderSlots();renderInspector();renderTables();
+  const pt=document.getElementById('pageTitle');if(pt&&pages[0])pt.value=pages[0].title;
+  updateCfgRows();renderPptInfo();
+  toast(`리포트 '${curReport}' — plot ${plotRows().length}행 · table ${tableRows().length}행`);
+}
+
+/* ═══════ Summary — CAT1이 표, CAT2·CAT3가 병합 계층 ═══════ */
+let agg='avg';
+const wafers=[['PA123',['W01','W02','W03']],['PA124',['W01','W02']]];
+function setAgg(a){agg=a;
+  document.getElementById('aggAvg').classList.toggle('on',a==='avg');
+  document.getElementById('aggStd').classList.toggle('on',a==='std');renderTables();}
+function cellStat(alias,lot,waf){
+  const all=pts.filter(p=>p.lot===lot&&p.waf===waf);
+  const v=all.filter(p=>!excluded.has(p.id)).map(p=>valOf(p,alias));
+  if(!v.length)return{n:0,ex:all.length,avg:null,std:null};
+  const mu=v.reduce((a,b)=>a+b)/v.length;
+  const sd=v.length>1?Math.sqrt(v.reduce((a,b)=>a+(b-mu)**2,0)/(v.length-1)):null;
+  return{n:v.length,ex:all.length-v.length,avg:mu,std:sd};
+}
+function refCell(alias,a){
+  const v=pts.filter(p=>p.g&&groups.find(g=>g.id===p.g&&g.ref)&&!excluded.has(p.id)).map(p=>valOf(p,alias));
+  if(!v.length)return null;
+  const mu=v.reduce((x,y)=>x+y)/v.length;
+  if(a==='avg')return mu;
+  return v.length>1?Math.sqrt(v.reduce((x,y)=>x+(y-mu)**2,0)/(v.length-1)):null;
+}
+function tableNames(){return [...new Set(tableRows().map(r=>r.CAT1))];}
+function tableHtml(cat1){
+  const rows=tableRows().filter(r=>r.CAT1===cat1);
+  const delta=document.getElementById('showDelta').checked;
+  let h=`<tr><th rowspan="2">CAT2</th><th rowspan="2">CAT3</th><th rowspan="2">item</th>`;
+  for(const[lot,ws]of wafers)h+=`<th colspan="${ws.length}">${lot}</th>`;
+  h+=`</tr><tr>`;
+  for(const[,ws]of wafers)for(const w of ws)h+=`<th>${w}</th>`;
+  h+=`</tr>`;
+  const c2s={};rows.forEach(r=>{c2s[r.CAT2]=(c2s[r.CAT2]||0)+1;});
+  let p2=null;
+  for(const r of rows){
+    const alias=r.item_id, m=ITEM_META[alias]||{}, dec=decOf(alias);
+    const rv=delta?refCell(alias,agg):null;
+    h+='<tr>';
+    if(r.CAT2!==p2){h+=`<td class="cat" rowspan="${c2s[r.CAT2]}">${r.CAT2}</td>`;p2=r.CAT2;}
+    h+=`<td class="cat" style="font-weight:500">${r.CAT3||''}</td><td class="lbl">${alias}</td>`;
+    for(const[lot,ws]of wafers)for(const w of ws){
+      const st=cellStat(alias,lot,w);
+      let v=st[agg];
+      if(v==null){h+=`<td></td>`;continue;}
+      const off=agg==='avg'&&!delta&&((m.lsl!=null&&v<m.lsl)||(m.usl!=null&&v>m.usl));
+      if(delta&&rv!=null)v=v-rv;
+      const f=(delta&&rv!=null&&v>=0?'+':'')+v.toFixed(dec);
+      h+=`<td class="${off?'spec':''}">${f}${st.ex?` <span class="ex">−${st.ex}</span>`:''}</td>`;
+    }
+    h+='</tr>';
+  }
+  return h;
+}
+function captionFor(){
+  const delta=document.getElementById('showDelta').checked;
+  return `${curReport} · 25℃ · M2 · seq 1 · 최신측정 · ${agg==='avg'?'평균':'wafer 내 std (n−1)'} · 제외 ${excluded.size}점 반영${delta?' · Δ = REF 대비':''} · 붉은 셀은 SPECLOW/SPECHIGH 이탈`;
+}
+function renderTables(){
+  const el=document.getElementById('catTables');if(!el)return;
+  el.innerHTML=tableNames().map(name=>`
+    <div class="card table-card">
+      <div class="tc-head">
+        <h4 style="margin:0">${name}<span class="sub">${tableRows().filter(r=>r.CAT1===name).length}개 item</span></h4>
+        <div class="tc-actions">
+          <button class="btn ghost sm" onclick="copyTable('${name}',this)">복사</button>
+          <button class="btn ghost sm" onclick="exportXlsx(['${name}'])">xlsx</button>
+        </div>
+      </div>
+      <div style="overflow-x:auto"><table class="sum" id="tbl_${name}">${tableHtml(name)}</table></div>
+      <div class="caption">${captionFor()}</div>
+    </div>`).join('');
+}
+
+function copyTable(name,btn){
+  const t=document.getElementById('tbl_'+name);
+  const tsv=[...t.rows].map(r=>[...r.cells].map(c=>{
+    const cs=+c.getAttribute('colspan')||1;
+    return c.innerText.trim()+'\t'.repeat(cs-1);
+  }).join('\t')).join('\n');
+  navigator.clipboard.writeText(tsv).then(()=>{
+    const o=btn.textContent;btn.textContent='복사됨';setTimeout(()=>btn.textContent=o,1400);
+  }).catch(()=>toast('클립보드 접근이 차단되었습니다'));
+}
+/* ═══════ xlsx 내보내기 (ExcelJS · 서식 유지) ═══════
+   실제 앱에서는 xlwings로 동일한 서식을 적용한다. */
+async function exportXlsx(names){
+  if(typeof ExcelJS==='undefined'){toast('ExcelJS 로드 실패 — 네트워크를 확인하세요');return;}
+  const wb=new ExcelJS.Workbook();
+  wb.creator='ET Report Tool';wb.created=new Date();
+  const THIN={style:'thin',color:{argb:'FFD0D0D5'}};
+  const BORDER={top:THIN,left:THIN,bottom:THIN,right:THIN};
+
+  for(const name of names){
+    const ws=wb.addWorksheet(name,{views:[{state:'frozen',xSplit:3,ySplit:2}]});
+    const rows=tableTpl.filter(r=>r.table===name);
+    const delta=document.getElementById('showDelta').checked;
+
+    /* 제목 */
+    const nCol=3+wafers.reduce((a,[,w])=>a+w.length,0);
+    ws.mergeCells(1,1,1,nCol);
+    const t=ws.getCell(1,1);t.value=name;
+    t.font={name:'Calibri',size:14,bold:true};t.alignment={vertical:'middle'};
+    ws.getRow(1).height=24;
+
+    /* 헤더 2행 (lot 병합 / wafer) */
+    const h1=['cat2','alias','값'],h2=['','',''];
+    let c=4;
+    for(const [lot,ws_] of wafers){
+      h1.push(lot);for(let i=1;i<ws_.length;i++)h1.push('');
+      for(const w of ws_)h2.push(w);
+    }
+    ws.addRow(h1);ws.addRow(h2);
+    const R1=ws.getRow(2),R2=ws.getRow(3);
+    c=4;
+    for(const [,ws_] of wafers){
+      if(ws_.length>1)ws.mergeCells(2,c,2,c+ws_.length-1);
+      c+=ws_.length;
+    }
+    for(let i=1;i<=3;i++){ws.mergeCells(2,i,3,i);}
+    [R1,R2].forEach(r=>{
+      r.eachCell({includeEmpty:true},cell=>{
+        cell.font={name:'Calibri',bold:true,size:10};
+        cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF2F3F5'}};
+        cell.alignment={horizontal:'center',vertical:'middle'};
+        cell.border=BORDER;
+      });
+      r.height=18;
+    });
+
+    /* 본문 */
+    let firstDataRow=4;
+    const c2Start={};
+    rows.forEach((r,ri)=>{
+      const a=r.agg||agg, m=ITEM_META[r.alias]||{};
+      const rv=delta?refCell(r.alias,a):null;
+      const line=[r.cat2,r.alias,a];
+      const flags=[];
+      for(const [lot,ws_] of wafers)for(const w of ws_){
+        const st=cellStat(r.alias,lot,w);
+        let v=st[a];
+        if(v==null){line.push(null);flags.push(false);continue;}
+        const off=r.spec&&!delta&&a==='avg'&&((m.lsl!=null&&v<m.lsl)||(m.usl!=null&&v>m.usl));
+        if(delta&&rv!=null)v=v-rv;
+        line.push(+v.toFixed(r.dec||3));flags.push(off);
+      }
+      const row=ws.addRow(line);
+      row.height=17;
+      row.eachCell({includeEmpty:true},(cell,ci)=>{
+        cell.border=BORDER;
+        if(ci<=2){cell.font={name:'Calibri',size:10};cell.alignment={horizontal:'left',vertical:'middle'};}
+        else if(ci===3){cell.font={name:'Calibri',size:9,color:{argb:'FF909090'}};cell.alignment={horizontal:'center'};}
+        else{
+          cell.font={name:'Consolas',size:10};
+          cell.alignment={horizontal:'right'};
+          cell.numFmt='0.'+'0'.repeat(r.dec||3);
+          if(flags[ci-4]){
+            cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFFFECEE'}};
+            cell.font={name:'Consolas',size:10,color:{argb:'FFD70015'},bold:true};
+          }
+        }
+      });
+      /* cat2 병합 준비 */
+      if(!c2Start[r.cat2])c2Start[r.cat2]=firstDataRow+ri;
+    });
+    /* cat2 세로 병합 */
+    let start=firstDataRow,prev=rows[0]&&rows[0].cat2;
+    for(let i=1;i<=rows.length;i++){
+      const cur=rows[i]&&rows[i].cat2;
+      if(cur!==prev){
+        if(firstDataRow+i-1>start)ws.mergeCells(start,1,firstDataRow+i-1,1);
+        const cell=ws.getCell(start,1);
+        cell.alignment={vertical:'middle',horizontal:'center'};
+        cell.font={name:'Calibri',bold:true,size:10};
+        cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFFAFAFB'}};
+        start=firstDataRow+i;prev=cur;
+      }
+    }
+    /* 캡션 */
+    const cap=ws.addRow([captionFor()]);
+    ws.mergeCells(cap.number,1,cap.number,nCol);
+    cap.getCell(1).font={name:'Calibri',size:9,color:{argb:'FF909090'},italic:true};
+
+    /* 열 너비 */
+    ws.getColumn(1).width=11;ws.getColumn(2).width=20;ws.getColumn(3).width=6;
+    for(let i=4;i<=nCol;i++)ws.getColumn(i).width=9.5;
+  }
+
+  const buf=await wb.xlsx.writeBuffer();
+  const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download=`summary_${names.length>1?'all':names[0]}_20260810.xlsx`;
+  a.click();URL.revokeObjectURL(a.href);
+  toast(`${names.length}개 시트 · xlsx로 내보냈습니다 (병합·서식·고정틀 포함)`);
+}
+function exportAllXls(){exportXlsx(tableNames());}
+
+/* ── 테이블 템플릿 ── */
+function openTableTplModal(){document.getElementById('tblTplModal').classList.add('show');refreshPreviews();}
+function closeTableTplModal(){document.getElementById('tblTplModal').classList.remove('show');}
+
+/* ═══════ 그룹 편집 모달 ═══════ */
+const LOT_WAFERS={PA123:['W01','W02','W03','W04','W05','W06','W07','W08','W09','W10','W11','W12'],
+                  PA124:['W01','W02','W03','W04','W05','W06','W07','W08'],
+                  PB201:['W01','W02','W03','W04','W05','W06']};
+const INVALID={PA123:['W07'],PA124:[],PB201:['W03','W05']};   /* 유효하지 않은(측정 없음) wafer */
+let assign={};   /* "lot|wafer" → groupId */
+(function(){assign['PA123|W01']='g1';assign['PA123|W02']='g1';assign['PA123|W03']='g2';
+  assign['PA124|W01']='g2';assign['PB201|W01']='g3';})();
+let grpMode='single',poolSel=new Set(),grpSel=new Set();
+
+function openGroupModal(){document.getElementById('grpModal').classList.add('show');
+  renderGroupPicker();renderAssign();}
+function closeGroupModal(){document.getElementById('grpModal').classList.remove('show');}
+function applyGroupModal(){closeGroupModal();renderDock();draw();renderSlots();
+  toast('그룹 배정을 적용했습니다 · plot·표·PPT에 동시 반영');}
+function setGrpMode(m){grpMode=m;
+  document.getElementById('gmSingle').classList.toggle('on',m==='single');
+  document.getElementById('gmMulti').classList.toggle('on',m==='multi');
+  document.getElementById('gmSinglePane').style.display=m==='single'?'':'none';
+  document.getElementById('gmMultiPane').style.display=m==='multi'?'':'none';}
+function renderGroupPicker(){
+  document.getElementById('gmGroup').innerHTML=groups.map(g=>`<option value="${g.id}">${g.name}${g.ref?' (REF)':''}</option>`).join('');
+}
+let lotLoaded='PA123', recentLots=['PA123'];
+function lookupLot(){
+  const v=(document.getElementById('gmLot').value||'').trim().toUpperCase();
+  if(!v){toast('lot ID를 입력하세요');return;}
+  if(!LOT_WAFERS[v]){
+    document.getElementById('gmValid').textContent='';
+    document.getElementById('poolList').innerHTML='<div class="wlist-head">조회 결과 없음</div>'+
+      `<div style="padding:26px 14px;text-align:center;color:var(--faint);font-size:12.5px">
+        DB에 <b>${v}</b> 데이터가 없습니다<br>먼저 데이터 워크스페이스에서 적재하세요</div>`;
+    document.getElementById('grpList').innerHTML='<div class="wlist-head">—</div>';
+    return;
+  }
+  lotLoaded=v;
+  if(!recentLots.includes(v)){recentLots.unshift(v);recentLots=recentLots.slice(0,6);}
+  poolSel.clear();grpSel.clear();renderAssign();
+}
+function renderAssign(){
+  const lot=lotLoaded;
+  document.getElementById('gmRecent').innerHTML='최근: '+recentLots.map(l=>
+    `<a href="#" onclick="document.getElementById('gmLot').value='${l}';lookupLot();return false"
+        style="color:var(--acc);text-decoration:none;margin-right:9px">${l}</a>`).join('');
+  const gid=document.getElementById('gmGroup').value||groups[0].id;
+  const all=LOT_WAFERS[lot],bad=INVALID[lot];
+  const valid=all.filter(w=>!bad.includes(w));
+  document.getElementById('gmValid').textContent=`유효 ${valid.length} / 전체 ${all.length}장`;
+  const pool=valid.filter(w=>!assign[lot+'|'+w]);
+  const mine=valid.filter(w=>assign[lot+'|'+w]===gid);
+  const g=groups.find(x=>x.id===gid);
+  document.getElementById('poolList').innerHTML=`<div class="wlist-head">미배정 ${pool.length}장</div>`+
+    pool.map(w=>`<div class="witem ${poolSel.has(w)?'sel':''}" onclick="tsel('pool','${w}')">${w}</div>`).join('')+
+    bad.map(w=>`<div class="witem" style="opacity:.45;cursor:default">${w}<span class="bad">측정 없음</span></div>`).join('');
+  document.getElementById('grpList').innerHTML=`<div class="wlist-head">${g.name} · ${mine.length}장</div>`+
+    mine.map(w=>`<div class="witem ${grpSel.has(w)?'sel':''}" onclick="tsel('grp','${w}')">
+      <span class="dot" style="background:${g.color}"></span>${w}</div>`).join('');
+}
+function tsel(side,w){const s=side==='pool'?poolSel:grpSel;s.has(w)?s.delete(w):s.add(w);renderAssign();}
+function moveWafers(dir){
+  const lot=lotLoaded,gid=document.getElementById('gmGroup').value;
+  if(dir==='to'){poolSel.forEach(w=>assign[lot+'|'+w]=gid);poolSel.clear();}
+  else{grpSel.forEach(w=>delete assign[lot+'|'+w]);grpSel.clear();}
+  renderAssign();renderDock();
+}
+function moveAll(dir){
+  const lot=lotLoaded,gid=document.getElementById('gmGroup').value;
+  const valid=LOT_WAFERS[lot].filter(w=>!INVALID[lot].includes(w));
+  if(dir==='to')valid.filter(w=>!assign[lot+'|'+w]).forEach(w=>assign[lot+'|'+w]=gid);
+  else valid.filter(w=>assign[lot+'|'+w]===gid).forEach(w=>delete assign[lot+'|'+w]);
+  poolSel.clear();grpSel.clear();renderAssign();renderDock();
+}
+function addGroup(){
+  const n=prompt('새 그룹 이름','Group '+(groups.length+1));if(!n)return;
+  const PAL=['#ff9500','#0071e3','#34c759','#af52de','#ff3b30','#5ac8fa'];
+  groups.push({id:'g'+Date.now(),name:n,color:PAL[groups.length%PAL.length],sym:'o',size:6,visible:true,ref:false});
+  renderGroupPicker();renderAssign();renderDock();renderEditor();
+}
+/* 스타일 일괄 적용 */
+const PALETTES={
+  okabe:['#e69f00','#56b4e9','#009e73','#f0e442','#0072b2','#d55e00','#cc79a7','#000000'],
+  apple:['#ff9500','#0071e3','#34c759','#af52de','#ff3b30','#5ac8fa','#ffcc00','#8e8e93'],
+  mono: ['#1d1d1f','#5a5a5f','#8e8e93','#aeaeb2','#c7c7cc','#d8d8dc','#e5e5ea','#f2f2f7'],
+};
+function applyBulk(){
+  const s=document.getElementById('bulkSym').value,z=document.getElementById('bulkSize').value;
+  if(!s&&!z){toast('적용할 심볼이나 크기를 선택하세요');return;}
+  groups.forEach(g=>{if(s)g.sym=s;if(z)g.size=+z;});
+  renderDock();renderEditor();renderAssign();draw();renderSlots();
+  toast(`${groups.length}개 그룹에 일괄 적용했습니다`);
+}
+function applyPalette(){
+  const p=PALETTES[document.getElementById('bulkPal').value];
+  groups.forEach((g,i)=>{g.color=g.ref&&p!==PALETTES.mono?'#8e8e93':p[i%p.length];});
+  renderDock();renderEditor();renderAssign();draw();renderSlots();
+  toast('팔레트를 다시 배정했습니다 · REF는 회색 유지');
+}
+
+/* ═══════ 엑셀 템플릿 → 자동 구성 ═══════ */
+function openTemplateModal(){document.getElementById('tplModal').classList.add('show');refreshPreviews();}
+function closeTemplateModal(){document.getElementById('tplModal').classList.remove('show');}
+
+/* ═══════ 모달 미리보기 렌더 ═══════ */
+function previewTable(id,cols,rows,hi){
+  const el=document.getElementById(id);if(!el)return;
+  el.innerHTML=`<tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr>`+
+    rows.map(r=>`<tr>${cols.map(c=>{
+      const v=r[c]??'';
+      const cls=(hi&&hi.includes(c))?'lbl':(typeof v==='number'?'':'lbl');
+      return `<td class="${cls}">${v===null?'':v}</td>`;
+    }).join('')}</tr>`).join('');
+}
+function openRfModal(){document.getElementById('rfModal').classList.add('show');
+  previewTable('rfPreview',['CATEGORY','ITEMID','ALIAS','ABSOLUTE','SCALE','ADDP','UNIT','SPECLOW','SPECHIGH','TARGET'],REFORMATTER);}
+function closeRfModal(){document.getElementById('rfModal').classList.remove('show');}
+function refreshPreviews(){
+  previewTable('plotTplPreview',PLOT_COLS,plotTpl);
+  previewTable('tblTplPreview',TBL_COLS,tableTpl);
+}
+
+/* ═══════ 템플릿 파일 I/O ═══════ */
+const PLOT_COLS=['page','x','y','order','title1','title2','Report','Type','x_name','y_name'];
+const TBL_COLS=['item_id','CAT1','CAT2','CAT3','Report'];
+function xlsDL(name,cols,rows,sheet){
+  const html=`<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8">
+<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>${sheet}</x:Name>
+<x:WorksheetOptions/></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->
+<style>th{background:#f2f3f5;border:1px solid #ccc;padding:6px 12px;font-family:Calibri;font-weight:700}
+td{border:1px solid #ddd;padding:5px 12px;font-family:Calibri}</style></head><body>
+<table><tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr>
+${rows.map(r=>`<tr>${cols.map(c=>`<td>${r[c]??''}</td>`).join('')}</tr>`).join('')}
+${Array(6).fill(`<tr>${cols.map(()=>'<td></td>').join('')}</tr>`).join('')}</table></body></html>`;
+  const b=new Blob(['\ufeff'+html],{type:'application/vnd.ms-excel'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=name;a.click();
+  URL.revokeObjectURL(a.href);toast(`${name} 내려받음`);
+}
+function downloadTplSample(){xlsDL('plot_template.xls',PLOT_COLS,plotTpl,'plot');}
+function downloadTblSample(){xlsDL('table_template.xls',TBL_COLS,tableTpl,'table');}
+function loadTemplate(){closeTemplateModal();buildPages();renderPages();renderSlots();renderInspector();
+  const pt=document.getElementById('pageTitle');if(pt&&pages[0])pt.value=pages[0].title;
+  updateCfgRows();renderPptInfo();
+  toast(`검증 통과 · ${pages.length}페이지 ${plotRows().length}슬롯`);}
+function loadTableTpl(){closeTableTplModal();renderTables();updateCfgRows();
+  toast(`검증 통과 · 표 ${tableNames().length}개 · ${tableRows().length}행`);}
+
+/* ═══════ 구성(레이아웃) 저장·불러오기 ═══════ */
+
+
+/* ═══════ 표 슬라이드 폭 정책 ═══════
+   pptx는 슬라이드 크기가 프레젠테이션 전역이라 장마다 다르게 줄 수 없다.
+   → (a) 덱 전체를 넓게 잡거나 (b) 표를 여러 장으로 나눈다.                */
+let tblWidth='wide';
+function setTblWidth(m){tblWidth=m;
+  document.getElementById('twWide').classList.toggle('on',m==='wide');
+  document.getElementById('twSplit').classList.toggle('on',m==='split');
+  renderPptInfo();}
+function renderPptInfo(){
+  const nw=wafers.reduce((a,w)=>a+w[1].length,0);
+  const perSlide=12;
+  const note=document.getElementById('twNote'),det=document.getElementById('twDetail');
+  if(!note)return;
+  note.textContent=`현재 wafer ${nw}장`;
+  const inch=(13.33*Math.max(1,(3+nw)/15)).toFixed(1);
+  det.innerHTML = tblWidth==='wide'
+    ? `슬라이드 폭을 <b>${inch}in</b>로 늘려 표를 한 장에 담습니다 (기본 13.33in).
+       pptx는 슬라이드 크기가 <b>덱 전체 공통</b>이라 plot 페이지도 같은 비율이 됩니다 —
+       가로가 넓어져 6슬롯이 더 여유로워지는 대신, 표준 16:9 화면에서는 좌우 여백이 생깁니다.
+       글자는 9pt 아래로 줄이지 않고 폭으로 해결합니다.`
+    : `표준 16:9를 유지하고 표를 wafer <b>${perSlide}장씩</b> 끊어 <b>${Math.ceil(nw/perSlide)}장</b>으로 나눕니다
+       (제목에 1/${Math.ceil(nw/perSlide)} 표기). 라벨 열은 매 장 반복되고, 전체 표는 xlsx로 함께 저장됩니다.
+       발표용으로는 이쪽이 안전합니다.`;
+  const st=document.getElementById('pptStatus');
+  const rep=document.getElementById('expRepeat');
+  const multi=rep&&rep.checked&&factors.length>1;
+  const n=multi?pages.length*factors.length:pages.length;
+  if(st)st.innerHTML=`생성될 덱: <b>${n}페이지</b>${multi?` (템플릿 ${pages.length} x 실험 ${factors.length})`:''}`+
+    ` · 표 ${tableNames().length}개 · 제외 이력 슬라이드 자동 첨부`;
+}
+
+/* ═══════ 실험 조건 매트릭스 ═══════
+   최소 정형: lot · wafer · step별 조건 코드.
+   long(lot,wafer,step,code) / wide(lot,wafer,M1,M5,…) 두 형식 모두 인식.       */
+const SPLIT_STEPS=['M1','M5','IMP'];
+let splitRows=[
+  {lot:'PA123',waf:'W01',M1:'Split_A',M5:'Base',IMP:'Base'},
+  {lot:'PA123',waf:'W02',M1:'Split_A',M5:'Hi',  IMP:'Base'},
+  {lot:'PA123',waf:'W03',M1:'Split_B',M5:'Base',IMP:'Base'},
+  {lot:'PA124',waf:'W01',M1:'Split_B',M5:'Hi',  IMP:'Base'},
+  {lot:'PA124',waf:'W02',M1:'Base',   M5:'Base',IMP:'Hi'},
+];
+let factors=['M1'];
+const BASELINE='Base';
+
+function splitOf(lot,waf){return splitRows.find(r=>r.lot===lot&&r.waf===waf);}
+function codesFor(step){return [...new Set(splitRows.map(r=>r[step]))];}
+/* 선택한 factor 조합 → 그룹 키 */
+function comboKey(r){return factors.map(f=>r[f]).join(' · ');}
+function comboGroups(){
+  const m={};
+  for(const r of splitRows){const k=comboKey(r);(m[k]=m[k]||[]).push(r);}
+  return m;
+}
+/* 혼입 검사: 선택한 factor 그룹 안에서 나머지 step이 균일한가 */
+function confounds(){
+  const out=[];
+  const others=SPLIT_STEPS.filter(s=>!factors.includes(s));
+  const g=comboGroups();
+  for(const [k,rows] of Object.entries(g))
+    for(const o of others){
+      const vs=[...new Set(rows.map(r=>r[o]))];
+      if(vs.length>1)out.push({group:k,step:o,vals:vs});
+    }
+  return out;
+}
+function openSplitModal(){document.getElementById('splitModal').classList.add('show');renderSplitUI();}
+function closeSplitModal(){document.getElementById('splitModal').classList.remove('show');}
+function toggleFactor(f){
+  factors=factors.includes(f)?factors.filter(x=>x!==f):[...factors,f];
+  if(!factors.length)factors=[f];
+  renderSplitUI();
+}
+function renderSplitUI(){
+  /* 매트릭스 */
+  let h=`<tr><th>lot</th><th>wafer</th>${SPLIT_STEPS.map(st=>`<th>${st}</th>`).join('')}</tr>`;
+  for(const r of splitRows)
+    h+=`<tr><td class="k">${r.lot}</td><td class="k">${r.waf}</td>`+
+       SPLIT_STEPS.map(st=>`<td class="${factors.includes(st)?'f':''}">${r[st]}</td>`).join('')+`</tr>`;
+  document.getElementById('splitTable').innerHTML=h;
+  document.getElementById('splitStat').textContent=`${splitRows.length}장 · step ${SPLIT_STEPS.length}종`;
+
+  /* factor 선택 */
+  document.getElementById('factorPick').innerHTML=SPLIT_STEPS.map(st=>{
+    const c=codesFor(st);
+    return `<span class="exp-chip ${factors.includes(st)?'on':''}" onclick="toggleFactor('${st}')">
+      ${st}<span class="n">${c.length}수준</span></span>`;
+  }).join('');
+
+  /* 혼입 경고 */
+  const cf=confounds();
+  document.getElementById('confoundBox').innerHTML = cf.length
+    ? `<div class="warn-box"><b>혼입 주의</b><br>${cf.map(c=>
+        `<b>${c.group}</b> 그룹 안에 <b>${c.step}</b>가 ${c.vals.length}종 섞여 있습니다 (${c.vals.join(', ')})`).join('<br>')}
+        <br><span style="opacity:.85">이 상태로는 차이가 ${factors.join('·')} 때문인지 ${cf[0].step} 때문인지 구분할 수 없습니다.
+        ${cf[0].step}도 factor로 추가하거나, ${cf[0].step}=${BASELINE}인 wafer만 남기세요.</span></div>`
+    : `<div class="ok-box">선택한 factor 외 조건이 모든 그룹에서 균일합니다 · 비교 가능</div>`;
+
+  /* 그룹 미리보기 */
+  const g=comboGroups(),PAL=['#ff9500','#0071e3','#34c759','#af52de','#ff3b30','#5ac8fa'];
+  document.getElementById('grpPreview').innerHTML=Object.entries(g).map(([k,rows],i)=>{
+    const isBase=factors.every((f,j)=>k.split(' · ')[j]===BASELINE);
+    return `<div class="gp-item"><span class="sw" style="background:${isBase?'#8e8e93':PAL[i%PAL.length]}"></span>
+      ${k}${isBase?' <span class="n">REF</span>':''}<span class="n">${rows.length}장</span></div>`;
+  }).join('');
+
+  /* 반복 안내 */
+  const rep=document.getElementById('expRepeat').checked;
+  const nExp=rep?factors.length:1;
+  document.getElementById('repeatNote').innerHTML= rep
+    ? `템플릿 <b>${pages.length}페이지</b> × 실험 <b>${factors.length}개</b>(${factors.join(', ')})
+       = <b>${pages.length*factors.length}페이지</b>가 생성됩니다.<br>
+       실험마다 그룹만 바뀌고 plot·표 구성은 동일합니다 · 페이지 제목에 실험명이 자동으로 붙습니다`
+    : `선택한 factor 조합 하나로만 그룹을 나눠 <b>${pages.length}페이지</b>를 생성합니다`;
+}
+function applySplit(){
+  const g=comboGroups(),PAL=['#ff9500','#0071e3','#34c759','#af52de','#ff3b30','#5ac8fa'];
+  const SYM=['o','s','t','d','+'];
+  groups.length=0;
+  Object.keys(g).forEach((k,i)=>{
+    const isBase=factors.every((f,j)=>k.split(' · ')[j]===BASELINE);
+    groups.push({id:'x'+i,name:k,color:isBase?'#8e8e93':PAL[i%PAL.length],
+      sym:isBase?'d':SYM[i%SYM.length],size:6,visible:true,ref:isBase});
+  });
+  /* wafer → 그룹 배정 */
+  for(const k in assign)delete assign[k];
+  for(const r of splitRows){
+    const gi=Object.keys(g).indexOf(comboKey(r));
+    if(gi>=0)assign[r.lot+'|'+r.waf]=groups[gi].id;
+  }
+  /* 포인트에 그룹 반영 */
+  pts.forEach(p=>{p.g=assign[p.lot+'|'+p.waf]||null;});
+  closeSplitModal();
+  renderDock();renderEditor();draw();renderSlots();renderTables();updateSplitDock();renderPages();renderPptInfo();
+  toast(`${groups.length}개 그룹으로 자동 배정 · ${factors.join('·')} 기준`);
+}
+function updateSplitDock(){
+  const sub=document.getElementById('splitSub');
+  if(sub)sub.textContent=`${splitRows.length}장 · factor ${factors.join(', ')}`;
+  const chips=document.getElementById('factorChips');
+  if(chips)chips.innerHTML=SPLIT_STEPS.map(st=>
+    `<span class="exp-chip ${factors.includes(st)?'on':''}" style="font-size:11.5px;padding:4px 10px"
+      onclick="toggleFactor('${st}');applySplit()">${st}</span>`).join('');
+  const cf=confounds(),note=document.getElementById('confoundNote');
+  if(note)note.innerHTML=cf.length
+    ? `<div class="unassigned-note" style="color:var(--warn)">혼입 ${cf.length}건 — 확인 필요</div>`:'';
+}
+function downloadSplitSample(){
+  const cols=['lot','wafer',...SPLIT_STEPS];
+  const rows=splitRows.map(r=>`<tr><td>${r.lot}</td><td>${r.waf}</td>${SPLIT_STEPS.map(st=>`<td>${r[st]}</td>`).join('')}</tr>`).join('');
+  const html=`<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8">
+<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>split</x:Name>
+<x:WorksheetOptions/></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->
+<style>th{background:#f2f3f5;border:1px solid #ccc;padding:6px 12px;font-family:Calibri}
+td{border:1px solid #ddd;padding:5px 12px;font-family:Calibri}</style></head><body>
+<table><tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr>${rows}</table></body></html>`;
+  const b=new Blob(['\ufeff'+html],{type:'application/vnd.ms-excel'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='split_matrix.xls';a.click();
+  URL.revokeObjectURL(a.href);toast('실험 조건 양식을 내려받았습니다');
+}
+
+/* ═══════ 분석 설정 프리셋 (DuckDB + 템플릿 묶음) ═══════ */
+let cfgs=[
+  {name:'M2 정기 리포트', db:'M2_routine.duckdb', dbSub:'2,891 items · ~08-03',
+   plot:'plot_M2_v6.xlsx', plotSub:'3페이지 8슬롯', table:'table_M2_v4.xlsx', tableSub:'표 4개 · 9행'},
+  {name:'신규 device 평가', db:'newdev.duckdb', dbSub:'412 items · ~08-09',
+   plot:'plot_dev_v2.xlsx', plotSub:'2페이지 5슬롯', table:'table_dev_v1.xlsx', tableSub:'표 2개 · 6행'},
+  {name:'수율 이슈 조사', db:'adhoc.duckdb', dbSub:'1,204 items · ~08-11',
+   plot:'plot_adhoc.xlsx', plotSub:'1페이지 4슬롯', table:'table_adhoc.xlsx', tableSub:'표 1개 · 5행'},
+];
+let curCfg=0;
+function renderCfgList(){
+  document.getElementById('cfgSel').innerHTML=cfgs.map((c,i)=>`<option value="${i}" ${i===curCfg?'selected':''}>${c.name}</option>`).join('');
+}
+function updateCfgRows(){
+  const c=cfgs[curCfg];
+  const set=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
+  set('cfgDb',c.db); set('cfgDbSub',c.dbSub);
+  set('cfgPlot',c.plot); set('cfgPlotSub',`${pages.length}페이지 ${plotRows().length}슬롯`);
+  set('cfgTable',c.table); set('cfgTableSub',`표 ${tableNames().length}개 · ${tableRows().length}행`);
+  set('cfgRfSub',`REAL ${REFORMATTER.filter(r=>r.CATEGORY==='REAL').length} · ADDP ${REFORMATTER.filter(r=>r.CATEGORY==='ADDP').length}`);
+  const rs=document.getElementById('repSel');
+  if(rs)rs.innerHTML=reportList().map(r=>`<option ${r===curReport?'selected':''}>${r}</option>`).join('');
+  const pill=document.querySelector('.db-pill');
+  if(pill)pill.innerHTML=`${c.db} · <b>${c.dbSub.split(' ')[0]}</b> items`;
+}
+function loadCfg(i){
+  curCfg=+i;clearCfgDirty();updateCfgRows();
+  toast(`'${cfgs[curCfg].name}' 설정을 불러왔습니다 — DB·Plot·Table 템플릿이 함께 바뀝니다`);
+}
+function markCfgDirty(){const d=document.getElementById('cfgDirty');if(d)d.classList.add('show');}
+function clearCfgDirty(){const d=document.getElementById('cfgDirty');if(d)d.classList.remove('show');}
+function saveCfg(){clearCfgDirty();toast(`'${cfgs[curCfg].name}'에 저장했습니다`);}
+function saveAsCfg(){
+  const n=prompt('새 설정 이름','복사본 — '+cfgs[curCfg].name);if(!n)return;
+  cfgs.push({...cfgs[curCfg],name:n});curCfg=cfgs.length-1;
+  renderCfgList();clearCfgDirty();toast(`'${n}' 설정을 만들었습니다`);
+}
+
+/* ═══════ 네비 ═══════ */
+function showWs(w){
+  document.querySelectorAll('.ws').forEach(e=>e.classList.toggle('active',e.dataset.w===w));
+  document.querySelectorAll('.workspace').forEach(e=>e.classList.toggle('active',e.dataset.ws===w));
+  if(w==='anal')requestAnimationFrame(()=>{draw();renderSlots();});
+}
+function showTab(t){
+  document.querySelectorAll('.tab').forEach(e=>e.classList.toggle('active',e.dataset.t===t));
+  document.querySelectorAll('.pane').forEach(e=>e.classList.toggle('active',e.dataset.p===t));
+  if(t==='explore')requestAnimationFrame(draw);
+  if(t==='report')requestAnimationFrame(renderSlots);
+}
+let tt;function toast(m){const el=document.getElementById('toast');el.textContent=m;el.classList.add('show');
+  clearTimeout(tt);tt=setTimeout(()=>el.classList.remove('show'),3000);}
+
+/* init */
+renderCatalogRow();
+attachAC(document.getElementById('axX'),itemOptions,{comma:true,onPick:draw});
+attachAC(document.getElementById('axY'),itemOptions,{comma:true,onPick:draw});
+renderDock();renderEditor();renderPresetList();renderConds();buildSql();renderTables();buildPages();renderPages();renderSlots();renderInspector();
+renderCfgList();updateCfgRows();updateSplitDock();renderPptInfo();
+document.getElementById('pageTitle').value=(pages[0]||{}).title||'';
+draw();
+window.addEventListener('resize',()=>{draw();renderSlots();});
+</script>
+</body>
+</html>

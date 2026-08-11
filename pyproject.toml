@@ -1,0 +1,77 @@
+[project]
+name = "etreport"
+version = "1.3.0"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.6",
+    "duckdb>=0.10",
+    "polars>=0.20",
+    "pyarrow>=15",
+    "matplotlib>=3.8",
+    "pyqtgraph>=0.13",
+    "python-pptx>=0.6.23",
+    "xlwings>=0.31",
+    "requests>=2.31",
+    "packaging>=23",
+]
+# bigdataquery(bdq)는 사내 패키지 — 사내 인덱스에서 별도 설치
+
+[project.optional-dependencies]
+# pip install -e ".[dev]"  (사내 PC에서도 오프라인이면 pytest·ruff만 따로 받으면 된다)
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+etreport = "etreport.app:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# ── 린터 ──────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100          # 실제 코드 최대치(99)에 맞춤. 새 코드는 88 안쪽 권장
+target-version = "py311"
+exclude = ["myenv", "dist", "build/*.spec"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes — 미사용 import·이름 오타
+    "I",         # import 정렬
+    "B",         # bugbear — 흔한 함정
+    "C4",        # comprehension
+    "UP",        # 파이썬 3.11 문법
+    "SIM",       # 단순화
+    "RET",       # return 흐름
+    "BLE",       # 광범위 except — 의도한 곳은 `# noqa: BLE001`을 붙인다
+    "S307",      # eval 사용 — reformatter의 ast 화이트리스트 경로만 허용
+    "RUF",
+]
+ignore = [
+    "E702",      # paths.py의 한 줄 정의 스타일(의도)
+    "B905",      # zip(strict=) — 길이가 다를 수 있는 zip이 실제로 있다
+    "RUF001",    # 한글 문서의 전각 기호(·, — 등)
+    "RUF002",
+    "RUF003",
+    "SIM108",    # 삼항 강요 — 가독성이 떨어지는 경우가 많다
+]
+
+[tool.ruff.lint.per-file-ignores]
+"app.py" = ["E402"]                  # sys.path 조작 후 import (진입점)
+"build/build_release.py" = ["E402"]
+"tests/*" = ["S307", "SIM117"]
+"src/etreport/update/apply.py" = ["W291"]   # .bat 스크립트 문자열 안의 공백은 그대로 둔다
+
+# ── 테스트 ────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]                 # 설치 없이도 import etreport
+addopts = "-q -m 'not slow'"         # 대용량 테스트는 기본 제외 (-m slow 로 실행)
+markers = [
+    "slow: 20만행급 대용량·성능 테스트 (기본 실행에서 제외)",
+    "excel: xlwings/Excel이 필요한 테스트 (사내 PC 전용)",
+]
+filterwarnings = ["error::DeprecationWarning:etreport.*"]
