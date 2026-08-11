@@ -5,10 +5,12 @@ plot과 표는 현장에서 이미 정상 동작을 확인했다. 여기 테스�
 """
 from __future__ import annotations
 
+import math
+
 import polars as pl
 import pytest
 
-from etreport.model.aggregate import offspec, ref_values, wafer_stats
+from etreport.model.aggregate import group_representatives, offspec, ref_values, wafer_stats
 from etreport.model.specs import PlotSpec, fmt_value
 from etreport.render.ranges import compute_range, is_log, resolve_axes, resolve_log
 from tests.test_reformatter_apply import rf_of, rule
@@ -98,6 +100,21 @@ def points():
     })
 
 
+@pytest.fixture
+def trend_points():
+    """trend 라인 대표값용 wide 프레임 — lot 2 × wafer 2 × die 3, 일부 NULL."""
+    return pl.DataFrame({
+        "key": [f"k{i}" for i in range(1, 13)],
+        "lot": ["L1"] * 6 + ["L2"] * 6,
+        "wafer": ["01", "01", "01", "02", "02", "02"] * 2,
+        "gid": ["g1"] * 12,
+        "A": [1.0, 3.0, 9.0, 5.0, 7.0, None,
+              10.0, None, 20.0, 20.0, 30.0, 40.0],
+        "B": [2.0, None, 4.0, 6.0, None, 8.0,
+              8.0, 12.0, 10.0, 100.0, 200.0, None],
+    })
+
+
 def test_wafer_stats_mean(points):
     st = wafer_stats(points, set(), ["A", "B"])
     assert st.get("A", "L1", "01") == 2.0
@@ -123,6 +140,58 @@ def test_ref_values(points):
     assert ref_values(points, {"k3"}, "g2", ["A"])["A"] == 20.0
     assert ref_values(points, set(), "", ["A"]) == {}        # REF 그룹 미지정
     assert ref_values(points, set(), None, ["A"]) == {}
+
+
+# ── trend: 중앙값 + 그룹 대표값 ────────────────────────────────
+def test_wafer_stats_median(trend_points):
+    st = wafer_stats(trend_points, set(), ["A", "B"], agg="med")
+    assert st.get("A", "L1", "01") == 3.0     # [1, 3, 9]
+    assert st.get("A", "L1", "02") == 6.0     # [5, 7]
+    assert st.get("A", "L2", "01") == 15.0    # [10, 20]
+    assert st.get("A", "L2", "02") == 30.0    # [20, 30, 40]
+    assert st.get("B", "L1", "01") == 3.0     # [2, 4] — NULL 제외
+    assert st.get("B", "L2", "01") == 10.0    # [8, 12, 10]
+    assert st.get("A", "L9", "99") is None
+
+
+def test_group_representatives_med(trend_points):
+    reps = group_representatives(trend_points, set(), ["A", "B"], agg="med")
+    assert reps["A"] == pytest.approx((3.0 + 6.0 + 15.0 + 30.0) / 4)
+    assert reps["B"] == pytest.approx((3.0 + 7.0 + 10.0 + 150.0) / 4)
+
+
+def test_group_representatives_avg(trend_points):
+    reps = group_representatives(trend_points, set(), ["A"], agg="avg")
+    assert reps["A"] == pytest.approx((13 / 3 + 6.0 + 15.0 + 30.0) / 4)
+
+
+def test_group_representatives_std(trend_points):
+    reps = group_representatives(trend_points, set(), ["A"], agg="std")
+    expect = (math.sqrt(52 / 3) + math.sqrt(2) + math.sqrt(50) + 10.0) / 4
+    assert reps["A"] == pytest.approx(expect)
+
+
+def test_group_representatives_excluded(trend_points):
+    # k3(A=9) 제외 → (L1,01) A는 [1, 3] → 중앙값 2.0
+    reps = group_representatives(trend_points, {"k3"}, ["A"], agg="med")
+    assert reps["A"] == pytest.approx((2.0 + 6.0 + 15.0 + 30.0) / 4)
+
+
+def test_group_representatives_wafer_all_excluded(trend_points):
+    # (L1,01) die 전부 제외 → 남은 wafer 3장의 평균
+    reps = group_representatives(trend_points, {"k1", "k2", "k3"}, ["A"], agg="med")
+    assert reps["A"] == pytest.approx((6.0 + 15.0 + 30.0) / 3)
+
+
+def test_group_representatives_no_values(trend_points):
+    empty = trend_points.filter(pl.col("lot") == "없음")
+    assert group_representatives(empty, set(), ["A"]) == {"A": None}
+
+
+def test_ref_values_median(trend_points):
+    # A 전체 정렬 [1,3,5,7,9,10,20,20,30,40] → (9+10)/2, k1 제외 시 10.0
+    assert ref_values(trend_points, set(), "g1", ["A"], agg="med")["A"] == 9.5
+    assert ref_values(trend_points, {"k1"}, "g1", ["A"], agg="med")["A"] == 10.0
 
 
 def test_offspec():

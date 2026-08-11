@@ -27,16 +27,16 @@ QWidget { background:#f2f3f5; color:#1d1d1f;
 QPushButton { background:#0071e3; color:#ffffff; border:none; border-radius:14px;
               padding:7px 18px; font-weight:600; }
 QPushButton:hover    { background:#0077ed; }
-QPushButton:disabled { background:#c4cdd6; color:#ffffff; }
+QPushButton:disabled { background:#6b7280; color:#ffffff; }
 /* 상태색. #ff9500은 계열색(group_dialog)이므로 쓰지 않는다 */
 QPushButton[dirty="true"] { background:#c26c00; }
-QPushButton[dirty="true"]:hover { background:#d47700; }
+QPushButton[dirty="true"]:hover { background:#b45309; }
 QPushButton[ghost="true"] { background:#ffffff; color:#1d1d1f;
                             border:1px solid rgba(0,0,0,.14); font-weight:500;
                             padding:6px 12px; }
 QPushButton[ghost="true"]:hover { background:#f7f8fa; border-color:#0071e3; }
 /* ghost는 :disabled 변형이 없으면 기본 비활성 규칙을 덮어쓴다 */
-QPushButton[ghost="true"]:disabled { background:#c4cdd6; color:#ffffff; }
+QPushButton[ghost="true"]:disabled { background:#6b7280; color:#ffffff; }
 #cfgRow { text-align:left; padding:8px 12px; border-radius:9px;
           background:#f7f8fa; border:1px solid transparent;
           font-family:%MONO_FONT%; font-size:12px; }

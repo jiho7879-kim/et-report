@@ -150,3 +150,77 @@ def test_empty_cat1_row_is_skipped(fake_sheet, rf, monkeypatch):
              [["IT0000", "", "", "", "R1"]], rf, monkeypatch)
     assert any("CAT1" in w.message for w in t.warnings)
     assert T.build_report(t, "R1").table_rows == []
+
+
+def test_trend_with_geom_x_passes(fake_sheet, rf, monkeypatch):
+    """Type=trend: x는 기하(W) 단일 값, y만 alias 검사 → 통과, mode 기본 site."""
+    t = load(fake_sheet,
+             [prow(1, "W", "IT0000,IT0001", 1, typ="trend")],
+             [["IT0000", "DC", "", "", "R1"]], rf, monkeypatch)
+    assert not t.errors and not t.warnings
+    p = T.build_report(t, "R1").pages[0].slots[0]
+    assert p.type == "trend" and p.mode == "site"
+    assert p.pairs() == [("W", "IT0000"), ("W", "IT0001")]
+
+
+def test_trend_non_geom_x_is_skipped(fake_sheet, rf, monkeypatch):
+    """trend의 x가 W/L가 아니면(비-alias여도) 그 행만 skip + warning."""
+    t = load(fake_sheet,
+             [prow(1, "Vtlin", "IT0000", 1, typ="trend")],
+             [["IT0000", "DC", "", "", "R1"]], rf, monkeypatch)
+    assert len(t.warnings) == 1
+    assert "trend의 x는 W 또는 L" in t.warnings[0].message
+    assert T.build_report(t, "R1").pages == []
+
+
+def test_trend_non_alias_y_is_skipped(fake_sheet, rf, monkeypatch):
+    """trend에서도 y는 기존 alias 검사 — 비-alias면 그 행 skip."""
+    t = load(fake_sheet,
+             [prow(1, "W", "NOPE", 1, typ="trend")],
+             [["IT0000", "DC", "", "", "R1"]], rf, monkeypatch)
+    assert len(t.warnings) == 1
+    assert "계산 불가" in t.warnings[0].message
+    assert T.build_report(t, "R1").pages == []
+
+
+def _plot_sheet_with_mode(rows):
+    """Mode 컬럼이 있는 plot 시트 — 옵션 컬럼이므로 PLOT_COLS 밖이다."""
+    return pl.DataFrame(rows)
+
+
+def test_trend_mode_column_parsing(fake_sheet, rf, monkeypatch):
+    """Mode='avg' → PlotSpec.mode='avg'. Mode 컬럼이 없으면 'site'."""
+    import etreport.data.xlio as xlio
+    rows = [{"page": 1, "x": "W", "y": "IT0000", "order": 1, "title1": "P",
+             "title2": "", "Report": "R1", "Type": "trend", "x_name": "",
+             "y_name": "", "Mode": "avg"}]
+    frames = {"plot.xlsx": _plot_sheet_with_mode(rows),
+              "tbl.xlsx": tbl_sheet([["IT0000", "DC", "", "", "R1"]])}
+    monkeypatch.setattr(xlio, "read_sheet",
+                        lambda path, sheet=0, force=False: frames[path])
+    monkeypatch.setattr(xlio, "read_sheets",
+                        lambda path, sheets, force=False:
+                        [frames[path] for _ in sheets])
+    t = T.load("plot.xlsx", "tbl.xlsx", rf)
+    assert not t.warnings
+    assert T.build_report(t, "R1").pages[0].slots[0].mode == "avg"
+
+
+def test_trend_invalid_mode_warns_and_defaults_to_site(fake_sheet, rf, monkeypatch):
+    """Mode가 4종 밖이면 warning만 — 행은 유지되고 site로 처리."""
+    import etreport.data.xlio as xlio
+    rows = [{"page": 1, "x": "L", "y": "IT0000", "order": 1, "title1": "P",
+             "title2": "", "Report": "R1", "Type": "trend", "x_name": "",
+             "y_name": "", "Mode": "bogus"}]
+    frames = {"plot.xlsx": _plot_sheet_with_mode(rows),
+              "tbl.xlsx": tbl_sheet([["IT0000", "DC", "", "", "R1"]])}
+    monkeypatch.setattr(xlio, "read_sheet",
+                        lambda path, sheet=0, force=False: frames[path])
+    monkeypatch.setattr(xlio, "read_sheets",
+                        lambda path, sheets, force=False:
+                        [frames[path] for _ in sheets])
+    t = T.load("plot.xlsx", "tbl.xlsx", rf)
+    assert len(t.warnings) == 1
+    assert "Mode 값이 잘못되어" in t.warnings[0].message
+    p = T.build_report(t, "R1").pages[0].slots[0]
+    assert p is not None and p.mode == "site"

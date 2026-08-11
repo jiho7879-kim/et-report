@@ -108,16 +108,31 @@ class UpdateDialog(QDialog):
         self.bar.setValue(done)
 
     def _on_done(self, result) -> None:
+        from PySide6.QtWidgets import QApplication, QMessageBox
+
         if isinstance(result, Exception):
-            self.bar.setFormat(f"다운로드 실패: {result}")
-            for b in (self.btn_go, self.btn_later, self.btn_skip):
-                b.setEnabled(True)
+            self._fail(f"다운로드 실패: {result}")
             return
-        new_dir = upd_apply.extract(result)
-        upd_apply.apply_and_restart(new_dir)
+        try:
+            new_dir = upd_apply.extract(result)
+            upd_apply.apply_and_restart(new_dir)
+        except upd_apply.UpdateNotApplicable as e:
+            # 소스 실행 등 — 교체할 설치 폴더가 없다. 절대 진행하지 않는다.
+            QMessageBox.information(self, "업데이트", str(e))
+            self._fail("적용하지 않았습니다")
+            return
+        except Exception as e:                       # noqa: BLE001 — UI로 전달
+            QMessageBox.critical(self, "업데이트 실패",
+                                 f"새 버전을 적용하지 못했습니다:\n{e}")
+            self._fail("적용 실패")
+            return
         # 다이얼로그를 닫고 앱을 종료하면 배치가 폴더를 교체하고 재시작한다.
-        from PySide6.QtWidgets import QApplication
         QApplication.instance().quit()
+
+    def _fail(self, msg: str) -> None:
+        self.bar.setFormat(msg)
+        for b in (self.btn_go, self.btn_later, self.btn_skip):
+            b.setEnabled(True)
 
 
 def check_async(parent, settings) -> None:

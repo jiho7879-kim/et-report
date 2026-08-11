@@ -20,6 +20,7 @@ import polars as pl
 from etreport.model.specs import GroupStyle
 
 BASELINE_DEFAULT = "Base"
+LABEL_SEP = " · "                # 표시용 구분자 (계산에는 쓰지 않는다)
 PALETTE_OKABE = ["#E69F00", "#56B4E9", "#009E73", "#F0E442",
                  "#0072B2", "#D55E00", "#CC79A7", "#000000"]
 SYMBOLS = ["o", "s", "t", "d", "+"]
@@ -77,23 +78,34 @@ class SplitMatrix:
 
     # ── 그룹핑 ────────────────────────────────────────────────
     def combo_label(self, row: dict, factors: list[str]) -> str:
-        return " · ".join(str(row[f]) for f in factors)
+        return LABEL_SEP.join(str(row[f]) for f in factors)
 
-    def groups_for(self, factors: list[str]) -> dict[str, list[tuple[str, str]]]:
-        """factor 조합 라벨 → [(lot, wafer), …]. 라벨 순서는 등장 순서."""
+    def combos_for(self, factors: list[str]
+                   ) -> dict[tuple[str, ...], list[tuple[str, str]]]:
+        """factor 코드 **튜플** → [(lot, wafer), …]. 등장 순서 유지.
+
+        코드를 라벨로 합쳤다가 다시 쪼개면(라벨.split(" · ")) 코드 안에 구분자가
+        들어간 순간 조용히 어긋난다. 내부에서는 항상 튜플을 들고 다니고,
+        라벨은 보여줄 때만 만든다.
+        """
         assert self.wide is not None
-        out: dict[str, list[tuple[str, str]]] = {}
+        out: dict[tuple[str, ...], list[tuple[str, str]]] = {}
         for row in self.wide.iter_rows(named=True):
-            out.setdefault(self.combo_label(row, factors), []).append(
-                (row["lot"], row["wafer"]))
+            key = tuple(str(row[f]) for f in factors)
+            out.setdefault(key, []).append((row["lot"], row["wafer"]))
         return out
+
+    def label_of(self, codes: tuple[str, ...]) -> str:
+        """factor 코드 튜플 → 화면에 보여줄 라벨."""
+        return LABEL_SEP.join(codes)
 
     def styles_for(self, factors: list[str]) -> list[GroupStyle]:
         """조합별 GroupStyle — baseline 조합은 회색 REF, 나머지는 Okabe-Ito."""
         styles: list[GroupStyle] = []
         pal, sym = cycle(PALETTE_OKABE), cycle(SYMBOLS)
-        for i, (label, members) in enumerate(self.groups_for(factors).items()):
-            is_ref = all(part == self.baseline for part in label.split(" · "))
+        for i, (codes, members) in enumerate(self.combos_for(factors).items()):
+            is_ref = all(c == self.baseline for c in codes)   # 라벨을 되쪼개지 않는다
+            label = self.label_of(codes)
             styles.append(GroupStyle(
                 gid=f"x{i}", name=f"{label} ({len(members)})",
                 color=REF_COLOR if is_ref else next(pal),
@@ -112,23 +124,23 @@ class SplitMatrix:
         assert self.wide is not None
         others = [s for s in self.steps if s not in factors]
         out: list[Confound] = []
-        for label, _ in self.groups_for(factors).items():
+        for combo in self.combos_for(factors):
             mask = pl.lit(True)
-            for f, v in zip(factors, label.split(" · ")):
+            for f, v in zip(factors, combo):
                 mask = mask & (pl.col(f).cast(pl.Utf8) == v)
             sub = self.wide.filter(mask)
             for o in others:
                 codes = sorted({str(c) for c in sub[o]})
                 if len(codes) > 1:
-                    out.append(Confound(group=label, step=o, codes=codes))
+                    out.append(Confound(group=self.label_of(combo),
+                                        step=o, codes=codes))
         return out
 
     def assignment(self, factors: list[str]) -> dict[tuple[str, str], str]:
         """(lot, wafer) → gid. UI 그룹 배정과 fact 필터 양쪽에서 쓴다."""
         styles = self.styles_for(factors)
         out: dict[tuple[str, str], str] = {}
-        for gid_style, (_, members) in zip(styles,
-                                           self.groups_for(factors).items()):
+        for gid_style, members in zip(styles, self.combos_for(factors).values()):
             for lw in members:
                 out[lw] = gid_style.gid
         return out

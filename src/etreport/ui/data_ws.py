@@ -55,7 +55,7 @@ class _ExtractThread(QThread):
             from etreport.data.db import Store, pivot_and_load
             from etreport.data.reformatter import apply as rf_apply
             from etreport.data.reformatter import load as rf_load
-            from etreport.paths import staging_dir
+            from etreport.paths import cleanup_staging, staging_dir
 
             # 1) 리포메터 -------------------------------------
             t = time.monotonic()
@@ -102,6 +102,7 @@ class _ExtractThread(QThread):
             self.log.emit(f"리포메팅 시작 — 파일 {len(files)}개 · ADDP {n_addp}개")
             self.step.emit("리포메팅 중", 0, len(files))
             done_rows = 0
+            reformatted: list[Path] = []
             for i, f in enumerate(files, 1):
                 ft = time.monotonic()
                 src = pl.read_parquet(f)
@@ -112,7 +113,11 @@ class _ExtractThread(QThread):
                                    d, tot or 1)
 
                 out = rf_apply(rf, src, on_progress=prog)
-                out.write_parquet(f)
+                # 원본(추출 결과)은 남긴다 — 추출이 가장 비싼 단계라, 리포메터를
+                # 고쳐서 다시 돌릴 때 재추출 없이 이 파일만 다시 쓰면 된다.
+                rf_file = f.with_name(f.stem + "_rf.parquet")
+                out.write_parquet(rf_file)
+                reformatted.append(rf_file)
                 done_rows += out.height
                 self.log.emit(
                     f"  파일 {i}/{len(files)}  {src.height:,}행 → {out.height:,}행"
@@ -133,9 +138,20 @@ class _ExtractThread(QThread):
                     last[0] = now
                     self.log.emit(f"  버킷 {d}/{tot}")
 
-            n = pivot_and_load(Store(self.p.db_path), files,
-                               on_progress=load_prog)
+            # 적재 연결은 반드시 닫는다 — 열려 있으면 DuckDB 쓰기 잠금이 남아
+            # 곧바로 이어지는 [분석] 자동 연결(읽기 전용 열기)이 실패한다.
+            store = Store(self.p.db_path)
+            try:
+                n = pivot_and_load(store, reformatted, on_progress=load_prog)
+            finally:
+                store.close()
             self.log.emit(f"적재 완료 — {n:,}행 · {time.monotonic() - t:.1f}초")
+
+            # 5) 뒷정리 — staging은 놔두면 하루 수십 MB씩 쌓인다
+            gone = cleanup_staging()
+            if gone:
+                self.log.emit(f"staging 정리 — 오래된 파일 {gone}개 삭제")
+
             el = time.monotonic() - t0
             self.log.emit(f"── 전체 {el:.1f}초 ──")
             self.finished_ok.emit(n, f"{el:.1f}초")
@@ -473,9 +489,14 @@ class DataWorkspace(QWidget):
     # ── 실행 ─────────────────────────────────────────────────
     def _run(self) -> None:
         p = self.preset()
+        d_from, d_to = self.d_from.date().toPython(), self.d_to.date().toPython()
+        if d_from > d_to:
+            QMessageBox.warning(
+                self, "기간 오류",
+                f"시작일({d_from})이 종료일({d_to})보다 뒤입니다")
+            return
         try:
-            build_extract_sql(p.conditions, self.d_from.date().toPython(),
-                              self.d_to.date().toPython(), self.catalog)
+            build_extract_sql(p.conditions, d_from, d_to, self.catalog)
         except ConditionError as e:
             QMessageBox.warning(self, "조건 오류", f"{e.col}: {e}")
             return
@@ -487,13 +508,33 @@ class DataWorkspace(QWidget):
         self.btn_cancel.setEnabled(True)
         self.log_view.clear()
         self._append(f"── {datetime.now():%H:%M:%S} 시작 ──")
-        self._th = _ExtractThread(p, self.d_from.date().toPython(),
-                                  self.d_to.date().toPython(), self.catalog)
+        self._th = _ExtractThread(p, d_from, d_to, self.catalog)
         self._th.log.connect(self._append)
         self._th.step.connect(self._on_step)
         self._th.finished_ok.connect(self._done)
         self._th.failed.connect(self._fail)
         self._th.start()
+
+    def shutdown(self) -> None:
+        """앱 종료 시 추출 스레드를 정리한다 (MainWindow.closeEvent가 부른다).
+
+        그냥 두면 QThread가 실행 중인 채로 파괴되어 프로세스가 죽는다
+        (QThread: Destroyed while thread is still running). 이 위젯은
+        QStackedWidget 안에 있어 자신의 closeEvent는 오지 않으므로,
+        창 쪽에서 명시적으로 불러 줘야 한다.
+        """
+        th = getattr(self, "_th", None)
+        if th is None or not th.isRunning():
+            return
+        th.requestInterruption()
+        self._append("종료 중 — 진행 중인 청크가 끝나면 멈춥니다")
+        if not th.wait(30_000):                  # 청크 하나가 끝날 때까지
+            th.terminate()
+            th.wait(2_000)
+
+    def closeEvent(self, e) -> None:             # 단독 창으로 띄웠을 때 대비
+        self.shutdown()
+        super().closeEvent(e)
 
     def _append(self, line: str) -> None:
         self.log_view.appendPlainText(f"{datetime.now():%H:%M:%S}  {line}")

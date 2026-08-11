@@ -158,9 +158,12 @@ class SqlExportDialog(QDialog):
                                            "CSV (*.csv)")
         if not p:
             return
-        # 엑셀에서 한글이 깨지지 않도록 BOM 포함 UTF-8
-        with open(p, "w", encoding="utf-8-sig", newline="") as f:
-            f.write(self.df.write_csv())
+        # 엑셀에서 한글이 깨지지 않도록 BOM만 먼저 쓰고, 본문은 polars가 파일에
+        # 직접 스트리밍한다 (예전처럼 CSV 전체를 문자열로 만들면 큰 결과에서
+        # 메모리를 두 배로 쓴다).
+        with Path(p).open("wb") as f:
+            f.write(b"\xef\xbb\xbf")
+            self.df.write_csv(f)
         self._done(p)
 
     def _save_parquet(self) -> None:

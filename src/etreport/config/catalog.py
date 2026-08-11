@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
-from etreport.paths import catalog_cache_file
+from etreport.paths import catalog_cache_file, write_json_atomic
 
 log = logging.getLogger(__name__)
 
@@ -45,15 +45,14 @@ class Catalog:
         return True
 
     def save_cache(self) -> None:
-        catalog_cache_file().write_text(
-            json.dumps(
-                {
-                    "fetched_at": self.fetched_at,
-                    "columns": [{"name": c.name, "dtype": c.dtype} for c in self.columns],
-                },
-                ensure_ascii=False, indent=1,
-            ),
-            encoding="utf-8",
+        write_json_atomic(
+            catalog_cache_file(),
+            {
+                "fetched_at": self.fetched_at,
+                "columns": [{"name": c.name, "dtype": c.dtype}
+                            for c in self.columns],
+            },
+            indent=1,
         )
 
     # ── 조회 ──────────────────────────────────────────────────

@@ -60,6 +60,8 @@ class Rule:
     spechigh: float | None
     target: float | None
     row: int                 # 시트 행 번호(오류 표시·계산 순서)
+    w: float | None = None   # 옵션 기하 컬럼 "W" (폭)
+    l: float | None = None   # 옵션 기하 컬럼 "L" (길이)  # noqa: E741 — 헤더명 "L" 확정
 
 
 @dataclass
@@ -124,6 +126,9 @@ def load(path: str, sheet: str | int = 0) -> Reformatter:
             spechigh=_num(row["SPECHIGH"]),
             target=_num(row["TARGET"]),
             row=i,
+            # W/L은 옵션 컬럼 — 시트에 있을 때만 읽는다(없으면 구파일과 동일).
+            w=_num(row.get("W")) if "W" in raw.columns else None,
+            l=_num(row.get("L")) if "L" in raw.columns else None,
         ))
     validate(rf)
     return rf

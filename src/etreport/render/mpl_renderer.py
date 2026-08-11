@@ -1,29 +1,36 @@
 """matplotlib 렌더러 — PlotSpec 하나 → Figure 하나.
 
-화면(pyqtgraph)과 심볼·색·축·규격선이 일치해야 한다: 스펙과 축 규칙을
-공유하고(ranges.py), 심볼 매핑은 아래 표 하나로 관리한다. 골든 이미지
-테스트로 회귀를 잡는다(tests/ 참조).
+화면 캔버스(ui/widgets/plot_canvas.py)와 PPT가 **이 함수 하나**를 공유한다.
+축 규칙은 ranges.py, 심볼 매핑은 아래 표가 단일 진실이다.
 배경은 흰색 — PPT에 그대로 들어간다.
+
+pyplot은 쓰지 않는다(Figure를 직접 생성) — 전역 매니저에 쌓이지 않게.
 """
 from __future__ import annotations
+
+import logging
 
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import polars as pl
+from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
+from matplotlib.ticker import MaxNLocator
 
 from etreport import fonts
 from etreport.data.reformatter import Reformatter
+from etreport.model.aggregate import group_representatives, wafer_stats
 from etreport.model.specs import GroupStyle, PlotSpec
-from etreport.render.ranges import resolve_axes
+from etreport.render.ranges import compute_range, resolve_axes, resolve_log
+
+log = logging.getLogger(__name__)
 
 # pyqtgraph 심볼 ↔ matplotlib 마커 (한 곳에서만 정의)
 MARKER = {"o": "o", "s": "s", "t": "^", "d": "D", "+": "+"}
-SPEC_COLOR = "#d70015"      # 규격 박스 — 빨간 실선
+SPEC_COLOR = "#d70015"      # 규격 — 빨간 실선
 TARGET_COLOR = "#0071e3"    # 타깃 — 파란 X
-REF_FILL = (0.56, 0.56, 0.58, 0.10)
+REF_COLOR = "#8e8e93"       # REF 그룹 라인 — 회색
 FONT_MIN_PT = 6            # 6pt 하한 (계획서 §9)
 
 # 한글 축 이름·제목이 □로 깨지지 않도록 OS별 한글 폰트를 잡는다(fonts.py 참조).
@@ -38,13 +45,21 @@ def render(spec: PlotSpec,
            figsize: tuple[float, float],
            excluded: pl.DataFrame | None = None,
            compact: bool = False,
-           fig: plt.Figure | None = None) -> plt.Figure:
+           fig: Figure | None = None) -> Figure:
     """compact=True면 슬롯/미니용 — 라벨을 줄이고 여백을 좁힌다.
 
     fig를 주면 그 Figure에 그린다(화면 캔버스용). 안 주면 새로 만든다(PPT용).
+
+    새로 만들 때 pyplot을 쓰지 않는다 — pyplot은 만든 Figure를
+    전역 매니저에 등록해 두기 때문에, 명시적으로 닫지 않으면 덱 하나를 만들 때
+    생긴 수백 개의 Figure가 프로세스가 끝날 때까지 메모리에 남는다.
     """
+    if spec.type == "trend":
+        return _render_trend(spec, data, styles, rf, log_patterns, figsize,
+                             excluded=excluded, compact=compact, fig=fig)
     if fig is None:
-        fig, ax = plt.subplots(figsize=figsize, dpi=110 if compact else 150)
+        fig = Figure(figsize=figsize, dpi=110 if compact else 150)
+        ax = fig.add_subplot(111)
     else:
         fig.clear()
         ax = fig.add_subplot(111)
@@ -65,10 +80,15 @@ def render(spec: PlotSpec,
     (xlo, xhi, lgx), (ylo, yhi, lgy) = resolve_axes(spec, rf, log_patterns, dr)
 
     # 포인트 — 모든 xy쌍이 그룹 스타일을 공유(확정 사양)
+    excluded_keys = (set(excluded["key"]) if excluded is not None
+                     and not excluded.is_empty() else set())
     for st in styles:
         if not st.visible or st.gid not in data:
             continue
         df = data[st.gid]
+        if spec.mode != "site":
+            _scatter_aggregate(ax, df, pairs, st, spec.mode, excluded_keys)
+            continue
         for ax_x, ax_y in pairs:
             if ax_x not in df.columns or ax_y not in df.columns:
                 continue
@@ -114,17 +134,6 @@ def render(spec: PlotSpec,
     elif ty is not None:
         ax.axhline(ty, color=TARGET_COLOR, lw=1.1, zorder=2.2)
 
-    # REF μ±3σ 밴드 (첫 y item 기준)
-    if spec.ref_band:
-        ref = next((s for s in styles if s.ref and s.gid in data), None)
-        if ref is not None:
-            y0 = pairs[0][1]
-            ys = data[ref.gid][y0].drop_nulls()
-            if ys.len() > 1:
-                mu, sd = float(ys.mean()), float(ys.std(ddof=1))
-                ax.axhspan(mu - 3 * sd, mu + 3 * sd, color=REF_FILL, zorder=1)
-                ax.axhline(mu, color="#8e8e93", lw=0.9, ls="--", zorder=2)
-
     if lgx:
         ax.set_xscale("log")
     if lgy:
@@ -151,8 +160,171 @@ def render(spec: PlotSpec,
     ax.tick_params(labelsize=max(FONT_MIN_PT, fs - 1.5),
                    pad=1 if compact else 3, length=2 if compact else 3)
     if compact:
-        ax.xaxis.set_major_locator(plt.MaxNLocator(4))
-        ax.yaxis.set_major_locator(plt.MaxNLocator(4))
+        ax.xaxis.set_major_locator(MaxNLocator(4))
+        ax.yaxis.set_major_locator(MaxNLocator(4))
+    ax.grid(True, color="#ececee", lw=0.6, zorder=0)
+    for sp in ax.spines.values():
+        sp.set_color("#d2d2d7")
+    if not compact and ax.get_legend_handles_labels()[0]:
+        leg = ax.legend(fontsize=fs - 0.5, frameon=True, framealpha=0.95,
+                        loc="upper left", bbox_to_anchor=(1.015, 1.0),
+                        borderaxespad=0, markerscale=0.85)
+        leg.get_frame().set_edgecolor("#d2d2d7")
+        leg.get_frame().set_linewidth(0.6)
+    fig.tight_layout(pad=0.4 if compact else 0.8)
+    return fig
+
+
+def _scatter_aggregate(ax, df: pl.DataFrame, pairs, st: GroupStyle,
+                       agg: str, excluded_keys: set[str]) -> None:
+    """mode=avg/med/std scatter — (lot,wafer) 집계 점 하나씩."""
+    aliases = [a for pr in pairs for a in pr]
+    ws = wafer_stats(df, excluded_keys, aliases, agg)
+    for ax_x, ax_y in pairs:
+        xs, ys = [], []
+        for vals in ws.values.values():
+            x, y = vals.get(ax_x), vals.get(ax_y)
+            if x is not None and y is not None:
+                xs.append(x)
+                ys.append(y)
+        if not xs:
+            continue
+        ax.scatter(xs, ys, s=st.size ** 2, c=st.color,
+                   marker=MARKER.get(st.symbol, "o"),
+                   linewidths=0, alpha=0.9, zorder=3,
+                   label=st.name if (ax_x, ax_y) == pairs[0] else None)
+
+
+def _render_trend(spec: PlotSpec,
+                  data: dict[str, pl.DataFrame],
+                  styles: list[GroupStyle],
+                  rf: Reformatter,
+                  log_patterns: list[str],
+                  figsize: tuple[float, float],
+                  excluded: pl.DataFrame | None = None,
+                  compact: bool = False,
+                  fig: Figure | None = None) -> Figure:
+    """기하(W/L) trend — x=규격 기하값, y=item 값, 대표값 라인 + 점 스트립.
+
+    scatter와 달리 X축이 데이터 컬럼이 아니라 리포메터의 기하값(W/L)이므로
+    축 계산을 직접 한다. pyplot은 쓰지 않는다(scatter와 동일).
+    """
+    if fig is None:
+        fig = Figure(figsize=figsize, dpi=110 if compact else 150)
+        ax = fig.add_subplot(111)
+    else:
+        fig.clear()
+        ax = fig.add_subplot(111)
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    geom = spec.x.strip()
+    items = [y for _, y in spec.pairs()]
+    excluded_keys = (set(excluded["key"]) if excluded is not None
+                     and not excluded.is_empty() else set())
+
+    xpos: dict[str, float] = {}
+    for it in items:
+        rule = rf.by_alias.get(it)
+        xv = (rule.w if geom == "W" else rule.l) if rule is not None else None
+        if xv is None:
+            log.warning("trend %s: %s의 %s 값이 없어 제외합니다", geom, it, geom)
+            continue
+        xpos[it] = float(xv)
+    plotted = [it for it in items if it in xpos]
+
+    xvals = [xpos[it] for it in plotted]
+    xlo, xhi = compute_range([geom], min(xvals) if xvals else None,
+                             max(xvals) if xvals else None, rf, False)
+    y_min = y_max = None
+    for it in plotted:
+        for df in data.values():
+            col = df[it].drop_nulls() if it in df.columns else None
+            if col is None or col.is_empty():
+                continue
+            lo, hi = float(col.min()), float(col.max())
+            y_min = lo if y_min is None else min(y_min, lo)
+            y_max = hi if y_max is None else max(y_max, hi)
+    lgy = resolve_log(spec.logy_mode, plotted, log_patterns)
+    ylo, yhi = compute_range(plotted, y_min, y_max, rf, lgy)
+
+    for st in styles:
+        if not st.visible or st.gid not in data:
+            continue
+        df = data[st.gid]
+        for it in plotted:
+            if spec.mode == "site":
+                if it not in df.columns:
+                    continue
+                ys = df[it].drop_nulls().to_list()
+            else:
+                ws = wafer_stats(df, excluded_keys, [it], spec.mode)
+                ys = [v for vals in ws.values.values()
+                      if (v := vals.get(it)) is not None]
+            if not ys:
+                continue
+            ax.scatter([xpos[it]] * len(ys), ys, s=9, c=st.color,
+                       alpha=0.45, linewidths=0, zorder=2)
+
+    line_agg = "med" if spec.mode == "site" else spec.mode
+    for st in styles:
+        if not st.visible or st.gid not in data:
+            continue
+        reps = group_representatives(data[st.gid], excluded_keys,
+                                     plotted, line_agg)
+        pts = sorted((xpos[it], reps[it]) for it in plotted
+                     if reps.get(it) is not None)
+        if not pts:
+            continue
+        xs, ys = zip(*pts)
+        if st.ref:
+            ax.plot(xs, ys, color=REF_COLOR, marker="d", markersize=4,
+                    linewidth=1.2, zorder=4, label=st.name)
+        else:
+            ax.plot(xs, ys, color=st.color, marker=MARKER.get(st.symbol, "o"),
+                    markersize=3.5, linewidth=1.2, zorder=4, label=st.name)
+
+    for it in plotted:
+        rule = rf.by_alias.get(it)
+        if rule is None:
+            continue
+        if rule.speclow is not None:
+            ax.axvline(xpos[it], color=SPEC_COLOR, lw=1.1, ls="--",
+                       zorder=2.2, ymin=0, ymax=1)
+        if rule.spechigh is not None:
+            ax.axvline(xpos[it], color=SPEC_COLOR, lw=1.1, ls="--",
+                       zorder=2.2, ymin=0, ymax=1)
+        if rule.target is not None:
+            ax.plot([xpos[it]], [rule.target], marker="x",
+                    color=TARGET_COLOR, markersize=11,
+                    markeredgewidth=2.0, zorder=6, linestyle="none")
+
+    if lgy:
+        ax.set_yscale("log")
+    ax.set_xlim(xlo, xhi)
+    ax.set_ylim(ylo, yhi)
+    ax.set_box_aspect(1)
+    _flush_spec_box(ax)
+
+    def _axis_name(name: str, aliases: list[str]) -> str:
+        if name:
+            return name
+        u = next((rf.by_alias[a].unit for a in aliases
+                  if a in rf.by_alias and rf.by_alias[a].unit), "")
+        return ", ".join(aliases) + (f" [{u}]" if u else "")
+
+    fs = max(FONT_MIN_PT, min(9.5, figsize[0] * 2.2))
+    if compact:
+        fs = max(FONT_MIN_PT, min(7.5, figsize[0] * 2.6))
+    ax.set_xlabel(geom, fontsize=fs)
+    ax.set_ylabel(_axis_name(spec.y_name, plotted), fontsize=fs)
+    if not compact:
+        ax.set_title(spec.title, fontsize=fs + 1, fontweight="bold", loc="left")
+    ax.tick_params(labelsize=max(FONT_MIN_PT, fs - 1.5),
+                   pad=1 if compact else 3, length=2 if compact else 3)
+    if compact:
+        ax.xaxis.set_major_locator(MaxNLocator(4))
+        ax.yaxis.set_major_locator(MaxNLocator(4))
     ax.grid(True, color="#ececee", lw=0.6, zorder=0)
     for sp in ax.spines.values():
         sp.set_color("#d2d2d7")

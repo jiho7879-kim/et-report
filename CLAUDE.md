@@ -48,6 +48,8 @@ myenv/bin/ruff check --fix .                        # 안전한 것만 자동 �
 | `test_pipeline_duckdb.py` | 리포메팅 → 적재 → 읽기전용 로딩 → 제외 사이드카 |
 | `test_db_buckets.py` | 버킷 수가 저장 결과를 바꾸지 않는다는 불변식(예전 DB 호환) |
 | `test_analysis_core.py` | 축 범위 ×1.2 · 로그 패턴 · wafer 집계 · 자릿수 |
+| `test_review_fixes.py` | 코드 리뷰에서 고친 것들의 회귀(업데이트 가드·Figure 누수·연결·복사 값…) |
+| `test_ui_smoke.py` | 데모 데이터로 창을 조립(headless) — 탭 구성·지연 계산·복사 일치 |
 | `test_bigset.py` (slow) | 실측 규모 성능·정확성 회귀 (`-s`로 단계별 시간 출력) |
 
 `tools/make_testset.py`는 **사내 PC에서 실제 앱으로** 리포메터를 확인하기 위한
@@ -55,7 +57,10 @@ testset(리포메터 xlsx + long parquet + 정답표 CSV, `--load`면 DuckDB까�
 정답표는 벡터 경로를 타지 않는 행 단위 엔진으로 계산하므로 앱 결과와 숫자로
 대조할 수 있다.
 
-UI 자체는 테스트가 없다 — 화면 변경 후에는 `--demo` 실행으로 확인한다.
+UI는 스모크 수준만 있다(`test_ui_smoke.py`, offscreen). 화면을 바꿨으면
+`--demo` 실행으로도 눈으로 확인한다. **headless 테스트에서 모달 창
+(`QMessageBox`, `QProgressDialog`)은 영원히 멈춘다** — 그 경로를 테스트하려면
+`no_modal_dialogs` 픽스처처럼 반드시 가로채야 한다.
 
 ## 리눅스/WSL에서 못 하는 것
 - **Excel 경로 전부** — `xlwings`는 COM(Windows Excel)이 필요하다. 리포메터·
@@ -99,9 +104,15 @@ UI 자체는 테스트가 없다 — 화면 변경 후에는 `--demo` 실행으�
 
 화면은 pyqtgraph가 아니라 matplotlib다. `ui/widgets/plot_canvas.py`가
 `mpl_renderer.render(..., fig=self.figure)`로 같은 렌더러에 그린다("화면=PPT"를
-검증할 필요를 없애는 대신 줌·팬을 포기한 결정). 일부 docstring에 pyqtgraph가
-남아 있는데 이름만 남은 것이다. 점 클릭 제외의 히트테스트 좌표는 **그릴 때
-캐시하지 말고 클릭 시점에 변환**해야 한다(슬롯은 그 뒤 크기가 바뀐다).
+검증할 필요를 없애는 대신 줌·팬을 포기한 결정). 점 클릭 제외의 히트테스트
+좌표는 **그릴 때 캐시하지 말고 클릭 시점에 변환**해야 한다(슬롯은 그 뒤 크기가
+바뀐다). 렌더러는 **pyplot을 쓰지 않는다** — `Figure()`를 직접 만든다. pyplot로
+만들면 전역 매니저에 등록돼 덱 하나당 수백 개가 남는다.
+
+UI 구조: 도크는 `ui/analysis_ws.py`, 탭 3종은 `ui/tabs/`(explore·summary·report).
+지연 계산 토글(버튼 주황색 → 보고 있을 때만 갱신)은 `ui/tabs/common.py`의
+`StaleMixin` 하나에 있다 — 탭을 추가하면 여기에 붙인다. 오래 걸리는 작업
+(PPT·xlsx)은 `ui/widgets/worker.py`의 `run_in_background`로 넘긴다.
 
 ### 계산은 명시적으로만
 표·plot·미리보기는 자동 재계산하지 않는다. Summary [표 만들기] / 탐색 [그리기] /

@@ -69,6 +69,8 @@ class PlotCanvas(FigureCanvasQTAgg):
     def _collect_points(self, spec: PlotSpec) -> None:
         """히트테스트용 데이터 좌표 수집 (픽셀 변환은 클릭 때)."""
         self._series = []
+        if spec.type != "scatter" or spec.mode != "site":
+            return
         st = self.state
         if st.data is None:
             return

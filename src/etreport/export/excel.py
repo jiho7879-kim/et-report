@@ -58,27 +58,61 @@ def build_table(state, cat1: str, opt: SummaryOptions) -> TableData:
     return TableData(cat1, header, rows)
 
 
-def to_tsv(td: TableData) -> str:
+def to_tsv(td: TableData, opt: SummaryOptions | None = None) -> str:
+    """클립보드용 TSV — 화면 표와 **같은 숫자**여야 한다.
+
+    값은 build_table이 이미 Δ까지 반영해 둔 것을 그대로 쓴다. 제외 개수는
+    셀에 붙이지 않고 마지막 캡션으로 넘긴다 — 엑셀에 붙였을 때 숫자로 남도록.
+    """
+    delta = bool(opt and opt.delta_vs_ref)
     lines = ["\t".join(["", "", ""] + [lot for lot, ws in td.header_lots
                                        for _ in ws]),
              "\t".join(["CAT2", "CAT3", "item"] +
                        [wf for _, ws in td.header_lots for wf in ws])]
     for r in td.rows:
         lines.append("\t".join([r["cat2"], r["cat3"], r["item"]] +
-                               [fmt_value(v) for v in r["values"]]))
+                               [fmt_value(v, delta) for v in r["values"]]))
+    if opt and opt.session_caption:
+        lines += ["", opt.session_caption]
     return "\n".join(lines)
 
 
 # ── xlsx (xlwings) ───────────────────────────────────────────
+INVALID_SHEET_CHARS = r"[]:*?/\\"
+
+
+def sheet_name(cat1: str, used: set[str]) -> str:
+    """CAT1 → 엑셀이 받아 주는 시트 이름.
+
+    CAT1은 사용자 템플릿 값이라 `/`나 `[]`가 섞이거나, 31자를 넘겨 잘린 뒤
+    서로 겹칠 수 있다. 그대로 넘기면 COM 예외로 내보내기가 통째로 실패한다.
+    """
+    name = "".join("_" if ch in INVALID_SHEET_CHARS else ch
+                   for ch in (cat1 or "표")).strip() or "표"
+    name = name[:31]
+    if name.casefold() not in used:
+        used.add(name.casefold())
+        return name
+    for i in range(2, 1000):                      # 잘려서 겹치면 번호를 붙인다
+        cand = f"{name[:31 - len(str(i)) - 1]}_{i}"
+        if cand.casefold() not in used:
+            used.add(cand.casefold())
+            return cand
+    raise ValueError(f"시트 이름을 만들 수 없습니다: {cat1}")
+
+
 def export_xlsx(tables: list[TableData], path: str, opt: SummaryOptions) -> None:
     import xlwings as xw
     from xlwings.constants import HAlign, VAlign
 
+    if not tables:
+        raise ValueError("내보낼 표가 없습니다")
     RED_BG, RED_TX, HDR_BG, CAT_BG = 0xEEECFF, 0x1500D7, 0xF5F3F2, 0xFBFAFA
+    used: set[str] = set()
     with xw.App(visible=False, add_book=False) as app:
         wb = app.books.add()
         for td in tables:
-            sht = wb.sheets.add(td.name[:31], after=wb.sheets[-1])
+            sht = wb.sheets.add(sheet_name(td.name, used), after=wb.sheets[-1])
             n_w = sum(len(ws) for _, ws in td.header_lots)
             # 제목
             sht["A1"].value = td.name
@@ -137,7 +171,8 @@ def export_xlsx(tables: list[TableData], path: str, opt: SummaryOptions) -> None
             sht.api.Application.ActiveWindow.SplitRow = 3
             sht.api.Application.ActiveWindow.SplitColumn = 3
             sht.api.Application.ActiveWindow.FreezePanes = True
-        if len(wb.sheets) > len(tables):
-            wb.sheets[0].delete()                        # 기본 빈 시트 제거
+        # 기본 빈 시트 제거 — 표가 하나라도 있을 때만(엑셀은 시트 0개를 허용하지 않는다)
+        if len(wb.sheets) > len(tables) >= 1:
+            wb.sheets[0].delete()
         wb.save(path)
         wb.close()

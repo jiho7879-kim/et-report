@@ -15,7 +15,7 @@ from pathlib import Path
 import polars as pl
 
 from etreport.data.reformatter import Reformatter
-from etreport.model.specs import PageSpec, PlotSpec, ReportSpec, TableRowSpec
+from etreport.model.specs import GEOM_COLUMNS, PageSpec, PlotSpec, ReportSpec, TableRowSpec
 
 PLOT_COLS = ["page", "x", "y", "order", "title1", "title2",
              "Report", "Type", "x_name", "y_name"]
@@ -108,6 +108,10 @@ def _validate(t: Templates, rf: Reformatter) -> None:
                 continue
             if typ == "table":
                 continue
+            mode = str(r.get("Mode") or "site").strip().lower()
+            if mode not in ("site", "avg", "med", "std"):
+                t.warnings.append(TemplateError(
+                    "plot", i, "Mode 값이 잘못되어 site로 처리합니다"))
             xs = [s.strip() for s in str(r["x"] or "").split(",") if s.strip()]
             ys = [s.strip() for s in str(r["y"] or "").split(",") if s.strip()]
             if len(xs) != len(ys) and min(len(xs), len(ys)) != 1:
@@ -116,7 +120,17 @@ def _validate(t: Templates, rf: Reformatter) -> None:
                     f"x {len(xs)}개·y {len(ys)}개 — 쉼표 개수가 달라 건너뜁니다"))
                 t.skip_plot.add(i)
                 continue
-            bad = [a for a in (*xs, *ys) if a not in aliases]
+            if typ == "trend":
+                # x는 기하(W/L) 단일 값 — alias 검사 제외
+                xv = str(r["x"] or "").strip()
+                if xv not in GEOM_COLUMNS:
+                    t.warnings.append(TemplateError(
+                        "plot", i, "trend의 x는 W 또는 L이어야 합니다"))
+                    t.skip_plot.add(i)
+                    continue
+                bad = [a for a in ys if a not in aliases]
+            else:
+                bad = [a for a in (*xs, *ys) if a not in aliases]
             if bad:
                 t.warnings.append(TemplateError(
                     "plot", i,
@@ -160,11 +174,15 @@ def build_report(t: Templates, report: str) -> ReportSpec:
                     continue
                 idx = max(0, min(5, _int(r["order"], 1) - 1))
                 typ = str(r["Type"] or "scatter").lower()
+                mode = str(r.get("Mode") or "site").strip().lower()
+                if mode not in ("site", "avg", "med", "std"):
+                    mode = "site"
                 page.slots[idx] = PlotSpec(
                     title=str(r["title2"] or ""),
                     x=str(r["x"] or ""), y=str(r["y"] or ""),
                     x_name=str(r["x_name"] or ""), y_name=str(r["y_name"] or ""),
                     type=typ,
+                    mode=mode,
                 )
             if any(page.slots):
                 spec.pages.append(page)

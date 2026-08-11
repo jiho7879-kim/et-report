@@ -120,7 +120,11 @@ def _fill_slots(slide, prs, page: PageSpec, exp, styles,
         fig = mpl_renderer.render(spec, plot_data_of(exp, spec),
                                   styles, rf, log_patterns, figsize)
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=150)
+        try:
+            fig.savefig(buf, format="png", dpi=150)
+        finally:
+            # 덱 하나에 plot이 수백 개가 되므로 쓰고 나면 바로 버린다.
+            fig.clear()
         buf.seek(0)
         pic = slide.shapes.add_picture(buf, left, top, width=w, height=h)
         pic.line.color.rgb = RGBColor(0xD2, 0xD2, 0xD7)
@@ -163,8 +167,6 @@ def _mini_table(slide, td: TableData, left, top, w, h) -> None:
         for c in range(cols):
             for p in tbl.cell(r, c).text_frame.paragraphs:
                 p.font.size = FONT_MIN
-                if r == 2 and c >= 3:
-                    pass
     # CAT2 세로 병합
     r0, prev = 2, td.rows[0]["cat2"] if td.rows else None
     for r in range(3, rows + 1):
@@ -183,14 +185,14 @@ def split_table(td: TableData, per: int = WAFERS_PER_SLIDE) -> list[TableData]:
     parts: list[TableData] = []
     n = (len(flat) + per - 1) // per
     for k in range(n):
-        seg = flat[k * per:(k + 1) * per]
-        lots: list[tuple[str, list[str]]] = []
+        idx = list(range(k * per, min((k + 1) * per, len(flat))))
+        seg = [flat[i] for i in idx]     # 위치로 자른다 — 같은 (lot, wafer)가
+        lots: list[tuple[str, list[str]]] = []   # 두 번 나와도 안전
         for lot, wf in seg:
             if lots and lots[-1][0] == lot:
                 lots[-1][1].append(wf)
             else:
                 lots.append((lot, [wf]))
-        idx = [flat.index(x) for x in seg]
         rows = [{**r,
                  "values": [r["values"][i] for i in idx],
                  "offspec": [r["offspec"][i] for i in idx]} for r in td.rows]

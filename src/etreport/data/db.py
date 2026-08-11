@@ -72,6 +72,20 @@ class Store:
                 file_name VARCHAR PRIMARY KEY,
                 loaded_at TIMESTAMP, rows BIGINT, note VARCHAR)""")
 
+    def close(self) -> None:
+        """쓰기 연결을 닫는다 — DuckDB는 파일을 배타적으로 잠그므로, 적재 후
+        닫지 않으면 곧바로 이어지는 읽기 전용 열기가 실패한다."""
+        try:
+            self.con.close()
+        except Exception as e:                    # noqa: BLE001 — 이미 닫혔을 수 있다
+            log.debug("Store 닫기 실패(무시): %s", e)
+
+    def __enter__(self) -> Store:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
     def table_name(self) -> str | None:
         """존재하는 데이터 테이블 이름 (et_data 우선, 없으면 예전 이름)."""
         for t in (TABLE, *LEGACY_TABLES):
@@ -81,14 +95,7 @@ class Store:
                 return t
         return None
 
-    def fact_exists(self) -> bool:
-        return self.table_name() is not None
-
     # ── 적재 ──────────────────────────────────────────────────
-    def already_loaded(self, file_name: str) -> bool:
-        return bool(self.con.execute(
-            "SELECT 1 FROM load_log WHERE file_name=?", [file_name]).fetchone())
-
     def load_wide(self, wide: pl.DataFrame, src_file: str) -> int:
         """버킷 하나 분량의 wide를 dedup 후 적재. 신규 item 컬럼은 자동 추가.
 

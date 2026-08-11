@@ -84,6 +84,32 @@ def test_rf_load_uses_sheet_argument(fake_sheet):
     assert seen[0][1] == 2
 
 
+# ── 옵션 기하 컬럼 W/L ──────────────────────────────────────
+HDR_GEOM = [*HDR, "W", "L"]
+
+
+def test_load_parses_optional_geom_columns(fake_sheet):
+    """W/L 컬럼이 있는 시트 → 모든 Rule에 w/l 파싱 (문자열 숫자·빈 셀 포함)."""
+    fake_sheet(sheet_from_rows(HDR_GEOM, [
+        ["REAL", "ET_A", "A", "N", 1.0, None, "V", None, None, None,
+         "0.34", 12.5],                       # W는 문자열 숫자(Utf8 열)
+        ["REAL", "ET_B", "B", "N", 1.0, None, "V", None, None, None,
+         None, None],                         # 빈 셀 → None
+    ]))
+    a, b = R.load("x.xlsx").rules
+    assert (a.w, a.l) == (0.34, 12.5)         # '0.34'도 숫자로 파싱
+    assert (b.w, b.l) == (None, None)
+    assert (a.row, b.row) == (2, 3)           # 행 번호는 w/l과 무관하게 그대로
+
+
+def test_load_without_geom_columns_keeps_legacy(fake_sheet):
+    """W/L 컬럼이 없는 시트(구계약) → 모든 Rule의 w/l은 None (무회귀)."""
+    fake_sheet(sheet(real("ET_A", "A"), real("ET_B", "B")))
+    rf = R.load("x.xlsx")
+    assert not rf.errors
+    assert all(r.w is None and r.l is None for r in rf.rules)
+
+
 # ── 검증 규칙 ────────────────────────────────────────────────
 def test_duplicate_alias_last_wins(fake_sheet):
     fake_sheet(sheet(

@@ -14,6 +14,8 @@ from etreport.model.specs import ReportSpec
 
 log = logging.getLogger(__name__)
 
+NUMERIC_COLS = {"page", "order"}      # 되쓸 때 숫자 성질을 유지할 열
+
 
 def rows_from_report(spec: ReportSpec) -> list[dict]:
     """ReportSpec → plot 템플릿 행들 (order = 슬롯 위치 1~6)."""
@@ -34,6 +36,7 @@ def rows_from_report(spec: ReportSpec) -> list[dict]:
                 "Type": s.type,
                 "x_name": s.x_name,
                 "y_name": s.y_name,
+                "Mode": s.mode,
             })
             first = False
     return out
@@ -53,9 +56,16 @@ def merged_frame(original: pl.DataFrame, spec: ReportSpec) -> pl.DataFrame:
             new = new.with_columns(pl.lit(None).alias(c))
     new = new.select(cols)
     keep = keep.select(cols)
-    for c in cols:                       # 타입 충돌 방지 — 전부 문자열로
-        keep = keep.with_columns(pl.col(c).cast(pl.Utf8, strict=False))
-        new = new.with_columns(pl.col(c).cast(pl.Utf8, strict=False))
+    # 타입 맞추기 — page·order 같은 숫자 열은 **숫자로 유지**한다.
+    # 전부 문자열로 캐스팅하면 사용자 템플릿의 숫자가 텍스트로 바뀌어
+    # 정렬·수식이 깨지고 엑셀이 '텍스트로 저장된 숫자' 경고를 띄운다.
+    for c in cols:
+        if c in NUMERIC_COLS:
+            keep = keep.with_columns(pl.col(c).cast(pl.Float64, strict=False))
+            new = new.with_columns(pl.col(c).cast(pl.Float64, strict=False))
+        else:
+            keep = keep.with_columns(pl.col(c).cast(pl.Utf8, strict=False))
+            new = new.with_columns(pl.col(c).cast(pl.Utf8, strict=False))
     return pl.concat([keep, new], how="vertical")
 
 

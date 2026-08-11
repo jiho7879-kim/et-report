@@ -10,7 +10,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from dataclasses import fields as dc_fields
 
-from etreport.paths import settings_file
+from etreport.paths import settings_file, write_json_atomic
 
 SCHEMA_VERSION = 3
 
@@ -76,10 +76,9 @@ class Settings:
 
     # ── 영속화 ────────────────────────────────────────────────
     def save(self) -> None:
-        settings_file().write_text(
-            json.dumps(asdict(self), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        # 앱 종료 시점에도 호출된다 — 중간에 끊겨 파일이 깨지면 프리셋이 전부
+        # 사라지므로 임시 파일에 쓰고 교체한다.
+        write_json_atomic(settings_file(), asdict(self), indent=2)
 
     @classmethod
     def load(cls) -> Settings:

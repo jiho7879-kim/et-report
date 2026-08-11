@@ -12,7 +12,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from etreport.paths import appdata_dir
+from etreport.paths import appdata_dir, write_json_atomic
 
 log = logging.getLogger(__name__)
 
@@ -43,10 +43,12 @@ def load(db_path: str) -> dict[str, dict]:
 
 
 def save(db_path: str, points: dict[str, dict]) -> None:
+    # 점을 찍을 때마다 호출된다 — 도중에 끊겨도 이전 목록이 살아 있도록 원자적으로.
     try:
-        _file(db_path).write_text(json.dumps(
+        write_json_atomic(
+            _file(db_path),
             {"db": str(Path(db_path).resolve()), "points": points},
-            ensure_ascii=False, indent=1), encoding="utf-8")
+            indent=1)
     except OSError as e:
         log.warning("제외 목록 저장 실패: %s", e)
 

@@ -53,15 +53,13 @@ def _reformatter() -> Reformatter:
 def _report() -> ReportSpec:
     r = ReportSpec(report="M2_ET")
     p1 = PageSpec(1, "NMOS 특성 비교")
-    p1.slots[0] = PlotSpec("Idsat vs Vtlin", "Vtlin N SVT", "Idsat N SVT",
-                           ref_band=True)
+    p1.slots[0] = PlotSpec("Idsat vs Vtlin", "Vtlin N SVT", "Idsat N SVT")
     p1.slots[1] = PlotSpec("SVT+LVT 중첩", "Vtlin N SVT, Vtsat N SVT",
                            "Idsat N SVT, Idsat N LVT", x_name="Vt [V]")
     p1.slots[2] = PlotSpec("요약 — NMOS", type="table")
     p1.slots[3] = PlotSpec("Ioff (자동 log)", "Vtlin N SVT", "Ioff N SVT")
     p2 = PageSpec(2, "PMOS · 상관")
-    p2.slots[0] = PlotSpec("Idsat vs Vtlin (P)", "Vtlin P SVT", "Idsat P SVT",
-                           ref_band=True)
+    p2.slots[0] = PlotSpec("Idsat vs Vtlin (P)", "Vtlin P SVT", "Idsat P SVT")
     p2.slots[1] = PlotSpec("N/P ratio", "Vtlin N SVT", "Idsat N/P")
     p2.slots[2] = PlotSpec("요약 — PMOS", type="table")
     r.pages = [p1, p2]
@@ -120,7 +118,7 @@ def load_demo(state: AppState) -> None:
     state.factors = ["M1"]
     state.data = _points(state.rf)
     apply_split(state)
-    state.explore = PlotSpec(x="Vtlin N SVT", y="Idsat N SVT", ref_band=True)
+    state.explore = PlotSpec(x="Vtlin N SVT", y="Idsat N SVT")
 
 
 def apply_split(state: AppState) -> None:

@@ -1,4 +1,37 @@
 ## (미배포)
+
+### 코드 리뷰 반영 (P0 1 · P1 4 · P2 9 · P3 8)
+- **[P0] 개발 실행에서 [지금 업데이트]를 누르면 소스 트리가 지워지던 문제** —
+  `install_dir()`이 frozen이 아닐 때 저장소 루트를 돌려줬고, 그 경로가
+  `robocopy /MIR`의 대상이 됐다. 이제 exe 배포본이 아니면 적용을 거부한다
+  (`UpdateNotApplicable`). 배치도 `/MIR` → `/E`(삭제 없는 복사), ASCII 전용,
+  zip 경로 검증 추가
+- **[P1] PPT 생성 때마다 matplotlib Figure가 쌓이던 누수** — pyplot 대신
+  Figure를 직접 만들고 저장 후 정리. 덱 하나에 수백 장이 남던 것이 0
+- **[P1] DuckDB 연결을 닫지 않던 문제** — 적재 Store를 finally에서 닫고
+  (안 닫으면 이어지는 [분석] 자동 연결이 잠금으로 실패), [적용]마다 새던
+  읽기 전용 연결도 정리(`loader.close_store`)
+- **[P1] 리포메팅이 추출 원본 parquet를 덮어쓰던 문제** — `*_rf.parquet`로
+  따로 쓴다. 리포메터를 고쳐 다시 돌릴 때 재추출이 필요 없다
+- **[P1] Summary [복사]가 Δ vs REF를 무시해 화면과 다른 숫자를 주던 문제** —
+  복사·xlsx·PPT가 모두 `build_table`/`to_tsv` 한 경로만 쓴다
+- [P2] 추출 중 창을 닫으면 죽던 문제(QThread 정리), 설정·제외·카탈로그 JSON을
+  원자적으로 저장(종료 중 크래시로 프리셋이 날아가지 않게)
+- [P2] xlsx 시트 이름 정리(`/`·`[]`·31자·중복), 표 0개일 때 방어
+- [P2] 템플릿 되쓰기에서 page·order를 숫자로 유지(텍스트로 바뀌던 문제)
+- [P2] 제외 클릭 1회당 재계산 축소 — 그룹 수만큼 돌던 필터를 group_by 1회로,
+  리포트 슬롯은 캔버스를 재생성하지 않고 다시 그리기만
+- [P2] PPT·xlsx를 워커 스레드로(진행 창 표시, COM 초기화 포함)
+- [P2] Impala 조건 이스케이프 — 역슬래시, LIKE의 `_`
+- [P2] staging parquet 7일 후 자동 정리
+- [P2] `analysis_ws.py`(1,236줄)를 `ui/tabs/{explore,summary,report,common}.py`로
+  분할, 지연 계산 토글을 `StaleMixin`으로 통합
+- [P3] 죽은 코드 제거(`fact_exists`·`already_loaded`·no-op 분기), split 라벨을
+  튜플로 다뤄 코드에 구분자가 들어가도 안전, SQL 결과 CSV 스트리밍 저장,
+  추출 기간 역전 검증
+- 테스트 40개 추가 — 위 수정들의 회귀 테스트 + 데모 데이터로 창을 조립하는
+  UI 스모크(headless)
+
 - **리포메터 `Sum()` 이 NULL 대신 0을 주던 문제 수정** — 인자가 전부 미측정이면
   polars가 0을 돌려줘서, 측정이 아예 없는 wafer의 ADDP가 '0'이라는 값으로
   plot·표·Δ에 들어갔다. 행 단위 엔진과 같은 NULL로 통일

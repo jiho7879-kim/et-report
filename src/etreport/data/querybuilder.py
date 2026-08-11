@@ -22,7 +22,13 @@ _NUM = re.compile(r"^-?\d+(?:\.\d+)?$")
 
 
 def _q(v: str) -> str:
-    return "'" + v.replace("'", "''") + "'"
+    """문자열 리터럴 인용.
+
+    Impala는 문자열 안의 역슬래시를 이스케이프 문자로 해석한다. 역슬래시를
+    그대로 두면 값 끝의 `\\`가 닫는 따옴표를 먹어 SQL이 깨지므로 먼저 처리한다
+    (순서 중요 — 역슬래시를 먼저, 그다음 따옴표).
+    """
+    return "'" + v.replace("\\", "\\\\").replace("'", "''") + "'"
 
 
 class ConditionError(ValueError):
@@ -43,7 +49,10 @@ def _string_sql(col: str, val: str, mode: str) -> str:
         if tok.startswith("!"):
             exc.append(tok[1:])
         elif "*" in tok:
-            like.append(tok.replace("%", r"\%").replace("*", "%"))
+            # `_`도 LIKE의 와일드카드(한 글자)다 — 값에 들어 있으면 이스케이프해야
+            # PA_123 같은 lot이 PA0123까지 조용히 잡히는 일이 없다.
+            like.append(tok.replace("%", r"\%").replace("_", r"\_")
+                        .replace("*", "%"))
         else:
             inc.append(tok)
     parts: list[str] = []

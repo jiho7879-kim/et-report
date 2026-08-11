@@ -31,11 +31,28 @@ def item_columns(df: pl.DataFrame) -> list[str]:
     return [c for c in df.columns if c not in RESERVED]
 
 
+def close_store(state: AppState) -> None:
+    """이전에 열어 둔 읽기 전용 연결을 닫는다.
+
+    [적용]을 누를 때마다 새 연결을 만들기 때문에, 닫지 않으면 세션이 길어질수록
+    연결과 파일 핸들이 계속 쌓인다(Windows에서는 DB 파일도 계속 잡혀 있다).
+    """
+    con = getattr(state, "store", None)
+    if con is None:
+        return
+    try:
+        con.close()
+    except Exception as e:                          # noqa: BLE001 — 이미 닫혔을 수 있다
+        log.debug("이전 DB 연결 닫기 실패(무시): %s", e)
+    state.store = None
+
+
 def load_state(state: AppState, db_path: str, table: str | None = None) -> str:
     """DB를 열어 state.data를 채우고 상태 요약을 반환."""
     if not Path(db_path).exists():
         raise FileNotFoundError(f"파일이 없습니다: {db_path}")
 
+    close_store(state)                              # 이전 연결부터 정리
     con = open_readonly(db_path)
     tbl = compat.pick_table(con, table)
     if tbl is None:

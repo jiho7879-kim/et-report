@@ -20,6 +20,9 @@ def fmt_value(v: float | None, delta: bool = False) -> str:
     return f"+{s}" if delta and v >= 0 else s
 
 
+GEOM_COLUMNS = ("W", "L")   # 리포메터 옵션 기하 컬럼 — trend chart X축
+
+
 @dataclass
 class GroupStyle:
     gid: str
@@ -43,8 +46,8 @@ class PlotSpec:
     y: str = ""
     x_name: str = ""
     y_name: str = ""
-    type: str = "scatter"            # scatter | table | box(예정)
-    ref_band: bool = False
+    type: str = "scatter"            # scatter | table | box(예정) | trend
+    mode: str = "site"               # site | avg | med | std — 그릴 데이터 레벨
     logx_mode: str = "auto"          # auto | log | linear
     logy_mode: str = "auto"
     range_mode: str = "auto"         # auto | manual

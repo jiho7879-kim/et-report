@@ -80,6 +80,14 @@ class MainWindow(QMainWindow):
         self._switch(1)          # 기본: 분석
         self._refresh_pill()
 
+    def closeEvent(self, e) -> None:
+        """종료 정리 — 실행 중인 추출 스레드와 열려 있는 DB 연결을 닫는다."""
+        from etreport.data.loader import close_store
+
+        self.data_ws.shutdown()
+        close_store(self.state)
+        super().closeEvent(e)
+
     def _after_load(self) -> None:
         """추출·적재가 끝나면 같은 DB를 분석에 연결하고 화면 전환."""
         path = self.data_ws.preset().db_path
