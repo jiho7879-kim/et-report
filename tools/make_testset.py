@@ -38,14 +38,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
-import polars as pl  # noqa: E402
+import polars as pl
 
-from etreport.data.reformatter import (  # noqa: E402
-    Reformatter,
-    apply as rf_apply,
-    compile_formula,
-)
-from tests.factory import make_long, make_reformatter, rules_frame  # noqa: E402
+from etreport.data import reformatter as R
+from tests.factory import make_long, make_reformatter, rules_frame
+
+Reformatter = R.Reformatter
+compile_formula = R.compile_formula
+rf_apply = R.apply
 
 
 def write_reformatter(rf: Reformatter, out: Path) -> Path:
@@ -54,24 +54,24 @@ def write_reformatter(rf: Reformatter, out: Path) -> Path:
     xlsx = out / "reformatter_TEST.xlsx"
     try:
         import xlwings as xw
-    except ImportError:
+
+        app = xw.App(visible=False, add_book=False)
+        try:
+            wb = app.books.add()
+            sht = wb.sheets[0]
+            sht.name = "REFORMATTER"
+            sht.range((1, 1)).value = [frame.columns, *frame.rows()]
+            sht.autofit("c")
+            wb.save(str(xlsx))
+            wb.close()
+        finally:
+            app.quit()
+    except Exception as e:      # noqa: BLE001 — Excel 없는 PC면 CSV로 떨어뜨린다
         csv = xlsx.with_suffix(".csv")
         frame.write_csv(csv)
-        print(f"  xlwings 없음 → CSV로 저장: {csv}")
-        print("    (사내 PC에서 엑셀로 열어 xlsx로 저장한 뒤 앱에서 지정하세요)")
+        print(f"  Excel을 쓸 수 없어({type(e).__name__}) CSV로 저장: {csv}")
+        print("    → 사내 PC에서 엑셀로 열어 xlsx로 저장한 뒤 앱에서 지정하세요")
         return csv
-
-    app = xw.App(visible=False, add_book=False)
-    try:
-        wb = app.books.add()
-        sht = wb.sheets[0]
-        sht.name = "REFORMATTER"
-        sht.range((1, 1)).value = [frame.columns, *frame.rows()]
-        sht.autofit("c")
-        wb.save(str(xlsx))
-        wb.close()
-    finally:
-        app.quit()
     print(f"  리포메터: {xlsx}")
     return xlsx
 
@@ -95,7 +95,7 @@ def write_expected(rf: Reformatter, long_df: pl.DataFrame, out: Path) -> Path:
     exp = pl.DataFrame(rows)
     p = out / "expected.csv"
     exp.write_csv(p)
-    print(f"  정답표: {p}  ({exp.height:,}행 — ADDP {len(rf.addps())}개)")
+    print(f"  정답표: {p}  ({exp.height:,}행 — 1일차 · ADDP {len(rf.addps())}개)")
     return p
 
 

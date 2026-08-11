@@ -29,3 +29,6 @@ settings.json
 column_catalog.json
 staging/
 sessions/
+
+# opencode 세션 아티팩트
+.omo/

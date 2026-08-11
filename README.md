@@ -12,6 +12,21 @@ python app.py --demo     # 샘플 데이터로 UI 확인
 ```
 `bigdataquery`(추출)·`xlwings`(엑셀 읽기/쓰기)는 사내 PC에서만 필요합니다.
 
+**테스트·린터**
+```
+pip install pytest ruff
+python -m pytest              # 기본 (수 초)
+python -m pytest -m slow -s   # 실측 규모: item 1000개 · 1일 20만 행
+ruff check .
+```
+Excel도 bdq도 없이 리포메터·템플릿·적재·분석 로딩을 전부 검증합니다.
+사내 PC에서 앱으로 직접 확인할 testset은 아래 명령으로 만듭니다 —
+리포메터 xlsx, 추출 결과와 같은 모양의 long parquet, 그리고 **정답표**가
+함께 나옵니다.
+```
+python tools/make_testset.py --out C:\temp\ettest --days 7 --load
+```
+
 **한글 폰트 (Windows/macOS/Linux 공통)**
 
 UI와 그래프 폰트는 `src/etreport/fonts.py` 가 실행할 때 OS에 맞게 고릅니다 —

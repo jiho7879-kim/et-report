@@ -16,8 +16,8 @@ from tests.factory import make_long, make_reformatter
 
 @pytest.fixture
 def loaded(tmp_path, monkeypatch):
-    """합성 long → 리포메팅 → parquet → DuckDB 적재. (버킷 수는 줄여 빠르게)"""
-    monkeypatch.setattr(db, "N_BUCKETS", 8)
+    """합성 long → 리포메팅 → parquet → DuckDB 적재. (버킷을 여러 개로 강제)"""
+    monkeypatch.setattr(db, "TARGET_CELLS", 200)     # 일부러 잘게 쪼갠다
     rf = make_reformatter(n_real=25, n_addp=6, seed=11)
     src = make_long([r.itemid for r in rf.reals()],
                     lots=1, wafers=5, chips=4, seed=11, null_rate=0.05)
@@ -60,7 +60,7 @@ def test_alias_columns_land_in_db(loaded):
 
 def test_reload_same_file_does_not_duplicate(loaded, monkeypatch):
     """같은 parquet를 다시 적재해도 key_hash ANTI JOIN으로 행이 늘지 않는다."""
-    monkeypatch.setattr(db, "N_BUCKETS", 8)
+    monkeypatch.setattr(db, "TARGET_CELLS", 200)
     store = db.Store(loaded["db"])
     before = store.con.execute("select count(*) from et_data").fetchone()[0]
     db.pivot_and_load(store, [loaded["parquet"]])

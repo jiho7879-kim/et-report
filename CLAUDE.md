@@ -15,12 +15,49 @@ myenv/bin/python build/build_release.py            # PyInstaller onedir → dist
 myenv/bin/python build/build_release.py --publish  # 사내 GHE 릴리스 업로드까지 (gh CLI)
 ```
 
-`myenv/`가 이미 있는 venv(Python 3.11, editable 설치)다. 테스트·린터 설정은
-없다 — pytest/ruff 설정도, `tests/` 디렉터리도 존재하지 않는다(일부 docstring이
-`tests/ 참조`라고 하지만 실제로는 없음). 동작 확인은 `--demo` 실행이 사실상
-유일한 수단이므로, 변경 후에는 데모 모드로 화면이 뜨는지 확인한다.
+`myenv/`가 이미 있는 venv(Python 3.11, editable 설치)다.
 
-### 리눅스/WSL에서 못 하는 것
+## 테스트 · 린터
+
+```bash
+myenv/bin/python -m pytest                          # 기본 (slow 제외, 수 초)
+myenv/bin/python -m pytest -m slow -s               # 실측 규모: 20만행/일 · item 1000
+myenv/bin/python -m pytest tests/test_reformatter_vector.py -q   # 파일 하나
+myenv/bin/python -m pytest -k "addp and not slow"   # 이름으로 고르기
+myenv/bin/ruff check .                              # 린트 (설정은 pyproject.toml)
+myenv/bin/ruff check --fix .                        # 안전한 것만 자동 수정
+```
+
+설정은 `pyproject.toml`의 `[tool.pytest.ini_options]`·`[tool.ruff]`.
+`addopts`에 `-m 'not slow'`가 들어 있어 대용량 테스트는 명시할 때만 돈다.
+마커는 `slow`(대용량)과 `excel`(사내 PC 전용) 두 개다.
+
+**테스트의 전제**: Excel(xlwings)도 bdq도 없이 전부 돈다. Excel 경로는
+`xlio.read_sheet`를 가짜로 바꿔(`fake_sheet` 픽스처) 시트 파싱·검증 로직만
+실제 코드로 태운다. 그래서 리눅스/WSL에서도 리포메터·템플릿·적재·분석 로딩을
+전부 검증할 수 있다 — 검증 못 하는 건 xlwings COM 호출 자체뿐이다.
+
+| 파일 | 무엇을 고정하나 |
+|---|---|
+| `tests/factory.py` | 합성 testset 생성기 (실측 규모: item 1000 · 20만행/일) |
+| `test_reformatter_load.py` | 시트 스키마 계약, ALIAS 중복·전방참조·수식 화이트리스트 |
+| `test_reformatter_formula.py` | 행 단위 엔진의 의미론(NULL·0나눗셈·Std n-1·안전성) |
+| `test_reformatter_vector.py` | **벡터 경로 ≡ 행 단위 경로** (여기서 못 잡으면 현장에서 못 잡는다) |
+| `test_reformatter_apply.py` | SCALE→ABS→ADDP 순서, ALIAS 개명, 키별 계산 |
+| `test_templates.py` | plot/table 템플릿 검증과 Report 분리 |
+| `test_pipeline_duckdb.py` | 리포메팅 → 적재 → 읽기전용 로딩 → 제외 사이드카 |
+| `test_db_buckets.py` | 버킷 수가 저장 결과를 바꾸지 않는다는 불변식(예전 DB 호환) |
+| `test_analysis_core.py` | 축 범위 ×1.2 · 로그 패턴 · wafer 집계 · 자릿수 |
+| `test_bigset.py` (slow) | 실측 규모 성능·정확성 회귀 (`-s`로 단계별 시간 출력) |
+
+`tools/make_testset.py`는 **사내 PC에서 실제 앱으로** 리포메터를 확인하기 위한
+testset(리포메터 xlsx + long parquet + 정답표 CSV, `--load`면 DuckDB까지)을 만든다.
+정답표는 벡터 경로를 타지 않는 행 단위 엔진으로 계산하므로 앱 결과와 숫자로
+대조할 수 있다.
+
+UI 자체는 테스트가 없다 — 화면 변경 후에는 `--demo` 실행으로 확인한다.
+
+## 리눅스/WSL에서 못 하는 것
 - **Excel 경로 전부** — `xlwings`는 COM(Windows Excel)이 필요하다. 리포메터·
   템플릿·xlsx 내보내기는 `ImportError`로 떨어지고 UI가 "사내 PC에서 실행하세요"를
   띄운다. 이 경로는 코드 리뷰로만 검증 가능.
@@ -58,6 +95,8 @@ myenv/bin/python build/build_release.py --publish  # 사내 GHE 릴리스 업로
 | wafer 집계(평균/n-1 표준편차) | `model/aggregate.py` — 화면·xlsx·PPT 공용, group_by 1회 |
 | 그리기 | `render/mpl_renderer.py` — **화면 캔버스도 이걸 쓴다** |
 
+단일 진실을 건드렸다면 `pytest`가 그 규칙을 지키는지 먼저 확인한다.
+
 화면은 pyqtgraph가 아니라 matplotlib다. `ui/widgets/plot_canvas.py`가
 `mpl_renderer.render(..., fig=self.figure)`로 같은 렌더러에 그린다("화면=PPT"를
 검증할 필요를 없애는 대신 줌·팬을 포기한 결정). 일부 docstring에 pyqtgraph가
@@ -89,7 +128,13 @@ ADDP FORM 열처럼 위가 비어 있는 열 때문에 필요하다 — 추론�
 - 분석용 wide 프레임의 예약 컬럼은 `key, lot, wafer, gid`이고 나머지가 item이다
   (`loader.RESERVED`).
 - 적재는 `key_hash` ANTI JOIN(행 중복) + `load_log`(파일 중복) 2단으로 막는다.
+  `key_hash_expr()`는 **절대 바꾸지 않는다** — 바뀌면 기존 DB에 이어 적재할 때
+  같은 포인트가 중복으로 들어간다.
 - 원본 컬럼 `et_value`는 내부 표준 `value`로 정규화한다.
+- 적재 버킷 수는 `plan_buckets(키 수, item 수)`가 데이터 모양을 보고 정한다
+  (피벗 한 번의 셀 수를 `TARGET_CELLS` 이하로, 상한은 `N_BUCKETS`). 버킷은
+  **작업 단위일 뿐 저장 내용과 무관**하므로 예전에 512개로 적재한 DB와 섞여도
+  안전하다 — 이 불변식은 `test_db_buckets.py`가 지킨다.
 
 ## 리포메터와 템플릿 (Excel 스키마 = 계약)
 

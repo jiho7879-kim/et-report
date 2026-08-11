@@ -40,8 +40,14 @@ class MainWindow(QMainWindow):
         h = QHBoxLayout(bar)
         h.setContentsMargins(18, 8, 18, 8)
         h.setSpacing(10)
-        logo = QLabel("ET <b>Report</b>")
-        logo.setObjectName("logo")
+        logo = QWidget()                      # 강조는 색이므로 색은 QSS가 갖는다
+        lg = QHBoxLayout(logo)
+        lg.setContentsMargins(0, 0, 0, 0)
+        lg.setSpacing(0)
+        for text, name in (("ET ", "logo"), ("Report", "logoAccent")):
+            lab = QLabel(text)
+            lab.setObjectName(name)
+            lg.addWidget(lab)
         h.addWidget(logo)
         h.addSpacing(14)
         self.ws_buttons: list[QPushButton] = []

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 from datetime import datetime
 from pathlib import Path
 
@@ -23,12 +24,32 @@ log = logging.getLogger(__name__)
 KEY9 = ["root_lot_id", "wafer_id", "chip_x_pos", "chip_y_pos",
         "temperature", "step_id", "step_seq", "total_site_cnt", "tkout_time"]
 KEY8 = KEY9[:-1]                     # retest 구분 제외한 논리 키
-N_BUCKETS = 512                      # 피벗 메모리 다이얼 (계획서 §4)
+N_BUCKETS = 512                      # 피벗 메모리 다이얼 상한 (계획서 §4)
+TARGET_CELLS = 4_000_000             # 버킷 하나가 만드는 wide 셀 수 목표(≈32MB)
 TABLE = "et_data"                    # 손코딩 시절과 동일한 이름
 LEGACY_TABLES = ("fact",)            # 예전 버전이 만든 DB도 읽는다
 
 
+def plan_buckets(n_keys: int, n_items: int) -> int:
+    """피벗 한 번이 만드는 셀(키×item)이 TARGET_CELLS를 넘지 않는 최소 버킷 수.
+
+    버킷은 **피벗 메모리를 나누기 위한 작업 단위일 뿐** 저장되는 내용과는
+    무관하다 — key_hash도, 컬럼도, 중복 제거 결과도 버킷 수와 무관하게 같다.
+    그래서 예전에 512개로 적재해 둔 DB에 이어 적재해도 안전하다.
+
+    512개 고정이던 시절에는 키가 적고 item이 많은(=현장에서 가장 흔한) 모양에서
+    거의 빈 버킷 수백 개에 피벗과 INSERT를 반복했다. 20만 행 적재의 대부분이
+    그 오버헤드였다.
+    """
+    if n_keys <= 0 or n_items <= 0:
+        return 1
+    return max(1, min(N_BUCKETS, math.ceil(n_keys * n_items / TARGET_CELLS)))
+
+
 def key_hash_expr() -> pl.Expr:
+    """포인트 식별자. **절대 바꾸지 말 것** — 기존 DB에 이어 적재할 때 이 값으로
+    중복을 걸러내므로, 계산식이 바뀌면 같은 포인트가 두 번 들어간다.
+    """
     joined = pl.concat_str([pl.col(c).cast(pl.Utf8).fill_null("␀") for c in KEY9],
                            separator="|")
     return joined.map_elements(
@@ -69,7 +90,11 @@ class Store:
             "SELECT 1 FROM load_log WHERE file_name=?", [file_name]).fetchone())
 
     def load_wide(self, wide: pl.DataFrame, src_file: str) -> int:
-        """버킷 하나 분량의 wide를 dedup 후 적재. 신규 item 컬럼은 자동 추가."""
+        """버킷 하나 분량의 wide를 dedup 후 적재. 신규 item 컬럼은 자동 추가.
+
+        반환값은 **실제로 들어간 행 수**다(중복으로 걸러진 것은 빼고). 화면의
+        '적재 완료 — N행'이 이 값이므로, 같은 파일을 다시 적재하면 0이 나온다.
+        """
         if wide.is_empty():
             return 0
         self.con.register("incoming", wide.to_arrow())
@@ -77,6 +102,7 @@ class Store:
         if tbl is None:
             self.con.execute(
                 'CREATE TABLE "' + TABLE + '" AS SELECT * FROM incoming')
+            inserted = len(wide)
         else:
             have = {r[0] for r in self.con.execute(
                 "SELECT column_name FROM information_schema.columns "
@@ -86,15 +112,16 @@ class Store:
                     dd = "DOUBLE" if dt in (pl.Float64, pl.Float32) else "VARCHAR"
                     self.con.execute(
                         f'ALTER TABLE "{tbl}" ADD COLUMN "{col}" {dd}')
-            # 2단: 행 단위 중복 차단
-            self.con.execute(
+            # 2단: 행 단위 중복 차단. DuckDB는 INSERT 결과로 넣은 행 수를 준다.
+            got = self.con.execute(
                 f'INSERT INTO "{tbl}" BY NAME SELECT i.* FROM incoming i '
-                f'ANTI JOIN "{tbl}" f USING(key_hash)')
+                f'ANTI JOIN "{tbl}" f USING(key_hash)').fetchone()
+            inserted = int(got[0]) if got else 0
         self.con.unregister("incoming")
         self.con.execute(
             "INSERT OR REPLACE INTO load_log VALUES (?, ?, ?, '')",
-            [src_file, datetime.now(), len(wide)])
-        return len(wide)
+            [src_file, datetime.now(), inserted])
+        return inserted
 
     # ── 뷰 체인 ───────────────────────────────────────────────
     def rebuild_views(self) -> None:
@@ -130,37 +157,50 @@ def pivot_and_load(store: Store, parquet_files: list[Path],
                    on_progress=None) -> int:
     """long parquet들 → key_hash 버킷 재파티션 → 버킷별 피벗 → 적재.
 
-    피벗 메모리 피크는 버킷 수(N_BUCKETS)로 제어한다. item은 step 간 거의
-    중복(밀집)이므로 wide가 정답 구조다 — 계획서 §4 참조.
+    item은 step 간 거의 중복(밀집)이므로 wide가 정답 구조다 — 계획서 §4 참조.
+    피벗 메모리 피크는 버킷 수로 제어하되, 그 수는 데이터 모양(키 수 × item 수)을
+    보고 정한다(plan_buckets). 버킷은 작업 단위일 뿐이라 **DB에 들어가는 내용은
+    버킷 수와 무관**하다 — 예전 DB에 이어 적재해도 결과가 같다.
 
-    성능 주의: key_hash는 행마다 blake2b를 부르는 파이썬 UDF라 비싸다.
-    예전에는 버킷마다 lazy를 collect해서 **N_BUCKETS번(512회) 전체 재계산**이
-    일어났다 — 20만 행 적재에 195초. 아래처럼 한 번만 실체화한 뒤 버킷으로
-    쪼개면 같은 데이터가 0.6초에 들어간다. 메모리 피크는 리포메팅 단계에서
-    이미 파일 하나를 통째로 읽는 것과 같은 수준이다.
+    성능 주의 두 가지:
+      1) key_hash는 행마다 blake2b를 부르는 파이썬 UDF라 비싸다. 예전에는
+         버킷마다 lazy를 collect해서 512회 전체 재계산이 일어났다(20만 행 195초).
+         아래처럼 한 번만 실체화한다.
+      2) 버킷 하나마다 피벗 1회 + DuckDB INSERT 1회가 붙는다. 512개 고정이면
+         키 200개짜리 하루치에도 그 왕복이 170번 생겼다.
     """
     total = 0
     lazy = pl.scan_parquet([str(p) for p in parquet_files])
     cols = lazy.collect_schema().names()
     if "et_value" in cols and "value" not in cols:
         lazy = lazy.rename({"et_value": "value"})
-    lazy = lazy.with_columns(key_hash=key_hash_expr())
-    lazy = lazy.with_columns(
-        bucket=pl.col("key_hash").str.slice(0, 4)
-               .str.to_integer(base=16) % N_BUCKETS)
-    frame = lazy.collect()                       # ← key_hash 계산은 여기 한 번뿐
-    parts = {(k[0] if isinstance(k, tuple) else k): v
-             for k, v in frame.partition_by("bucket", as_dict=True).items()}
-    for b in range(N_BUCKETS):
+    frame = lazy.with_columns(key_hash=key_hash_expr()).collect()
+    if frame.is_empty():
+        return 0
+
+    n_keys = frame["key_hash"].n_unique()
+    n_items = frame["item_id"].n_unique()
+    n_buckets = plan_buckets(n_keys, n_items)
+    log.info("적재 버킷 %d개 — 키 %d · item %d · %d행",
+             n_buckets, n_keys, n_items, frame.height)
+
+    if n_buckets == 1:
+        parts = {0: frame}
+    else:
+        frame = frame.with_columns(
+            bucket=pl.col("key_hash").str.slice(0, 4)
+                   .str.to_integer(base=16) % n_buckets)
+        parts = {(k[0] if isinstance(k, tuple) else k): v.drop("bucket")
+                 for k, v in frame.partition_by("bucket", as_dict=True).items()}
+
+    for b in range(n_buckets):
         part = parts.get(b)
-        if part is None or part.is_empty():
-            continue
-        part = part.drop("bucket")
-        wide = part.pivot(on="item_id", index=[*KEY9, "line_id", "key_hash"],
-                          values="value", aggregate_function="first")
-        total += store.load_wide(wide, src_file=f"bucket_{b}")
+        if part is not None and not part.is_empty():
+            wide = part.pivot(on="item_id", index=[*KEY9, "line_id", "key_hash"],
+                              values="value", aggregate_function="first")
+            total += store.load_wide(wide, src_file=f"bucket_{b}")
         if on_progress:
-            on_progress(b + 1, N_BUCKETS)
+            on_progress(b + 1, n_buckets)
     for p in parquet_files:
         store.con.execute(
             "INSERT OR REPLACE INTO load_log VALUES (?, ?, 0, 'file')",

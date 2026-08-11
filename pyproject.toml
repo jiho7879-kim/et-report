@@ -62,6 +62,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "app.py" = ["E402"]                  # sys.path 조작 후 import (진입점)
 "build/build_release.py" = ["E402"]
+"tools/*.py" = ["E402"]              # ROOT/src를 sys.path에 얹은 뒤 import
 "tests/*" = ["S307", "SIM117"]
 "src/etreport/update/apply.py" = ["W291"]   # .bat 스크립트 문자열 안의 공백은 그대로 둔다
 

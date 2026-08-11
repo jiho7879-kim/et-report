@@ -109,9 +109,11 @@ def test_full_pipeline_one_day(big, tmp_path, appdata):
     n = db.pivot_and_load(store, [p])
     el_load = time.monotonic() - t
     store.con.close()
-    print(f"  DuckDB 적재       {n:,}행(wide)  ({el_load:.1f}초)")
-    # 버킷마다 lazy를 다시 collect하던 시절엔 같은 데이터가 195초였다.
-    assert el_load < 180, f"적재가 {el_load:.0f}초 — key_hash 재계산 회귀 의심"
+    print(f"  DuckDB 적재       {n:,}행(wide)  ({el_load:.1f}초)"
+          f"  · 버킷 {db.plan_buckets(WAFERS * CHIPS, N_ITEM + N_ADDP)}개")
+    # 이력: 버킷 512개 고정 + 버킷마다 key_hash 재계산 → 195초,
+    #       재계산만 걷어내고 512개 유지 → 27초, 버킷 수를 데이터에 맞춤 → 1.4초.
+    assert el_load < 60, f"적재가 {el_load:.0f}초 — 버킷 수·key_hash 재계산 회귀 의심"
     assert n == WAFERS * CHIPS
 
     t = time.monotonic()
@@ -130,6 +132,29 @@ def test_full_pipeline_one_day(big, tmp_path, appdata):
     expect = out.filter(pl.col("item_id") == alias)["value"].sort().to_list()
     got = st.data[alias].drop_nulls().sort().to_list()
     assert got == pytest.approx(expect)
+
+
+def test_seven_days_load(big, tmp_path):
+    """일주일치(140만 행) 적재 — 실사용에서 가장 무거운 축."""
+    from datetime import date, timedelta
+
+    rf, _ = big
+    itemids = [r.itemid for r in rf.reals()]
+    files = []
+    for d in range(7):
+        day = date(2026, 8, 1) + timedelta(days=d)
+        src = make_long(itemids, lots=1, wafers=WAFERS, chips=CHIPS,
+                        seed=200 + d, start=day)
+        p = tmp_path / f"raw_{day:%Y%m%d}_{day:%Y%m%d}.parquet"
+        rf_apply(rf, src).write_parquet(p)
+        files.append(p)
+
+    t = time.monotonic()
+    n = db.pivot_and_load(db.Store(tmp_path / "week.duckdb"), files)
+    el = time.monotonic() - t
+    print(f"  7일 적재          {n:,}행(wide)  ({el:.1f}초)")
+    assert n == 7 * WAFERS * CHIPS
+    assert el < 120
 
 
 def test_seven_days_reformatting(big):
