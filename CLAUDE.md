@@ -8,7 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 myenv/bin/python app.py            # 개발 실행 (빈 상태)
-myenv/bin/python app.py --demo     # 샘플 데이터로 UI 확인 (DB·Excel 없이)
+myenv/bin/python app.py --demo     # 샘플 데이터로 UI 확인 (DB·Excel 없이, 업데이트 확인 생략)
+myenv/bin/python app.py --no-update --log-level DEBUG   # 버전 확인 끄기 · 상세 로그
 myenv/bin/etreport                 # editable 설치된 콘솔 스크립트 (= etreport.app:main)
 
 myenv/bin/python build/build_release.py            # PyInstaller onedir → dist/ETReport + zip
@@ -16,6 +17,13 @@ myenv/bin/python build/build_release.py --publish  # 사내 GHE 릴리스 업로
 ```
 
 `myenv/`가 이미 있는 venv(Python 3.11, editable 설치)다.
+
+부팅은 `src/etreport/app.py`가 전부 한다(CLI·로깅 → 폰트·QSS·설정·카탈로그 →
+상태·창 → 업데이트 확인). 로그는 콘솔과 `%APPDATA%\ETReport\logs\etreport.log`
+(1MB × 3 회전)에 함께 남는다 — **배포 exe는 `--windowed`라 콘솔이 없고
+`sys.stderr`가 None이다.** 그래서 부팅에서 StreamHandler를 무조건 붙이지 않고,
+처리되지 않은 예외는 `sys.excepthook`이 로그 + 알림 창으로 돌린다(같은 오류는
+한 번만, 앱은 죽이지 않는다). 현장 버그는 이 로그 파일이 유일한 단서다.
 
 ## 테스트 · 린터
 
@@ -46,9 +54,16 @@ myenv/bin/ruff check --fix .                        # 안전한 것만 자동 �
 | `test_reformatter_apply.py` | SCALE→ABS→ADDP 순서, ALIAS 개명, 키별 계산 |
 | `test_templates.py` | plot/table 템플릿 검증과 Report 분리 |
 | `test_pipeline_duckdb.py` | 리포메팅 → 적재 → 읽기전용 로딩 → 제외 사이드카 |
+| `test_step_seq_merge.py` | **§10.1** seq 병합·QUALIFY 파티션·합치면 안 되는 키 |
+| `test_absolute_reapply.py` | **§10.2** 로딩 시점 절대값 재적용 · 스케일은 재적용 금지 |
+| `test_extract_schema.py` | **§10.4** 문자열 시각 파싱 · Categorical · 청크 스키마 고정 |
+| `test_pptgen_deck.py` | **§7** 16:9 고정 · 페이지 순서 · 표 전용 페이지 · 병합 순서(§10.5) |
+| `test_reformatter_flags.py` | **§3.1** ABSOLUTE 토큰 · LOG(상용)/LN(자연)/EXP |
+| `test_group_dialog.py` | **§9.1** 4단 연쇄 필터 · [적용] 없이 조회 · 배정 범위 |
 | `test_db_buckets.py` | 버킷 수가 저장 결과를 바꾸지 않는다는 불변식(예전 DB 호환) |
 | `test_analysis_core.py` | 축 범위 ×1.2 · 로그 패턴 · wafer 집계 · 자릿수 |
 | `test_review_fixes.py` | 코드 리뷰에서 고친 것들의 회귀(업데이트 가드·Figure 누수·연결·복사 값…) |
+| `test_app_boot.py` | 부팅 — 콘솔 없는 exe에서의 로깅, excepthook, 카탈로그 폴백 |
 | `test_ui_smoke.py` | 데모 데이터로 창을 조립(headless) — 탭 구성·지연 계산·복사 일치 |
 | `test_bigset.py` (slow) | 실측 규모 성능·정확성 회귀 (`-s`로 단계별 시간 출력) |
 
@@ -99,8 +114,18 @@ UI는 스모크 수준만 있다(`test_ui_smoke.py`, offscreen). 화면을 바�
 | 자릿수 포맷 | `model/specs.py: fmt_value` (<1→3자리, ≤10→2자리, >10→1자리) |
 | wafer 집계(평균/n-1 표준편차) | `model/aggregate.py` — 화면·xlsx·PPT 공용, group_by 1회 |
 | 그리기 | `render/mpl_renderer.py` — **화면 캔버스도 이걸 쓴다** |
+| 덱 조립 | `render/pptgen.py: build_deck` — 크기·순서·표 페이지가 전부 여기 |
 
 단일 진실을 건드렸다면 `pytest`가 그 규칙을 지키는지 먼저 확인한다.
+
+**PPT 규칙 세 가지**(`render/pptgen.py`, `tests/test_pptgen_deck.py`가 지킨다):
+슬라이드는 **항상 16:9**(13.333 × 7.5) — 크기는 프레젠테이션 전역이라 표 때문에
+넓히면 plot 페이지까지 늘어진다. 페이지 순서는 `plot 전부 → 표 전부 → 제외 이력`
+이고, **표는 실험(factor)과 무관하므로 한 벌만** 만든다(CAT1마다 한 장, 전용
+페이지 — plot 템플릿의 `Type=table` 행은 무시한다). wafer가 많으면 글자를 9pt
+아래로 줄이지 않고 `overflow`(표가 슬라이드 밖으로 이어짐) 또는 `split`(12장씩
+분할)로 처리한다. 표 셀은 **반드시 병합 먼저, 값 나중** — 반대로 하면 python-pptx가
+텍스트를 이어붙여 lot 헤더가 `PA1\nPA1\nPA1`이 된다.
 
 화면은 pyqtgraph가 아니라 matplotlib다. `ui/widgets/plot_canvas.py`가
 `mpl_renderer.render(..., fig=self.figure)`로 같은 렌더러에 그린다("화면=PPT"를
@@ -129,19 +154,45 @@ UI 구조: 도크는 `ui/analysis_ws.py`, 탭 3종은 `ui/tabs/`(explore·summar
 `frame_from_rows()`의 열 타입 규칙(전부 숫자/None → Float64, 그 외 → Utf8)은
 ADDP FORM 열처럼 위가 비어 있는 열 때문에 필요하다 — 추론으로 바꾸지 말 것.
 
+**추출 결과 정규화** (`data/extractor.py: normalize_schema`) — bdq 결과는 반드시
+여기를 거쳐 long 고정 스키마가 된다. `cast` 하나로 끝내면 안 되는 이유가 둘 있다:
+Categorical → 숫자 직접 캐스팅은 polars가 막고(Utf8을 한 번 거친다), **문자열 →
+Datetime은 cast가 조용히 전부 null로 만든다**(`str.to_datetime()`으로 파싱).
+tkout_time이 null이 되면 `key_hash`가 뭉쳐 서로 다른 측정이 중복으로 지워진다.
+빠진 컬럼은 null로 채워 청크 parquet 스키마를 고정한다(`scan_parquet` 일괄 읽기).
+
 **DuckDB** — 기준 테이블 이름은 `et_data`(손코딩 시절과 동일, `fact`는 레거시).
 분석 화면은 DB를 **읽기 전용**으로 연다. 따라서:
 - 컬럼 이름은 고정하지 않고 `data/compat.py`의 `ROLE_ALIASES`로 역할을 추론한다
   (`root_lot_id|lot_id|lot`, `wafer_id|slot_no`, `tkout_time|create_dttm` …).
   long(`item_id`/`value`) 테이블이면 `select_sql()`이 PIVOT으로 wide화한다.
+- **`step_seq`만 다른 행은 읽으면서 한 측정점으로 합친다**(`compat.merges_seq`·
+  `MERGE_ROLES`). x가 `step_seq=1`·y가 `2`에 기록되는 경우가 흔한데, 합치지
+  않으면 x·y가 함께 있는 행이 0개가 되어 산점도가 통째로 빈다. 그룹 키는
+  `lot·wafer + die 좌표·온도·step_id·site_cnt`이고 각 item은 `any_value`(NULL이
+  아닌 값). **step_id·온도·site_cnt가 다르면 다른 측정점이므로 합치지 않는다.**
+  retest QUALIFY 파티션에는 반드시 `step_seq`를 포함한다 — 빼면 seq가 다른
+  정상 행이 '구버전'으로 지워진다. seq 컬럼이 없는 스키마는 병합하지 않는다
+  (키가 부족한 채로 그룹핑하면 wafer 하나가 한 점으로 뭉갠다).
+  합친 행의 `key`는 구성 행 key의 최솟값 — seq가 하나뿐인 DB에서는 예전 값과
+  같아서 제외 사이드카가 그대로 유지된다. 규칙은 `tests/test_step_seq_merge.py`.
 - 제외 포인트는 DB에 쓰지 않고 `data/exclusions.py`가
   `%APPDATA%\ETReport\exclusions\<DB>_<해시>.json` 사이드카에 DB 경로별로 저장한다.
-- 분석용 wide 프레임의 예약 컬럼은 `key, lot, wafer, gid`이고 나머지가 item이다
-  (`loader.RESERVED`).
+- 분석용 wide 프레임의 예약 컬럼은 `key, lot, wafer, gid, step, temp, site`이고
+  나머지가 item이다(`loader.RESERVED` — 컬럼 목록을 손으로 적지 말고
+  `loader.item_columns()`를 쓸 것). `step/temp/site`는 측정 조건이며 그룹 편집의
+  4단 필터와 배정 범위가 쓴다. 없는 스키마에서도 NULL로 자리를 만든다.
+- 손으로 짠 그룹은 `state.manual_groups`(`(lot, wafer, step, temp, site) → gid`,
+  None은 조건 무관)에 남고 `loader.apply_manual_groups()`가 로딩 때 다시 붙인다 —
+  [적용]으로 DB를 다시 읽어도 배정이 살아 있고, **[적용] 전에 짜 둔 그룹도**
+  그대로 반영된다. 실험 조건 배정보다 뒤에 걸어 사용자가 고른 쪽이 이긴다.
 - 적재는 `key_hash` ANTI JOIN(행 중복) + `load_log`(파일 중복) 2단으로 막는다.
   `key_hash_expr()`는 **절대 바꾸지 않는다** — 바뀌면 기존 DB에 이어 적재할 때
   같은 포인트가 중복으로 들어간다.
 - 원본 컬럼 `et_value`는 내부 표준 `value`로 정규화한다.
+- **ABSOLUTE는 로딩할 때 다시 건다**(`loader.apply_absolute`). 추출 시점에만
+  적용하면 이미 음수로 적재된 DB는 리포메터를 고쳐도 그대로다. 절대값은
+  멱등이라 안전하지만 **스케일은 멱등이 아니므로 여기서 절대 재적용하지 않는다.**
 - 적재 버킷 수는 `plan_buckets(키 수, item 수)`가 데이터 모양을 보고 정한다
   (피벗 한 번의 셀 수를 `TARGET_CELLS` 이하로, 상한은 `N_BUCKETS`). 버킷은
   **작업 단위일 뿐 저장 내용과 무관**하므로 예전에 512개로 적재한 DB와 섞여도
@@ -158,6 +209,19 @@ ADDP FORM 열처럼 위가 비어 있는 열 때문에 필요하다 — 추론�
 폴백으로 떨어진다(로그에 남음). `Std(...)`는 표본표준편차(n-1, NULL 제외).
 검증 실패 행은 **버리고 나머지로 진행**하며 이유를 `warnings`에 남긴다 — 이게 이
 코드베이스 전반의 오류 처리 방식이다(중단하지 않고 건너뛰고 보고).
+
+함수 목록은 확정 사양이다(`_BASE_FUNCS`): `ABS SQRT LN LOG LOG10 EXP MIN MAX AVG
+SUM STD`. **`LN`은 자연로그(밑 e), `LOG`·`LOG10`은 상용로그(밑 10)** — 엑셀 관례를
+따르며 헷갈리기 쉬우니 바꾸지 말 것. 함수를 추가하면 `_VEC_UNARY`/`_VEC_NARY`에도
+**같은 의미로** 넣어야 한다(`test_reformatter_vector.py`가 화이트리스트를 훑어
+벡터 경로가 빠지면 실패시킨다). polars는 0으로 나눠도 예외 대신 ±inf를 주므로
+나눗셈·거듭제곱 결과는 `_finite()`로 즉시 NULL 처리한다 — 최종 결과만 걸러 내면
+`Exp({A}/{B})`처럼 inf가 함수를 거쳐 멀쩡한 값(exp(-inf)=0)으로 둔갑한다.
+
+`ABSOLUTE` 같은 참/거짓 셀은 `parse_flag()` 하나로 읽는다 — **`TRUE/T/Y/1/O`가
+참, `FALSE/N/0/X/빈칸`이 거짓**(대소문자 무관, 엑셀 체크박스의 bool과 1.0/0.0도
+처리). 모르는 값은 거짓으로 두되 경고를 남긴다. 예전처럼 `== "Y"`로 비교하면
+`TRUE`로 적은 행의 절대값이 조용히 무시된다.
 
 **템플릿** (`model/templates.py`): plot 시트는 `page x y order title1 title2
 Report Type x_name y_name`, table 시트는 `item_id CAT1 CAT2 CAT3 Report`.

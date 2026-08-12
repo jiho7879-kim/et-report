@@ -1,6 +1,7 @@
 """데이터 워크스페이스 — 프리셋 · 대상 · 기간 · 조건 · 실행."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -27,10 +28,19 @@ from PySide6.QtWidgets import (
 
 from etreport.config.catalog import Catalog
 from etreport.config.settings import Condition, ExtractPreset, Settings
-from etreport.data.querybuilder import ConditionError, build_extract_sql
+from etreport.data import querybuilder as qb
+from etreport.data.querybuilder import (
+    ConditionError,
+    build_extract_sql,
+    build_item_probe_sql,
+)
+from etreport.data.reformatter import load as rf_load
 from etreport.model.state import AppState, StateBus
 from etreport.ui.widgets.autocomplete import AutoCompleteEdit
 from etreport.ui.widgets.cards import Card, GhostButton, row
+from etreport.ui.widgets.item_check_dialog import ItemCheckDialog
+
+log = logging.getLogger(__name__)
 
 
 class _ExtractThread(QThread):
@@ -86,9 +96,11 @@ class _ExtractThread(QThread):
                 self.step.emit("추출 중", done, total)
                 self.log.emit(f"  청크 {done}/{total} 완료  ({label})")
 
+            rf_items = [r.itemid for r in rf.reals() if r.itemid]
             files = extractor.extract_to_parquet(
                 self.p.conditions, self.d_from, self.d_to, self.catalog,
-                staging_dir(), on_prog, self.isInterruptionRequested)
+                staging_dir(), on_prog, self.isInterruptionRequested,
+                item_ids=rf_items)
             if not files:
                 raise RuntimeError("중지되었거나 결과가 없습니다")
             raw = sum(pl.scan_parquet(str(f)).select(pl.len())
@@ -326,6 +338,9 @@ class DataWorkspace(QWidget):
         self.sql.setFixedHeight(128)
         cc.body.addWidget(QLabel("SQL 미리보기"))
         cc.body.addWidget(self.sql)
+        b_item = GhostButton("item_id 확인")
+        b_item.clicked.connect(self._open_item_check)
+        cc.body.addWidget(b_item)
         v.addWidget(cc)
 
         # 실행 ------------------------------------------------
@@ -376,6 +391,7 @@ class DataWorkspace(QWidget):
         lay.addWidget(foot)
 
         self._rows: list[ConditionRow] = []
+        self._rf_items: list[str] = []   # 리포메터 REAL itemid (미리보기/필터/대조용)
         self._load_preset(0)
 
     # ── 프리셋 ───────────────────────────────────────────────
@@ -394,6 +410,7 @@ class DataWorkspace(QWidget):
         for c in p.conditions:
             self._add_row(c)
         self._refresh_catalog_label()
+        self._load_rf_items()
         self._refresh_sql()
 
     def _save_as(self) -> None:
@@ -438,10 +455,65 @@ class DataWorkspace(QWidget):
         try:
             sql = build_extract_sql(
                 self.preset().conditions, self.d_from.date().toPython(),
-                self.d_to.date().toPython(), self.catalog)
+                self.d_to.date().toPython(), self.catalog,
+                item_ids=self._rf_items)
+            if self._rf_items:
+                sql = sql + "\n" + qb._item_comment(self._rf_items)
             self.sql.setPlainText(sql)
         except ConditionError as e:
             self.sql.setPlainText(f"-- {e.col}: {e}")
+
+    # ── 리포메터 item (필터/미리보기/대조) ───────────────────
+    def _load_rf_items(self) -> None:
+        """리포메터 REAL itemid 목록을 캐시 (xlsx 미설치 환경은 빈 목록)."""
+        self._rf_items = []
+        p = self.preset()
+        if not p.reformatter_path:
+            return
+        try:
+            rf = rf_load(p.reformatter_path, p.reformatter_sheet or 0)
+        except Exception as e:            # noqa: BLE001 — xlwings 미설치 등
+            log.warning("리포메터 item 목록 로드 실패(%s) — 필터 미적용", e)
+            return
+        self._rf_items = [r.itemid for r in rf.reals() if r.itemid]
+
+    def _gather_actual_items(self) -> list[str] | None:
+        """실제 item 목록 — 적재된 DuckDB 우선, 없으면 bdq 프로브."""
+        p = self.preset()
+        if p.db_path and Path(p.db_path).exists():
+            try:
+                import duckdb
+                con = duckdb.connect(str(p.db_path), read_only=True)
+                try:
+                    cols = [r[0] for r in con.execute(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name='et_data'").fetchall()]
+                finally:
+                    con.close()
+                keys = {"key_hash", "key", "lot", "wafer", "gid", "line_id",
+                        "root_lot_id", "wafer_id", "chip_x_pos", "chip_y_pos",
+                        "temperature", "step_id", "step_seq", "total_site_cnt",
+                        "tkout_time"}
+                return [c for c in cols if c.lower() not in keys]
+            except Exception as e:            # noqa: BLE001
+                log.warning("DB item 조회 실패(%s)", e)
+        try:
+            import bigdataquery as bdq  # 사내 패키지 — 지연 import
+        except Exception:                       # noqa: BLE001 — 사내 PC 아님
+            return None
+        try:
+            df = bdq.getData(build_item_probe_sql(
+                p.conditions, self.d_from.date().toPython(),
+                self.d_to.date().toPython(), self.catalog))
+            import polars as pl
+            return list(pl.from_pandas(df)["item_id"].unique().to_list())
+        except Exception as e:            # noqa: BLE001
+            log.warning("item 프로브 실패(%s)", e)
+            return None
+
+    def _open_item_check(self) -> None:
+        actual = self._gather_actual_items()
+        ItemCheckDialog(self._rf_items, actual, parent=self).exec()
 
     # ── 대상 ─────────────────────────────────────────────────
     def _pick_db(self) -> None:
@@ -470,6 +542,8 @@ class DataWorkspace(QWidget):
         self.preset().reformatter_path = p
         self.preset().reformatter_sheet = sheet if isinstance(sheet, str) else ""
         self.lbl_rfm.setText(p + (f"  [{sheet}]" if isinstance(sheet, str) else ""))
+        self._load_rf_items()
+        self._refresh_sql()
 
     def _refresh_catalog(self) -> None:
         try:
@@ -496,7 +570,8 @@ class DataWorkspace(QWidget):
                 f"시작일({d_from})이 종료일({d_to})보다 뒤입니다")
             return
         try:
-            build_extract_sql(p.conditions, d_from, d_to, self.catalog)
+            build_extract_sql(p.conditions, d_from, d_to, self.catalog,
+                              item_ids=self._rf_items)
         except ConditionError as e:
             QMessageBox.warning(self, "조건 오류", f"{e.col}: {e}")
             return

@@ -84,12 +84,56 @@ def test_rf_load_uses_sheet_argument(fake_sheet):
     assert seen[0][1] == 2
 
 
-# ── 옵션 기하 컬럼 W/L ──────────────────────────────────────
-HDR_GEOM = [*HDR, "W", "L"]
+# ── 헤더 정규화(띄어쓰기·밑줄·대소문자 무시) ──────────────────
+def test_header_variants_treated_as_canonical(fake_sheet):
+    """'ADDP FORM'/'ADDPFORM'/'SCALE FACTOR'/'SCALE_FACTOR' 등으로 적어도
+    같은 컬럼으로 본다."""
+    hdr_var = ["CATEGORY", "ITEMID", "ALIAS", "ABSOLUTE", "SCALE_FACTOR",
+               "ADDPFORM", "UNIT", "SPECLOW", "SPECHIGH", "TARGET"]
+    fake_sheet(sheet_from_rows(hdr_var, [
+        ["REAL", "ET_A", "A", "N", "0.001", None, "V", None, None, None],
+        ["ADDP", None, "D", "N", 1.0, "{A}*2", "", None, None, None],
+    ]))
+    rf = R.load("x.xlsx")
+    assert not rf.errors
+    a, d = rf.rules
+    assert a.scale == 0.001
+    assert d.formula == "{A}*2"
+
+
+def test_header_variants_case_and_space_insensitive(fake_sheet):
+    """소문자+공백 조합('scale factor'/'addp form')도 표준과 같이 본다."""
+    hdr_var = ["category", "itemid", "alias", "absolute", "scale factor",
+               "addp form", "unit", "speclow", "spechigh", "target"]
+    fake_sheet(sheet_from_rows(hdr_var, [
+        ["REAL", "ET_A", "A", "N", "1000", None, "V", None, None, None],
+        ["ADDP", None, "D", "N", 1.0, "{A}+1", "", None, None, None],
+    ]))
+    rf = R.load("x.xlsx")
+    assert not rf.errors
+    a, d = rf.rules
+    assert a.scale == 1000.0
+    assert d.formula == "{A}+1"
+
+
+def test_exact_header_preferred_over_variant(fake_sheet):
+    """표준 헤더('ADDP FORM')와 변형('ADDPFORM')이 함께 있어도
+    표준 쪽을 우선한다(중복 변형 헤더로 덮어쓰지 않는다)."""
+    hdr_both = [*HDR, "ADDPFORM"]
+    fake_sheet(sheet_from_rows(hdr_both, [
+        ["REAL", "ET_A", "A", "N", 1.0, None, "V", None, None, None, "X"],
+    ]))
+    rf = R.load("x.xlsx")
+    assert not rf.errors
+    assert len(rf.rules) == 1
+
+
+# ── 옵션 기하 컬럼 WIDTH/LENGTH ────────────────────────────
+HDR_GEOM = [*HDR, "WIDTH", "LENGTH"]
 
 
 def test_load_parses_optional_geom_columns(fake_sheet):
-    """W/L 컬럼이 있는 시트 → 모든 Rule에 w/l 파싱 (문자열 숫자·빈 셀 포함)."""
+    """WIDTH/LENGTH 컬럼이 있는 시트 → 모든 Rule에 w/l 파싱 (문자열 숫자·빈 셀 포함)."""
     fake_sheet(sheet_from_rows(HDR_GEOM, [
         ["REAL", "ET_A", "A", "N", 1.0, None, "V", None, None, None,
          "0.34", 12.5],                       # W는 문자열 숫자(Utf8 열)
@@ -103,7 +147,7 @@ def test_load_parses_optional_geom_columns(fake_sheet):
 
 
 def test_load_without_geom_columns_keeps_legacy(fake_sheet):
-    """W/L 컬럼이 없는 시트(구계약) → 모든 Rule의 w/l은 None (무회귀)."""
+    """WIDTH/LENGTH 컬럼이 없는 시트(구계약) → 모든 Rule의 w/l은 None (무회귀)."""
     fake_sheet(sheet(real("ET_A", "A"), real("ET_B", "B")))
     rf = R.load("x.xlsx")
     assert not rf.errors

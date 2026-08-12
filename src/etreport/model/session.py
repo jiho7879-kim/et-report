@@ -134,7 +134,8 @@ def apply_config(state: AppState, cfg: AnalysisConfig) -> LoadReport:
             return rep
 
     state.log_patterns = cfg.log_patterns or state.log_patterns
-    state.table_slide_mode = cfg.table_slide_mode or "wide"
+    from etreport.render.pptgen import table_mode_of  # 예전 값 'wide' 흡수
+    state.table_slide_mode = table_mode_of(cfg.table_slide_mode)
     rep.elapsed = time.monotonic() - t0
     rep.lines.append(f"— {rep.elapsed:.1f}초")
     log.info("설정 적용 완료 (%.1fs)", rep.elapsed)

@@ -453,7 +453,8 @@ class AnalysisWorkspace(QWidget):
             self.bus.groups_changed.emit()
 
     def _edit_groups(self) -> None:
-        if GroupDialog(self.state, self).exec():
+        # DB를 고르기만 하고 [적용] 전에 그룹부터 짜는 흐름을 위해 경로를 넘긴다
+        if GroupDialog(self.state, self, db_path=self.cfg().db_path).exec():
             self.bus.groups_changed.emit()
 
     def _undo(self) -> None:

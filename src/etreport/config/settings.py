@@ -55,7 +55,7 @@ class AnalysisConfig:
     table_template_path: str = ""
     reformatter_path: str = ""
     report: str = ""          # 템플릿의 Report 컬럼 값
-    table_slide_mode: str = "wide"     # wide | split
+    table_slide_mode: str = "overflow"  # overflow | split  (예전 값 "wide" = overflow)
     # 시트 이름 (빈 값 = 첫 시트)
     plot_sheet: str = ""
     table_sheet: str = ""

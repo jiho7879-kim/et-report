@@ -31,6 +31,9 @@ def staging_dir() -> Path:
     p = appdata_dir() / "staging"; p.mkdir(exist_ok=True); return p
 def update_tmp_dir() -> Path:
     p = appdata_dir() / "update_tmp"; p.mkdir(exist_ok=True); return p
+def log_dir() -> Path:
+    p = appdata_dir() / "logs"; p.mkdir(exist_ok=True); return p
+def log_file() -> Path:           return log_dir() / "etreport.log"
 
 
 def write_json_atomic(path: Path, data, **dumps_kw) -> None:

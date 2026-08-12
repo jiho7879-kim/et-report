@@ -33,6 +33,47 @@ log = logging.getLogger(__name__)
 _REF = re.compile(r"\{([^{}]+)\}")
 
 
+def _norm_header(name: str) -> str:
+    """헤더 정규화 키 — 대소문자·공백·밑줄을 무시한다.
+    'ADDP FORM' == 'ADDPFORM' == 'ADDP_FORM' == 'addp form'."""
+    return re.sub(r"[\s_]+", "", str(name)).lower()
+
+
+# 정규화 키 → 표준 헤더. load()에서 유저가 헤더를 조금씩 다르게 적은 것을
+# 같은 컬럼으로 받아들이는 데 쓴다.
+_CANON_BY_NORM = {_norm_header(c): c for c in COLUMNS}
+
+
+# ABSOLUTE 같은 참/거짓 셀 — 확정 사양(§3.1). 대소문자 무관, 빈칸은 거짓.
+_TRUE_TOKENS = {"TRUE", "T", "Y", "1", "O"}
+_FALSE_TOKENS = {"FALSE", "F", "N", "0", "X", ""}
+
+
+def parse_flag(v) -> bool | None:
+    """엑셀 셀 → 참/거짓. **모르는 값이면 None**을 돌려 호출부가 경고하게 한다.
+
+    엑셀에서 오는 모양이 제각각이다 — 체크박스는 파이썬 bool, 숫자 셀은 1.0/0.0,
+    나머지는 문자열(TRUE/Y/O/X…). 예전에는 'Y' 하나만 참으로 봐서 리포메터에
+    `TRUE`나 `1`로 적힌 행의 절대값이 조용히 무시됐다.
+    """
+    if v is None:
+        return False
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(v) if float(v) in (0.0, 1.0) else None
+    s = str(v).strip().upper()
+    if s in _TRUE_TOKENS:
+        return True
+    if s in _FALSE_TOKENS:
+        return False
+    try:                       # 엑셀 숫자가 '1.0' 문자열로 온 경우
+        f = float(s)
+    except ValueError:
+        return None
+    return bool(f) if f in (0.0, 1.0) else None
+
+
 def _num(v) -> float | None:
     """엑셀 셀 → 숫자. None·빈칸은 None, '0.34' 같은 문자열도 허용."""
     if v is None:
@@ -60,8 +101,8 @@ class Rule:
     spechigh: float | None
     target: float | None
     row: int                 # 시트 행 번호(오류 표시·계산 순서)
-    w: float | None = None   # 옵션 기하 컬럼 "W" (폭)
-    l: float | None = None   # 옵션 기하 컬럼 "L" (길이)  # noqa: E741 — 헤더명 "L" 확정
+    w: float | None = None   # 옵션 기하 컬럼 "WIDTH" (폭)
+    l: float | None = None   # 옵션 기하 컬럼 "LENGTH" (길이)  # noqa: E741
 
 
 @dataclass
@@ -105,6 +146,20 @@ def load(path: str, sheet: str | int = 0) -> Reformatter:
     rf = Reformatter()
     raw = read_sheet(path, sheet)
 
+    # 유저가 헤더를 'ADDP FORM'/'ADDPFORM'/'ADDP_FORM' 등으로 조금씩 다르게
+    # 적더라도 같은 컬럼으로 본다(공백·밑줄·대소문자 무시). 정확한 표준 헤더가
+    # 있으면 그걸 우선하고, 없을 때만 정규화가 일치하는 헤더를 표준명으로 받는다.
+    raw_norm = {_norm_header(c): c for c in raw.columns}
+    rename: dict[str, str] = {}
+    for canon in COLUMNS:
+        if canon in raw.columns:
+            continue
+        src = raw_norm.get(_norm_header(canon))
+        if src is not None:
+            rename[src] = canon
+    if rename:
+        raw = raw.rename(rename)
+
     missing = [c for c in COLUMNS if c not in raw.columns]
     if missing:
         rf.errors.append(ReformatterError(0, "", f"컬럼 누락: {', '.join(missing)}"))
@@ -114,11 +169,18 @@ def load(path: str, sheet: str | int = 0) -> Reformatter:
         alias = str(row["ALIAS"] or "").strip()
         if not alias:
             continue
+        absolute = parse_flag(row["ABSOLUTE"])
+        if absolute is None:      # 알 수 없는 값 — 거짓으로 보되 반드시 알린다
+            rf.warnings.append(ReformatterError(
+                i, alias,
+                f"ABSOLUTE '{row['ABSOLUTE']}'를 알 수 없어 거짓으로 봤습니다 "
+                f"(참: TRUE/T/Y/1/O · 거짓: FALSE/N/0/X/빈칸)"))
+            absolute = False
         rf.rules.append(Rule(
             category=str(row["CATEGORY"] or "REAL").strip().upper(),
             itemid=str(row["ITEMID"] or "").strip(),
             alias=alias,
-            absolute=str(row["ABSOLUTE"] or "N").strip().upper() == "Y",
+            absolute=absolute,
             scale=_num(row["SCALE FACTOR"]) or 1.0,
             formula=str(row["ADDP FORM"] or "").strip(),
             unit=str(row["UNIT"] or "").strip(),
@@ -126,9 +188,9 @@ def load(path: str, sheet: str | int = 0) -> Reformatter:
             spechigh=_num(row["SPECHIGH"]),
             target=_num(row["TARGET"]),
             row=i,
-            # W/L은 옵션 컬럼 — 시트에 있을 때만 읽는다(없으면 구파일과 동일).
-            w=_num(row.get("W")) if "W" in raw.columns else None,
-            l=_num(row.get("L")) if "L" in raw.columns else None,
+            # WIDTH/LENGTH는 옵션 기하 컬럼 — 시트에 있을 때만 읽는다.
+            w=_num(row.get("WIDTH")) if "WIDTH" in raw.columns else None,
+            l=_num(row.get("LENGTH")) if "LENGTH" in raw.columns else None,
         ))
     validate(rf)
     return rf
@@ -212,8 +274,21 @@ def _abs(v):
     return None if v is None else abs(v)
 
 
+def _exp(v):
+    """지수. 넘치면 inf 대신 NULL — 벡터 경로와 결과를 맞춘다."""
+    if v is None:
+        return None
+    try:
+        r = math.exp(v)
+    except OverflowError:
+        return None
+    return r if math.isfinite(r) else None
+
+
 _BASE_FUNCS = {
     # 파이썬식 이름 → 구현. SQL로 내릴 땐 min→least 등 매핑 주의(계획서 Q8).
+    # 함수 목록은 확정 사양(§3.1): ABS SQRT LN LOG LOG10 EXP MIN MAX AVG SUM STD
+    # **LN = 자연로그(밑 e), LOG·LOG10 = 상용로그(밑 10)** — 엑셀 관례를 따른다.
     "Std":   _std_sample,
     "Avg":   _null_skip(lambda xs: sum(xs) / len(xs)),
     "Sum":   _null_skip(sum),
@@ -222,7 +297,9 @@ _BASE_FUNCS = {
     "Abs":   _abs,
     "Sqrt":  lambda v: None if v is None or v < 0 else math.sqrt(v),
     "Log10": lambda v: None if v is None or v <= 0 else math.log10(v),
+    "Log":   lambda v: None if v is None or v <= 0 else math.log10(v),
     "Ln":    lambda v: None if v is None or v <= 0 else math.log(v),
+    "Exp":   _exp,
 }
 
 # 엑셀에서 ABS(), abs() 처럼 아무렇게나 써도 통하도록 대소문자 별칭을 깐다.
@@ -303,11 +380,30 @@ def _horizontal_sum(cols: list[pl.Expr]) -> pl.Expr:
     return pl.when(n > 0).then(pl.sum_horizontal(cols)).otherwise(None)
 
 
+def _finite(e: pl.Expr) -> pl.Expr:
+    """비유한값(inf/NaN)을 NULL로. 행 단위 엔진과 값을 맞추는 장치.
+
+    polars는 0으로 나누면 예외 대신 ±inf를 준다. 최종 결과만 걸러 내면
+    `Exp({A}/{B})`처럼 **inf가 함수를 거치며 멀쩡한 값으로 둔갑**하는 경우를
+    놓친다(exp(-inf) = 0.0). 그래서 나눗셈·거듭제곱 자리에서 바로 끊는다.
+    """
+    return pl.when(e.is_finite()).then(e).otherwise(None)
+
+
+def _vec_exp(e: pl.Expr) -> pl.Expr:
+    """지수 — 넘치면 inf가 아니라 NULL. 행 단위 엔진(_exp)과 같은 값이어야 한다."""
+    x = e.exp()
+    return pl.when(x.is_finite()).then(x).otherwise(None)
+
+
 _VEC_UNARY = {
+    # 행 단위 _BASE_FUNCS와 **같은 의미**여야 한다(test_reformatter_vector가 고정).
     "abs": lambda e: e.abs(),
     "sqrt": lambda e: pl.when(e >= 0).then(e.sqrt()).otherwise(None),
     "log10": lambda e: pl.when(e > 0).then(e.log10()).otherwise(None),
-    "ln": lambda e: pl.when(e > 0).then(e.log()).otherwise(None),
+    "log": lambda e: pl.when(e > 0).then(e.log10()).otherwise(None),   # 상용로그
+    "ln": lambda e: pl.when(e > 0).then(e.log()).otherwise(None),      # 자연로그
+    "exp": _vec_exp,
 }
 _VEC_NARY = {
     "min": pl.min_horizontal,
@@ -342,9 +438,9 @@ def _compile_expr(src: str, available: set[str]) -> pl.Expr | None:
             if op is ast.Mult:
                 return a * b
             if op is ast.Div:
-                return a / b
+                return _finite(a / b)      # 0으로 나눈 inf를 여기서 끊는다
             if op is ast.Pow:
-                return a ** b
+                return _finite(a ** b)
             return None
         if isinstance(node, ast.UnaryOp):
             v = walk(node.operand)

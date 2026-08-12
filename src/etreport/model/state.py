@@ -33,7 +33,7 @@ class AppState:
     log_patterns: list[str] = field(default_factory=lambda: ["Ioff*", "*Leak*", "Jg*"])
     agg: str = "avg"
     delta_vs_ref: bool = False
-    table_slide_mode: str = "wide"
+    table_slide_mode: str = "overflow"    # overflow | split (§7.3)
     explore: PlotSpec = field(default_factory=PlotSpec)
     db_label: str = "(DB 미연결)"
     store: object | None = None        # 읽기 전용 duckdb 연결
@@ -42,6 +42,9 @@ class AppState:
     table: str = ""                    # 실제 조회 테이블 (기본 et_data)
     profile: object | None = None      # data.compat.TableProfile
     excl_points: dict = field(default_factory=dict)   # key → {reason, at}
+    # 그룹 편집에서 손으로 배정한 것 — (lot, wafer, step, temp, site) → gid.
+    # None은 '조건 무관'. [적용]으로 DB를 다시 읽어도 loader가 재적용한다.
+    manual_groups: dict[tuple, str] = field(default_factory=dict)
     rf_path: str = ""
     rf_sheet: str | int = 0
     exclude_all_plots: bool = True     # 제외를 모든 plot에 적용할지

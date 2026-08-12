@@ -123,14 +123,13 @@ KEY_COLS: list[str] = [
 
 SELECT_COLS = ", ".join(KEY_COLS)
 
+# item_id IN (...) 절을 나누는 크기. Impala IN 값 개수 제한을 피하기 위해
+# 10000 미만인 9999로 쪼갠다(마지막 청크는 나머지). 더 많이 쪼개지 않는다.
+ITEM_ID_CHUNK = 9999
 
-def build_extract_sql(
-    conditions: list[Condition],
-    d_from: date,
-    d_to: date,                 # inclusive — SQL에서는 +1일 미만
-    catalog: Catalog,
-    table: str = "eds.f_et_test",
-) -> str:
+
+def _build_where(conditions: list[Condition], d_from: date, d_to: date,
+                 catalog: Catalog) -> list[str]:
     line = next((c for c in conditions if c.required), None)
     if line is None or not line.val.strip():
         raise ConditionError("line_id", "line_id는 필수입니다 (파티션 프루닝)")
@@ -146,9 +145,65 @@ def build_extract_sql(
         for c in conditions
         if not c.required and c.val.strip()
     ]
+    return where
+
+
+def _item_in_clauses(item_ids: list[str]) -> list[str]:
+    """item_id IN (...) 절을 9999개씩 청크로 나눠 반환 (마지막은 나머지)."""
+    safe = [i.replace("'", "''") for i in item_ids]      # SQL 이스케이프
+    quoted = [f"'{s}'" for s in safe]
+    return [
+        "item_id IN (" + ", ".join(quoted[s:s + ITEM_ID_CHUNK]) + ")"
+        for s in range(0, len(quoted), ITEM_ID_CHUNK)
+    ]
+
+
+def _item_comment(item_ids: list[str]) -> str:
+    """SQL 미리보기용 주석 — item 목록/청크 요약."""
+    n = len(item_ids)
+    if n == 0:
+        return ""
+    chunks = (n + ITEM_ID_CHUNK - 1) // ITEM_ID_CHUNK
+    sample = ", ".join(f"'{i}'" for i in item_ids[:5])
+    more = " …" if n > 5 else ""
+    return (f"-- item_id: {n}개 → {chunks}청크(9999씩) · "
+            f"IN ({sample}{more})")
+
+
+def build_extract_sql(
+    conditions: list[Condition],
+    d_from: date,
+    d_to: date,                 # inclusive — SQL에서는 +1일 미만
+    catalog: Catalog,
+    table: str = "eds.f_et_test",
+    item_ids: list[str] | None = None,
+) -> str:
+    where = _build_where(conditions, d_from, d_to, catalog)
+    if item_ids:
+        clauses = _item_in_clauses(item_ids)
+        where.append("(\n    " + "\n    OR ".join(clauses) + "\n  )")
     body = "\n  AND  ".join(where)
     return (
         f"SELECT {SELECT_COLS}\n"
         f"FROM   {table}\n"
         f"WHERE  {body}"
+    )
+
+
+def build_item_probe_sql(
+    conditions: list[Condition],
+    d_from: date,
+    d_to: date,
+    catalog: Catalog,
+    table: str = "eds.f_et_test",
+    limit: int = 5000,
+) -> str:
+    """실제 item 확인용 가벼운 DISTINCT 프로브 (LIMIT로 폭주 방지)."""
+    where = _build_where(conditions, d_from, d_to, catalog)
+    body = "\n  AND  ".join(where)
+    return (
+        f"SELECT DISTINCT item_id\n"
+        f"FROM   {table}\n"
+        f"WHERE  {body}\n"
+        f"LIMIT  {limit}"
     )

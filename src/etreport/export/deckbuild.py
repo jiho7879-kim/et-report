@@ -46,26 +46,23 @@ def _plot_data(state: AppState, exp: str, spec: PlotSpec) -> dict[str, pl.DataFr
             for st in _styles_for(state, exp)}
 
 
-def _tables(state: AppState, exp: str) -> list[TableData]:
-    """CAT1별 TableData — Summary 탭과 완전히 같은 집계를 쓴다."""
+def _tables(state: AppState) -> list[TableData]:
+    """CAT1별 TableData — Summary 탭과 완전히 같은 집계를 쓴다.
+
+    실험(factor)과 무관하다. 표는 (lot, wafer)별 집계라 실험마다 다시 만들면
+    같은 표가 중복될 뿐이다(§7.2). 분할(split)은 pptgen이 페이지를 만들 때 한다.
+    """
     from etreport.export.excel import SummaryOptions
     from etreport.export.excel import build_table as _bt
     if state.report is None or state.data is None:
         return []
-    opt = SummaryOptions(agg="avg")
-    out: list[TableData] = []
-    for cat1 in state.report.table_names():
-        td = _bt(state, cat1, opt)
-        if state.table_slide_mode == "split":
-            out.extend(pptgen.split_table(td))
-        else:
-            out.append(td)
-    return out
+    # 화면(Summary 탭)의 평균/산포·Δ 선택을 그대로 쓴다 — "화면 = 출력"
+    opt = SummaryOptions(agg=state.agg, delta_vs_ref=state.delta_vs_ref)
+    return [_bt(state, cat1, opt) for cat1 in state.report.table_names()]
 
 
 def generate(state: AppState, out_path: str) -> str:
     experiments = state.factors if len(state.factors) > 1 else [""]
-    n_wafers = sum(len(w) for _, w in state.wafer_columns())
     from etreport.data.loader import exclusion_frame
     exlog = exclusion_frame(state)
     prs = pptgen.build_deck(
@@ -73,12 +70,11 @@ def generate(state: AppState, out_path: str) -> str:
         experiments=experiments,
         group_styles_of=lambda exp: _styles_for(state, exp),
         plot_data_of=lambda exp, spec: _plot_data(state, exp, spec),
-        tables_of=lambda exp: _tables(state, exp),
+        tables=_tables(state),
         rf=state.rf,
         log_patterns=state.log_patterns,
         exclusion_log=exlog,
         table_mode=state.table_slide_mode,
-        n_wafers=n_wafers,
     )
     p = Path(out_path)
     if p.suffix.lower() != ".pptx":

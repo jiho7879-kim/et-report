@@ -18,7 +18,7 @@ import pyarrow as pa
 
 from etreport.config.catalog import Catalog
 from etreport.config.settings import Condition
-from etreport.data.querybuilder import build_extract_sql
+from etreport.data.querybuilder import ITEM_ID_CHUNK, build_extract_sql
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +66,50 @@ def _fetch(sql: str) -> pl.DataFrame:
     return pl.from_pandas(pdf)
 
 
+def _target_dtypes() -> dict[str, pl.DataType]:
+    return {f.name: pl.from_arrow(pa.array([], f.type)).dtype for f in ARROW_SCHEMA}
+
+
+def normalize_schema(df: pl.DataFrame) -> pl.DataFrame:
+    """bdq 결과를 long 고정 스키마로 맞춘다 — 청크마다 타입이 흔들리지 않게.
+
+    계획서 §10.4의 두 함정을 여기서 막는다.
+
+    1) **Categorical → 숫자 직접 캐스팅은 polars가 막는다**
+       (`cannot cast categorical types to Float64`). bdq/pandas를 거치면 반복
+       문자열 컬럼이 Categorical로 오므로 Utf8을 한 번 거친다.
+    2) **문자열 → Datetime은 cast가 아니라 `str.to_datetime()` 파싱**이어야 한다.
+       cast로는 예외도 없이 조용히 전부 null이 되고, tkout_time이 null이면
+       key_hash가 뭉쳐 서로 다른 측정이 중복으로 지워진다.
+
+    스키마에 있는데 결과에 없는 컬럼은 null로 채운다. 청크 parquet들을
+    `scan_parquet`로 한꺼번에 읽기 때문에 파일마다 컬럼이 다르면 적재가 깨진다.
+    """
+    target = _target_dtypes()
+
+    cat = [c for c, t in zip(df.columns, df.dtypes)
+           if t in (pl.Categorical, pl.Enum)]
+    if cat:
+        df = df.with_columns([pl.col(c).cast(pl.Utf8) for c in cat])
+
+    parse = [pl.col(c).str.to_datetime(time_unit="us", strict=False).alias(c)
+             for c, dt in target.items()
+             if c in df.columns and dt == pl.Datetime and df.schema[c] == pl.Utf8]
+    if parse:
+        df = df.with_columns(parse)
+
+    df = df.cast({c: dt for c, dt in target.items() if c in df.columns},
+                 strict=False)
+
+    missing = [c for c in target if c not in df.columns]
+    if missing:
+        log.warning("조회 결과에 없는 컬럼을 null로 채웁니다: %s", ", ".join(missing))
+        df = df.with_columns([pl.lit(None, dtype=target[c]).alias(c)
+                              for c in missing])
+    rest = [c for c in df.columns if c not in target]
+    return df.select([*target, *rest])
+
+
 def extract_to_parquet(
     conditions: list[Condition],
     d_from: date,
@@ -74,31 +118,47 @@ def extract_to_parquet(
     staging: Path,
     on_progress: Callable[[int, int, str], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
+    item_ids: list[str] | None = None,
 ) -> list[Path]:
     """청크별 parquet 파일 목록 반환. 파일명에 기간·uuid 포함(재적재 추적)."""
     chunks = plan_chunks(d_from, d_to)
     files: list[Path] = []
     total = len(chunks)
 
-    def work(ch: Chunk) -> Path | None:
+    def work(ch: Chunk) -> list[Path]:
         if should_stop and should_stop():
-            return None
-        sql = build_extract_sql(conditions, ch.d_from, ch.d_to, catalog)
-        last: Exception | None = None
-        for attempt in range(RETRY + 1):
-            try:
-                df = _fetch(sql)
-                break
-            except Exception as e:      # noqa: BLE001 — 재시도 후 위로
-                last = e
-                log.warning("청크 %s 시도 %d 실패: %s", ch, attempt + 1, e)
-        else:
-            raise RuntimeError(f"청크 {ch.d_from}~{ch.d_to} 추출 실패") from last
-        df = df.cast({f.name: pl.from_arrow(pa.array([], f.type)).dtype
-                      for f in ARROW_SCHEMA}, strict=False)
-        p = staging / f"raw_{ch.d_from:%Y%m%d}_{ch.d_to:%Y%m%d}_{uuid.uuid4().hex[:8]}.parquet"
-        df.write_parquet(p)
-        return p
+            return []
+        produced: list[Path] = []
+        # item_id 필터가 9999를 넘으면 별도 쿼리(별도 parquet)로 청크 분리.
+        # downstream(pivot_and_load)은 전체 parquet를 scan_parquet로 합치고
+        # key_hash 기준으로 dedup하므로 청크가 여러 파일로 갈라져도 안전하다.
+        id_sets = ([item_ids] if item_ids is None
+                   else [item_ids[s:s + ITEM_ID_CHUNK]
+                         for s in range(0, len(item_ids), ITEM_ID_CHUNK)])
+        for idx, ids in enumerate(id_sets):
+            if should_stop and should_stop():
+                return produced
+            sql = build_extract_sql(conditions, ch.d_from, ch.d_to, catalog,
+                                    item_ids=ids)
+            last: Exception | None = None
+            for attempt in range(RETRY + 1):
+                try:
+                    df = _fetch(sql)
+                    break
+                except Exception as e:      # noqa: BLE001 — 재시도 후 위로
+                    last = e
+                    log.warning("청크 %s(item %d) 시도 %d 실패: %s",
+                                ch, idx, attempt + 1, e)
+            else:
+                raise RuntimeError(
+                    f"청크 {ch.d_from}~{ch.d_to} item {idx} 추출 실패") from last
+            df = normalize_schema(df)
+            suffix = f"_{idx}" if len(id_sets) > 1 else ""
+            p = staging / (f"raw_{ch.d_from:%Y%m%d}_{ch.d_to:%Y%m%d}_"
+                           f"{uuid.uuid4().hex[:8]}{suffix}.parquet")
+            df.write_parquet(p)
+            produced.append(p)
+        return produced
 
     done = 0
     with ThreadPoolExecutor(max_workers=N_WORKERS) as ex:
@@ -108,7 +168,7 @@ def extract_to_parquet(
             done += 1
             if got is None:
                 continue
-            files.append(got)
+            files.extend(got)
             if on_progress:
                 on_progress(done, total, str(futs[fut].d_from))
     return sorted(files)

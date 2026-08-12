@@ -173,7 +173,9 @@ class ReportTab(StaleMixin, QWidget):
         self.info.body.addWidget(self.lbl_info)
         self.info.body.addWidget(QLabel("표 슬라이드"))
         self.cmb_tbl = QComboBox()
-        self.cmb_tbl.addItems(["덱 전체를 넓게", "여러 장으로 분할"])
+        self.cmb_tbl.addItems(["넘치게 두기 (9pt 유지)", "여러 장으로 분할"])
+        self.cmb_tbl.setCurrentIndex(
+            1 if self.state.table_slide_mode == "split" else 0)
         self.cmb_tbl.currentIndexChanged.connect(self._mode_changed)
         self.info.body.addWidget(self.cmb_tbl)
         sv.addWidget(self.info)
@@ -253,7 +255,7 @@ class ReportTab(StaleMixin, QWidget):
 
     # ── 그리기 ───────────────────────────────────────────────
     def _mode_changed(self, i: int) -> None:
-        self.state.table_slide_mode = "wide" if i == 0 else "split"
+        self.state.table_slide_mode = "overflow" if i == 0 else "split"
         self._update_info()
 
     def _page_changed(self, i: int) -> None:

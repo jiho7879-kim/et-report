@@ -38,6 +38,15 @@ ROLE_ALIASES: dict[str, tuple[str, ...]] = {
 NUMERIC_TYPES = {"DOUBLE", "FLOAT", "REAL", "DECIMAL", "HUGEINT",
                  "BIGINT", "INTEGER", "SMALLINT", "TINYINT"}
 
+# step_seq만 다른 행을 **한 측정점으로 합칠 때**의 그룹 키(계획서 §10.1).
+# x는 step_seq=1, y는 step_seq=2에 기록되는 경우가 흔하다. seq를 키에 두면
+# 두 행으로 갈려 x·y가 함께 있는 행이 0개가 되고 산점도가 통째로 빈다.
+# 단 step_id·온도·site_cnt가 다르면 **다른 측정점**이므로 절대 합치지 않는다.
+MERGE_ROLES = ("x", "y", "temp", "step", "site")
+
+# 분석 프레임에 함께 싣는 측정 조건 — 그룹 편집 4단 필터(§9.1)가 쓴다.
+CTX_ROLES = ("step", "temp", "site")
+
 
 @dataclass
 class TableProfile:
@@ -121,36 +130,105 @@ def key_expr(p: TableProfile) -> str:
     return f"md5(concat_ws('|', {joined}))"
 
 
+def merge_cols(p: TableProfile) -> list[str]:
+    """step_seq 병합의 그룹 키가 될 실제 컬럼명 (lot·wafer 제외)."""
+    return [p.roles[r] for r in MERGE_ROLES if r in p.roles]
+
+
+def merges_seq(p: TableProfile) -> bool:
+    """step_seq 병합을 적용할지.
+
+    seq 컬럼이 있고 lot·wafer와 병합 키가 최소 하나는 인식됐을 때만 합친다.
+    키가 없는데 그룹핑을 하면 합칠 이유도 없이 행이 뭉쳐(예: wafer 하나가
+    한 점이 되어) 조용히 데이터를 잃는다 — 못 합치는 것보다 나쁘다.
+    """
+    return bool("seq" in p.roles and p.roles.get("lot") and p.roles.get("wafer")
+                and merge_cols(p))
+
+
+def ctx_select(p: TableProfile) -> list[str]:
+    """측정 조건 컬럼(step·temp·site)을 표준 이름으로 함께 싣는다.
+
+    그룹 편집의 4단 연쇄 필터(§9.1)가 이 값으로 좁히고, 배정도 그 범위에만
+    적용한다 — 같은 wafer라도 step·온도가 다르면 다른 측정점이기 때문이다.
+    없는 스키마에서도 프레임 모양이 흔들리지 않게 NULL로라도 자리를 만든다.
+    """
+    return [f'"{p.roles[r]}" AS {r}' if r in p.roles else f"NULL AS {r}"
+            for r in CTX_ROLES]
+
+
+def wafer_index_sql(p: TableProfile) -> str:
+    """(lot, wafer, step, temp, site) → 포인트 수. 그룹 편집의 조회용.
+
+    item 컬럼을 전혀 건드리지 않으므로 [적용] 없이도 가볍게 돌릴 수 있다
+    (§9.1 — 대부분의 사용자는 DB만 고르고 그룹부터 짠다).
+    """
+    lot = p.roles.get("lot")
+    waf = p.roles.get("wafer")
+    lot_sel = f'"{lot}" AS lot' if lot else "'(lot?)' AS lot"
+    waf_sel = f'"{waf}" AS wafer' if waf else "'(wafer?)' AS wafer"
+    x, y = p.roles.get("x"), p.roles.get("y")
+    if x and y:      # long이든 wide든 die 좌표로 세면 포인트 수가 맞는다
+        n = f"count(DISTINCT concat_ws('|', \"{x}\", \"{y}\")) AS n"
+    else:
+        n = "count(*) AS n"
+    sel = ", ".join([lot_sel, waf_sel, *ctx_select(p), n])
+    return f'SELECT {sel} FROM "{p.table}" GROUP BY ALL'
+
+
 def select_sql(p: TableProfile, dedup_latest: bool = True) -> str:
-    """분석용 wide SELECT — key/lot/wafer/gid + item 컬럼들.
+    """분석용 wide SELECT — key/lot/wafer/gid + step/temp/site + item 컬럼들.
 
     long이면 PIVOT으로 wide화한다. time 컬럼이 있으면 재측정(retest)의
-    최신 행만 남긴다.
+    최신 행만 남기되, **파티션에 step_seq를 포함**한다 — 빼면 seq가 다른
+    정상 행까지 하나만 남고 나머지가 사라진다(§10.1).
+
+    그다음 step_seq(과 측정 시각)만 다른 행을 한 측정점으로 합친다. 각 item은
+    NULL이 아닌 첫 값(any_value)을 취하므로, x가 seq 1·y가 seq 2에 기록돼
+    있어도 한 행에 함께 실린다. key는 합친 행들의 최솟값을 쓴다 — seq가 하나뿐인
+    (=지금까지 정상 동작하던) DB에서는 예전 key와 값이 같아서 제외 사이드카가
+    그대로 살아 있다.
     """
     lot = p.roles.get("lot")
     waf = p.roles.get("wafer")
     lot_sel = f'"{lot}" AS lot' if lot else "'(lot?)' AS lot"
     waf_sel = f'"{waf}" AS wafer' if waf else "'(wafer?)' AS wafer"
     key = key_expr(p)
+    merge = merges_seq(p)
 
     if p.is_long:
         item, val = p.roles["item"], p.roles["value"]
+        roles = MERGE_ROLES if merge else ("x", "y", "temp", "step",
+                                           "seq", "site", "time")
         group = [c for c in (lot, waf) if c] + [
-            p.roles[r] for r in ("x", "y", "temp", "step", "seq", "site", "time")
-            if r in p.roles]
+            p.roles[r] for r in roles if r in p.roles]
         gcols = ", ".join(f'"{c}"' for c in group) or "1"
         base = (f'SELECT {gcols}, "{item}" AS item_id, "{val}" AS value '
                 f'FROM "{p.table}"')
         return (f"WITH src AS ({base}) "
-                f"PIVOT src ON item_id USING first(value) GROUP BY {gcols}")
+                f"PIVOT src ON item_id USING any_value(value) GROUP BY {gcols}")
 
-    items = ", ".join(f'"{c}"' for c in p.items)
-    sql = (f'SELECT {key} AS key, {lot_sel}, {waf_sel}, \'\' AS gid'
-           f'{", " + items if items else ""} FROM "{p.table}"')
+    items = [f'"{c}"' for c in p.items]
+    dedup = ""
     if dedup_latest and "time" in p.roles and lot and waf:
-        keys = [p.roles[r] for r in ("x", "y", "temp", "step", "site")
+        keys = [p.roles[r] for r in ("x", "y", "temp", "step", "site", "seq")
                 if r in p.roles]
         part = ", ".join(f'"{c}"' for c in [lot, waf, *keys])
-        sql += (f' QUALIFY row_number() OVER (PARTITION BY {part} '
-                f'ORDER BY "{p.roles["time"]}" DESC) = 1')
-    return sql
+        dedup = (f' QUALIFY row_number() OVER (PARTITION BY {part} '
+                 f'ORDER BY "{p.roles["time"]}" DESC) = 1')
+
+    if not merge:
+        sel = ", ".join([f"{key} AS key", lot_sel, waf_sel, "'' AS gid",
+                         *ctx_select(p), *items])
+        return f'SELECT {sel} FROM "{p.table}"{dedup}'
+
+    mc = [f'"{c}"' for c in merge_cols(p)]
+    inner = (f'SELECT {", ".join([f"{key} AS key", lot_sel, waf_sel, *mc, *items])} '
+             f'FROM "{p.table}"{dedup}')
+    # step·temp·site는 병합 그룹 키이므로 집계 없이 그대로 뽑을 수 있다
+    ctx = [f'"{p.roles[r]}" AS {r}' if r in p.roles else f"NULL AS {r}"
+           for r in CTX_ROLES]
+    outer = ", ".join(["min(key) AS key", "lot", "wafer", "'' AS gid", *ctx,
+                       *[f"any_value({c}) AS {c}" for c in items]])
+    return (f"SELECT {outer} FROM ({inner}) "
+            f'GROUP BY {", ".join(["lot", "wafer", *mc])}')

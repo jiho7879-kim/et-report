@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from etreport.data.loader import RESERVED, item_columns
 from etreport.model.state import AppState, StateBus
 from etreport.ui.tabs.common import StaleMixin
 from etreport.ui.widgets.autocomplete import AutoCompleteEdit
@@ -65,8 +66,7 @@ class ExploreTab(StaleMixin, QWidget):
             if state.rf.rules:
                 return state.aliases()
             if state.data is not None:
-                return [c for c in state.data.columns
-                        if c not in ("key", "lot", "wafer", "gid")]
+                return item_columns(state.data)
             return []
         self.ed_x = AutoCompleteEdit(_items)
         self.ed_y = AutoCompleteEdit(_items)
@@ -151,9 +151,8 @@ class ExploreTab(StaleMixin, QWidget):
             self.canvas.figure.clear()
             self.canvas.draw_idle()
             return
-        if not st.explore.x and st.data.width > 4:
-            items = [c for c in st.data.columns
-                     if c not in ("key", "lot", "wafer", "gid")]
+        if not st.explore.x and st.data.width > len(RESERVED):
+            items = item_columns(st.data)
             st.explore.x, st.explore.y = items[0], items[min(1, len(items) - 1)]
         for ed, val in ((self.ed_x, st.explore.x), (self.ed_y, st.explore.y)):
             if not ed.hasFocus() and ed.text() != val:

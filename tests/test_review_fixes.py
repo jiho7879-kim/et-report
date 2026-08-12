@@ -142,7 +142,7 @@ def test_to_tsv_applies_delta_and_caption():
     from etreport.render.pptgen import TableData
 
     td = TableData("DC", [("PA1", ["01", "02"])],
-                   [{"cat2": "N", "cat3": "SVT", "item": "A",
+                   [{"cats": ["N", "SVT"], "item": "A",
                      "values": [1.5, -2.5], "offspec": [False, False]}])
     plain = to_tsv(td)
     assert plain.splitlines()[2].split("\t")[3:] == ["1.50", "-2.50"]
@@ -277,7 +277,7 @@ def test_split_table_slices_by_position():
     from etreport.render.pptgen import TableData, split_table
 
     header = [("PA1", [f"{i:02d}" for i in range(1, 15)])]
-    rows = [{"cat2": "", "cat3": "", "item": "A",
+    rows = [{"cats": ["", ""], "item": "A",
              "values": list(range(14)), "offspec": [False] * 14}]
     parts = split_table(TableData("DC", header, rows), per=12)
     assert len(parts) == 2

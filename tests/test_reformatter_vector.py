@@ -32,7 +32,10 @@ FORMULAS = [fill(s, *ALIASES) for s in ADDP_SHAPES] + [
     "Max({A},{B})",
     "Sqrt({A})",                  # 음수 → NULL
     "Log10({A})",                 # 0·음수 → NULL
+    "Log({A})",                   # 상용로그 (= Log10)
     "Ln({A})",
+    "Exp({A})",                   # 오버플로 → 두 경로 모두 NULL
+    "Exp({A}/{B})",
     "Abs({A})",
     "Std({A},{B},{C},{D})/Avg({A},{B},{C},{D})",
 ]
@@ -96,9 +99,15 @@ def test_untranslatable_formula_falls_back_not_crashes():
 
 
 def test_every_whitelisted_function_is_vectorized():
-    """행 단위 폴백은 예외여야 한다 — 20만 행에서 폴백이 잡히면 몇 분씩 걸린다."""
+    """행 단위 폴백은 예외여야 한다 — 20만 행에서 폴백이 잡히면 몇 분씩 걸린다.
+
+    목록을 손으로 적지 않고 화이트리스트에서 뽑는다 — 함수를 추가하면서
+    벡터 경로를 깜빡하면 여기서 걸린다.
+    """
+    from etreport.data.reformatter import _BASE_FUNCS
+
+    nary = {"Std", "Avg", "Sum", "Min", "Max"}
     wide = make_wide(ALIASES, 10)
-    for fn in ("Abs({A})", "Sqrt({A})", "Log10({A})", "Ln({A})",
-               "Min({A},{B})", "Max({A},{B})", "Avg({A},{B})",
-               "Sum({A},{B})", "Std({A},{B})"):
-        assert _compile_expr(fn, set(wide.columns)) is not None, fn
+    for name in _BASE_FUNCS:
+        src = f"{name}({{A}},{{B}})" if name in nary else f"{name}({{A}})"
+        assert _compile_expr(src, set(wide.columns)) is not None, name

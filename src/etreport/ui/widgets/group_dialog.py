@@ -1,4 +1,18 @@
-"""그룹 편집 — 단일 lot(입력+조회+화살표) / 멀티 lot(붙여넣기) / 스타일 일괄."""
+"""그룹 편집 — 단일 lot(4단 필터+조회+화살표) / 멀티 lot(붙여넣기) / 스타일 일괄.
+
+확정 사양(§9.1) 세 가지를 지킨다.
+
+  - **lot → step_id → total_site_cnt → temperature 순으로 좁힌다.** 앞을 바꾸면
+    뒤 콤보 목록과 유효 wafer가 다시 채워진다
+  - **배정도 필터 범위에만 적용한다.** 같은 wafer라도 step·온도·site가 다르면
+    다른 측정점이다
+  - **[조회]는 [적용] 없이도 동작한다.** DB 경로만 있으면 그 자리에서 읽기
+    전용으로 열어 조회한다 — 대부분의 사용자가 "DB만 고르고 그룹부터 짜는"
+    흐름을 쓴다
+
+lot 찾기는 정확히 일치 → 대소문자 무시 → 부분 일치로 넓혀가고, 그래도 없으면
+비슷한 lot을 예시로 보여준다.
+"""
 from __future__ import annotations
 
 import polars as pl
@@ -7,6 +21,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -20,8 +35,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from etreport.data import loader
 from etreport.model.split import PALETTE_OKABE, REF_COLOR, SYMBOLS
 from etreport.model.state import AppState
+
+ALL = "전체"                       # 필터 콤보의 '좁히지 않음'
+FILTERS = (("step_id", "step"), ("site", "site"), ("temp", "temp"))
 
 _PALETTES = {
     "Okabe-Ito (색약 안전)": PALETTE_OKABE,
@@ -31,11 +50,15 @@ _PALETTES = {
 
 
 class GroupDialog(QDialog):
-    def __init__(self, state: AppState, parent=None) -> None:
+    def __init__(self, state: AppState, parent=None, db_path: str = "") -> None:
         super().__init__(parent)
         self.state = state
+        # [적용]으로 이미 연 DB가 있으면 그것, 없으면 도크에 골라만 둔 경로
+        self.db_path = state.db_path or db_path
+        self.index = loader.wafer_index_empty()
+        self._lot: str | None = None
         self.setWindowTitle("그룹 편집")
-        self.resize(780, 560)
+        self.resize(820, 620)
         v = QVBoxLayout(self)
 
         tabs = QTabWidget()
@@ -54,6 +77,16 @@ class GroupDialog(QDialog):
         w = QWidget()
         v = QVBoxLayout(w)
 
+        dbrow = QHBoxLayout()
+        dbrow.addWidget(QLabel("DB"))
+        self.lbl_db = QLabel()
+        self.lbl_db.setObjectName("hint")
+        dbrow.addWidget(self.lbl_db, 1)
+        b = QPushButton("DB 선택")
+        b.clicked.connect(self._pick_db)
+        dbrow.addWidget(b)
+        v.addLayout(dbrow)
+
         top = QHBoxLayout()
         top.addWidget(QLabel("lot"))
         self.ed_lot = QLineEdit()
@@ -67,6 +100,20 @@ class GroupDialog(QDialog):
         self.lbl_valid.setObjectName("hint")
         top.addWidget(self.lbl_valid)
         v.addLayout(top)
+
+        # 4단 연쇄 필터 — lot 다음은 step_id → site → temperature 순(확정)
+        fl = QHBoxLayout()
+        self.filters: dict[str, QComboBox] = {}
+        for label, name in FILTERS:
+            fl.addWidget(QLabel(label))
+            cmb = QComboBox()
+            cmb.setMinimumWidth(110)
+            cmb.currentIndexChanged.connect(
+                lambda _i, n=name: self._filter_changed(n))
+            self.filters[name] = cmb
+            fl.addWidget(cmb)
+        fl.addStretch(1)
+        v.addLayout(fl)
 
         mid = QHBoxLayout()
         left = QVBoxLayout()
@@ -111,10 +158,94 @@ class GroupDialog(QDialog):
         v.addLayout(mid, 1)
 
         self._fill_groups()          # 리스트 위젯이 생긴 뒤에 채운다
-        if self.state.data is not None and self.state.data.height:
-            self.ed_lot.setText(sorted(set(self.state.data["lot"]))[0])
+        self._load_index()           # [적용] 전이면 DB에서 직접 읽는다
+        if not self.index.is_empty():
+            self.ed_lot.setText(sorted(set(self.index["lot"]))[0])
             self._lookup()
         return w
+
+    # ── 데이터 원천 ──────────────────────────────────────────
+    def _load_index(self) -> None:
+        """(lot, wafer, step, temp, site, 포인트 수) 색인을 만든다.
+
+        [적용]으로 읽어 둔 프레임이 있으면 그것을, 없으면 DB를 읽기 전용으로
+        열어 조회한다 — [적용] 없이도 조회가 되어야 한다(§9.1).
+        """
+        st = self.state
+        self.lbl_db.setText(self.db_path or "(DB를 고르세요)")
+        try:
+            if st.data is not None and st.data.height:
+                self.index = loader.wafer_index_from_frame(st.data)
+                self.lbl_db.setText(f"{self.db_path or st.db_label} · 불러옴")
+            elif self.db_path:
+                self.index = loader.wafer_index_from_db(self.db_path)
+                self.lbl_db.setText(f"{self.db_path} · 읽기 전용으로 조회")
+            else:
+                self.index = loader.wafer_index_empty()
+        except Exception as e:                       # noqa: BLE001 — 창은 살린다
+            self.index = loader.wafer_index_empty()
+            self.lbl_db.setText(f"DB를 읽지 못했습니다: {e}")
+
+    def _pick_db(self) -> None:
+        p, _ = QFileDialog.getOpenFileName(self, "DuckDB 파일", "",
+                                           "DuckDB (*.duckdb)")
+        if not p:
+            return
+        self.db_path = p
+        self.state.data = None if self.state.db_path != p else self.state.data
+        self._load_index()
+        self._lookup()
+
+    # ── 필터 ─────────────────────────────────────────────────
+    def _selected(self, upto: str | None = None) -> dict[str, str]:
+        """현재 필터 선택값. upto를 주면 **그 앞 단계까지만** 돌려준다.
+
+        연쇄 필터의 핵심 — 뒤 콤보의 목록은 앞 단계로 좁힌 결과에서 뽑는다.
+        """
+        out: dict[str, str] = {}
+        for _label, name in FILTERS:
+            if name == upto:
+                break
+            cmb = self.filters.get(name)
+            if cmb is not None and cmb.currentText() not in ("", ALL):
+                out[name] = cmb.currentText()
+        return out
+
+    def _rows(self, conds: dict[str, str] | None = None) -> pl.DataFrame:
+        """lot + 조건으로 좁힌 색인."""
+        if self._lot is None or self.index.is_empty():
+            return loader.wafer_index_empty()
+        sub = self.index.filter(pl.col("lot") == self._lot)
+        for name, val in (self._selected() if conds is None else conds).items():
+            sub = sub.filter(pl.col(name) == val)
+        return sub
+
+    def _refresh_filters(self) -> None:
+        """앞 단계로 좁힌 결과에서 각 콤보의 목록을 다시 만든다."""
+        for _label, name in FILTERS:
+            cmb = self.filters[name]
+            keep = cmb.currentText()
+            vals = sorted({v for v in self._rows(self._selected(upto=name))[name]
+                           if v is not None})
+            cmb.blockSignals(True)               # 갱신 중 재귀 방지
+            cmb.clear()
+            cmb.addItems([ALL, *vals])
+            cmb.setCurrentIndex(cmb.findText(keep) if keep in vals else 0)
+            cmb.setEnabled(bool(vals))
+            cmb.blockSignals(False)
+
+    def _filter_changed(self, name: str) -> None:
+        self._refresh_filters()
+        self._update_counts()
+        self._refresh_lists()
+
+    def _update_counts(self) -> None:
+        sub = self._rows()
+        if self._lot is None:
+            return
+        wafers = sorted(set(sub["wafer"]))
+        pts = int(sub["n"].sum() or 0)
+        self.lbl_valid.setText(f"유효 {len(wafers)}장 · {pts:,}포인트")
 
     # ── 그룹 목록 ────────────────────────────────────────────
     def _fill_groups(self) -> None:
@@ -173,40 +304,92 @@ class GroupDialog(QDialog):
             st.data = st.data.with_columns(
                 pl.when(pl.col("gid") == g.gid).then(pl.lit(""))
                 .otherwise(pl.col("gid")).alias("gid"))
+        for key in [k for k, v in st.manual_groups.items() if v == g.gid]:
+            del st.manual_groups[key]            # 배정 기록도 함께 지운다
         st.groups.remove(g)
         self._fill_groups()
 
+    def _find_lot(self, typed: str) -> str | None:
+        """정확히 일치 → 대소문자 무시 → 부분 일치 순으로 넓혀 찾는다."""
+        lots = list(dict.fromkeys(self.index["lot"].to_list()))
+        if typed in lots:
+            return typed
+        low = typed.casefold()
+        for lot in lots:
+            if lot.casefold() == low:
+                return lot
+        hits = [lot for lot in lots if low in lot.casefold()]
+        return hits[0] if len(hits) == 1 else None
+
+    def _similar(self, typed: str, n: int = 5) -> list[str]:
+        """못 찾았을 때 보여줄 비슷한 lot — 앞글자가 겹치는 것 우선."""
+        lots = list(dict.fromkeys(self.index["lot"].to_list()))
+        low = typed.casefold()
+        scored = sorted(lots, key=lambda x: (
+            -len([1 for a, b in zip(x.casefold(), low) if a == b]), x))
+        return scored[:n]
+
     def _lookup(self) -> None:
-        st = self.state
-        lot = self.ed_lot.text().strip().upper()
-        if st.data is None or not lot:
+        typed = self.ed_lot.text().strip()
+        if not typed:
             return
-        sub = st.data.filter(pl.col("lot") == lot)
-        if sub.is_empty():
-            self.lbl_valid.setText("조회 결과 없음 — 먼저 적재하세요")
-            self.list_pool.clear()
-            self.list_grp.clear()
+        if self.index.is_empty():
+            self._load_index()                   # DB만 고르고 바로 조회하는 흐름
+        if self.index.is_empty():
+            self.lbl_valid.setText(
+                "DB를 읽지 못했습니다 — [DB 선택]으로 파일을 고르세요")
+            self._clear_lists()
+            return
+        lot = self._find_lot(typed)
+        if lot is None:
+            hint = ", ".join(self._similar(typed))
+            self.lbl_valid.setText(f"'{typed}' 없음 — 비슷한 lot: {hint}"
+                                   if hint else f"'{typed}' 없음")
+            self._lot = None
+            self._clear_lists()
             return
         self._lot = lot
-        wafers = sorted(set(sub["wafer"]))
-        self.lbl_valid.setText(f"유효 {len(wafers)}장")
+        if lot != typed:
+            self.ed_lot.setText(lot)             # 찾은 이름으로 맞춰 준다
+        self._refresh_filters()
+        self._update_counts()
         self._refresh_lists()
+
+    def _clear_lists(self) -> None:
+        self.list_pool.clear()
+        self.list_grp.clear()
+
+    # ── 배정 ─────────────────────────────────────────────────
+    def _key(self, wafer: str) -> tuple:
+        """배정 키 — 고른 필터까지 포함한다(§9.1 '배정도 필터 범위에만')."""
+        sel = self._selected()
+        return (self._lot, wafer, sel.get("step"), sel.get("temp"),
+                sel.get("site"))
+
+    def _gid_of(self, wafer: str) -> str:
+        """현재 필터 범위에서 이 wafer가 어느 그룹인지."""
+        st = self.state
+        if st.data is not None and "gid" in st.data.columns:
+            sub = st.data.filter((pl.col("lot") == self._lot)
+                                 & (pl.col("wafer") == wafer))
+            for name, val in self._selected().items():
+                if name in sub.columns:
+                    sub = sub.filter(pl.col(name).cast(pl.Utf8) == val)
+            if not sub.is_empty():
+                return sub["gid"][0]
+        return st.manual_groups.get(self._key(wafer), "")
 
     def _refresh_lists(self) -> None:
         if not hasattr(self, "list_grp"):        # 초기화 중 호출 방어
             return
-        st = self.state
-        lot = getattr(self, "_lot", None)
-        self.list_pool.clear()
-        self.list_grp.clear()
-        if lot is None or st.data is None:
+        self._clear_lists()
+        if self._lot is None:
             return
-        group = self._current_group()           # 그룹이 없을 수 있다
+        group = self._current_group()            # 그룹이 없을 수 있다
         gid = group.gid if group else ""
-        sub = st.data.filter(pl.col("lot") == lot)
         pool, mine = [], []
-        for wf in sorted(set(sub["wafer"])):
-            g = sub.filter(pl.col("wafer") == wf)["gid"][0]
+        for wf in sorted(set(self._rows()["wafer"])):
+            g = self._gid_of(wf)
             if group is not None and g == gid:
                 mine.append(wf)
             elif not g:
@@ -219,13 +402,14 @@ class GroupDialog(QDialog):
             self.list_grp.addItem(it)
 
     def _assign(self, wafers: list[str], gid: str) -> None:
+        """배정은 **고른 필터 범위에만** 걸린다. [적용] 전에도 기록해 둔다."""
         st = self.state
-        lot = getattr(self, "_lot", None)
-        if st.data is None or lot is None:
+        if self._lot is None:
             return
-        st.data = st.data.with_columns(
-            pl.when((pl.col("lot") == lot) & pl.col("wafer").is_in(wafers))
-            .then(pl.lit(gid)).otherwise(pl.col("gid")).alias("gid"))
+        for wf in wafers:
+            st.manual_groups[self._key(wf)] = gid
+        if st.data is not None:
+            st.data = loader.apply_manual_groups(st.data, st.manual_groups)
         self._refresh_lists()
 
     def _move(self, to_group: bool) -> None:
@@ -265,9 +449,10 @@ class GroupDialog(QDialog):
         return w
 
     def _apply_paste(self) -> None:
+        """붙여넣은 lot·wafer·group 표를 반영. [적용] 전에도 기록해 둔다."""
         st = self.state
         text = self.paste.toPlainText().strip()
-        if not text or st.data is None:
+        if not text:
             return
         name_to_gid = {g.name: g.gid for g in st.groups}
         if not name_to_gid:
@@ -284,13 +469,21 @@ class GroupDialog(QDialog):
             gid = name_to_gid.get(grp)
             if gid is None:
                 continue
-            cond = (pl.col("lot") == lot)
             if wf:
                 wf2 = wf if wf.upper().startswith("W") else f"W{int(wf):02d}"
-                cond = cond & (pl.col("wafer") == wf2)
-            st.data = st.data.with_columns(
-                pl.when(cond).then(pl.lit(gid)).otherwise(pl.col("gid")).alias("gid"))
+                wafers = [wf2]
+            else:                       # wafer 열이 없으면 lot 전체
+                wafers = sorted(set(self.index.filter(
+                    pl.col("lot") == lot)["wafer"])) if not self.index.is_empty() \
+                    else []
+                if not wafers and st.data is not None:
+                    wafers = sorted(set(st.data.filter(
+                        pl.col("lot") == lot)["wafer"]))
+            for w in wafers:            # 붙여넣기는 조건을 안 따진다(전체 범위)
+                st.manual_groups[(lot, w, None, None, None)] = gid
             n += 1
+        if st.data is not None:
+            st.data = loader.apply_manual_groups(st.data, st.manual_groups)
         QMessageBox.information(self, "적용됨", f"{n}행을 반영했습니다")
         self._refresh_lists()
 
