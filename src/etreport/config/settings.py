@@ -63,6 +63,7 @@ class AnalysisConfig:
     # 로그 축 판정은 plot 관심사 — 분석 설정에 속한다
     log_patterns: list[str] = field(default_factory=lambda: ["Ioff*", "*Leak*", "Jg*"])
     split_path: str = ""
+    split_text: str = ""      # 붙여넣기로 넣은 실험 조건(§3.4)
 
 
 @dataclass

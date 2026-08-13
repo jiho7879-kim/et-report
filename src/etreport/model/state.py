@@ -45,6 +45,9 @@ class AppState:
     # 그룹 편집에서 손으로 배정한 것 — (lot, wafer, step, temp, site) → gid.
     # None은 '조건 무관'. [적용]으로 DB를 다시 읽어도 loader가 재적용한다.
     manual_groups: dict[tuple, str] = field(default_factory=dict)
+    # inline 계측(기능 B) — 붙인 계측 열 이름과 top-k 결과
+    met_columns: list[str] = field(default_factory=list)
+    met_top: object | None = None      # polars DataFrame | None
     rf_path: str = ""
     rf_sheet: str | int = 0
     exclude_all_plots: bool = True     # 제외를 모든 plot에 적용할지
@@ -68,13 +71,31 @@ class AppState:
         return self.data.filter(~pl.col("key").is_in(list(self.excluded)))
 
     def wafer_columns(self) -> list[tuple[str, list[str]]]:
+        """표의 wafer 열 — **plot과 같은 기준**으로 좁힌다.
+
+        plot은 visible 그룹의 gid만 그린다. 표만 DB 전체를 보여 주면 열이 수십
+        개로 불어나고 화면과 출력이 갈라진다. 그래서 배정이 하나라도 있으면
+        **visible 그룹에 속한 wafer만**, 배정이 없으면 전체를 보여 준다
+        (그룹을 안 쓰는 흐름 — plot의 _ALL 폴백과 같다).
+
+        한 wafer가 조건(step·온도)별로 다른 그룹에 걸릴 수 있으므로, **하나라도
+        visible 그룹이면** 그 wafer 열을 포함한다.
+        """
         if self.data is None:
             return []
         import re
+        df = self.data
+        if "gid" in df.columns and (df["gid"] != "").any():
+            hidden = {g.gid for g in self.groups if not g.visible}
+            df = df.filter((pl.col("gid") != "")
+                           & ~pl.col("gid").is_in(list(hidden))
+                           if hidden else pl.col("gid") != "")
+            if df.is_empty():          # 전부 숨김이면 빈 표(열 없음)
+                return []
         out: list[tuple[str, list[str]]] = []
-        for lot in sorted(set(self.data["lot"])):
+        for lot in sorted(set(df["lot"])):
             ws = sorted(
-                set(self.data.filter(pl.col("lot") == lot)["wafer"]),
+                set(df.filter(pl.col("lot") == lot)["wafer"]),
                 key=lambda s: [int(t) if t.isdigit() else t
                                for t in re.split(r"(\d+)", s)])
             out.append((lot, ws))

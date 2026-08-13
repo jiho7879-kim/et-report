@@ -11,7 +11,6 @@ import polars as pl
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QApplication,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -30,14 +29,16 @@ from PySide6.QtWidgets import (
 
 from etreport.config.settings import AnalysisConfig, Settings
 from etreport.model.state import AppState, StateBus
+from etreport.ui.tabs.common import on_combo
 from etreport.ui.tabs.common import pick_sheet as _pick_sheet
 from etreport.ui.tabs.explore import ExploreTab
 from etreport.ui.tabs.report import ReportTab
 from etreport.ui.tabs.summary import SummaryTab
 from etreport.ui.widgets.cards import GhostButton, SectionLabel
 from etreport.ui.widgets.group_dialog import GroupDialog
+from etreport.ui.widgets.metrology_dialog import MetrologyDialog
 from etreport.ui.widgets.reformatter_dialog import ReformatterDialog
-from etreport.ui.widgets.split_dialog import SplitDialog
+from etreport.ui.widgets.split_dialog import SplitDialog, SplitSourceDialog
 from etreport.ui.widgets.sql_dialog import SqlExportDialog
 
 __all__ = ["AnalysisWorkspace", "ExploreTab", "ReportTab", "SummaryTab",
@@ -80,7 +81,8 @@ class AnalysisWorkspace(QWidget):
         # 설정 프리셋 -----------------------------------------
         v.addWidget(SectionLabel("설정"))
         self.cfg_combo = QComboBox()
-        self.cfg_combo.currentIndexChanged.connect(self._cfg_selected)
+        on_combo(self.cfg_combo, lambda: self._cfg_selected(
+            self.cfg_combo.currentIndex()))
         v.addWidget(self.cfg_combo)
         btns = QHBoxLayout()
         for text, fn in (("저장", self._cfg_save),
@@ -104,10 +106,12 @@ class AnalysisWorkspace(QWidget):
             setattr(self, f"btn_{key}", b)
             v.addWidget(b)
 
-        v.addWidget(QLabel("REPORT"))
-        self.rep_combo = QComboBox()
-        self.rep_combo.currentTextChanged.connect(self._report_changed)
-        v.addWidget(self.rep_combo)
+        # REPORT는 **콤보를 두지 않는다**(확정 사양 §5.1). 템플릿에 리포트가
+        # 여럿이면 [적용] 뒤 안내 문구로만 알린다.
+        self.lbl_report = QLabel()
+        self.lbl_report.setObjectName("hint")
+        self.lbl_report.setWordWrap(True)
+        v.addWidget(self.lbl_report)
 
         self.btn_apply = QPushButton("적용")
         self.btn_apply.setToolTip(
@@ -119,6 +123,18 @@ class AnalysisWorkspace(QWidget):
         self.lbl_apply.setObjectName("hint")
         self.lbl_apply.setWordWrap(True)
         v.addWidget(self.lbl_apply)
+
+        b = GhostButton("S3 저장소")
+        b.setToolTip("사내 S3에 duckdb·csv·sbdf를 올리고 내려받습니다.")
+        b.clicked.connect(self._open_s3)
+        v.addWidget(b)
+
+        b = GhostButton("inline 계측 불러오기")
+        b.setToolTip("fab.f_fab_wf_met에서 계측값을 가져와 (lot, wafer)로 붙입니다.\n"
+                     "붙인 값은 탐색 X축·Summary에서 쓰고, 유의 인자 top-k는\n"
+                     "PPT 슬라이드로 나갑니다.")
+        b.clicked.connect(self._open_metrology)
+        v.addWidget(b)
 
         b = GhostButton("SQL 조회 · 내보내기")
         b.clicked.connect(self._open_sql)
@@ -204,11 +220,7 @@ class AnalysisWorkspace(QWidget):
         c = self.cfg()
         self.settings.last_analysis_config = c.name
         self.ed_log.setText(", ".join(c.log_patterns))
-        self.rep_combo.blockSignals(True)
-        self.rep_combo.clear()
-        if c.report:
-            self.rep_combo.addItem(c.report)
-        self.rep_combo.blockSignals(False)
+        self._show_report(c.report)
         self._mark_unapplied("설정을 불러왔습니다 — [적용]을 누르세요")
         self._refresh_dock()
 
@@ -246,8 +258,7 @@ class AnalysisWorkspace(QWidget):
     def _collect_into(self, c: AnalysisConfig) -> None:
         c.log_patterns = [t.strip() for t in self.ed_log.text().split(",")
                           if t.strip()]
-        if self.rep_combo.currentText():
-            c.report = self.rep_combo.currentText()
+        # report는 [적용]이 템플릿에서 정한 값을 그대로 쓴다(콤보 없음)
         c.table_slide_mode = self.state.table_slide_mode
 
     # ── 파일 고르기 (읽지 않는다) ────────────────────────────
@@ -292,11 +303,12 @@ class AnalysisWorkspace(QWidget):
         self._mark_unapplied("리포메터가 바뀌었습니다 — [적용]으로 템플릿을 다시 맞추세요")
 
     def _pick_split(self) -> None:
-        p, _ = QFileDialog.getOpenFileName(
-            self, "실험 조건 파일", "",
-            "표 파일 (*.xlsx *.xlsm *.csv *.tsv *.txt)")
-        if p:
-            self.cfg().split_path = p
+        """엑셀 / CSV·TSV / 클립보드 붙여넣기 — 한 창에서 고른다(§3.4)."""
+        c = self.cfg()
+        dlg = SplitSourceDialog(self, path=c.split_path,
+                                text=getattr(c, "split_text", ""))
+        if dlg.exec() and dlg.matrix is not None:
+            c.split_path, c.split_text = dlg.path, dlg.text
             self._mark_unapplied()
 
     # ── 적용 (검증은 여기서 한 번) ───────────────────────────
@@ -309,19 +321,32 @@ class AnalysisWorkspace(QWidget):
         self._refresh_dock()
 
     def apply_config(self) -> None:
+        """[적용]은 워커 스레드로 — Excel·DuckDB 읽기가 수 초~수십 초다.
+
+        UI 갱신은 **완료 콜백에서만** 한다(Qt 위젯은 워커 스레드에서 만지면 안
+        된다). 진행 중에는 도크를 잠가 중복 [적용]을 막는다.
+        """
         from etreport.model.session import apply_config
+        from etreport.ui.widgets.worker import run_in_background
         c = self.cfg()
         self._collect_into(c)
         self.btn_apply.setEnabled(False)
         self.btn_apply.setText("읽는 중…")
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            rep = apply_config(self.state, c)
-        finally:
-            QApplication.restoreOverrideCursor()
-            self.btn_apply.setEnabled(True)
-            self.btn_apply.setText("적용")
+        self.setEnabled(False)                 # 재진입·중복 적용 방지
+        w = run_in_background(
+            self, "설정 적용", lambda: apply_config(self.state, c),
+            done=lambda rep: self._apply_done(c, rep), needs_com=True)
+        # 실패해도 잠금은 풀려야 한다 — done은 성공했을 때만 불린다
+        w.finished.connect(self._apply_unlock)
 
+    def _apply_unlock(self) -> None:
+        self.setEnabled(True)
+        self.btn_apply.setEnabled(True)
+        self.btn_apply.setText("적용")
+
+    def _apply_done(self, c, rep) -> None:
+        """워커가 끝난 뒤 UI 반영 — 여기서만 위젯을 만진다."""
+        self._apply_unlock()
         if not rep.ok:
             self.lbl_apply.setText("적용 실패")
             QMessageBox.critical(self, "적용 실패", rep.text())
@@ -335,15 +360,11 @@ class AnalysisWorkspace(QWidget):
             f"적용됨 · {rep.elapsed:.1f}초"
             + (f" · 제외 {len(rep.warnings)}건" if rep.warnings else ""))
 
-        self.rep_combo.blockSignals(True)
-        self.rep_combo.clear()
-        self.rep_combo.addItems(self.state.reports)
-        if c.report in self.state.reports:
-            self.rep_combo.setCurrentText(c.report)
-        self.rep_combo.blockSignals(False)
+        self._show_report(c.report)
 
-        if self.state.split is not None and self.state.factors:
-            self._apply_split(silent=True)
+        # split 배정은 loader.load_state가 이미 했다(그 뒤에 manual_groups까지
+        # 재적용). 여기서 _apply_split을 또 부르면 그룹 편집에서 만든 그룹과
+        # 손배정이 통째로 덮어써진다 — [적용] 후 그룹이 초기화되던 원인.
         self.settings.save()
         self.bus.data_changed.emit()
         self.bus.report_changed.emit()
@@ -352,14 +373,22 @@ class AnalysisWorkspace(QWidget):
         if rep.warnings:
             QMessageBox.information(self, "적용 완료 — 일부 제외", rep.text())
 
-    def _report_changed(self, name: str) -> None:
-        st = self.state
-        if not name or st.templates is None:
+    def _show_report(self, name: str) -> None:
+        """적용된 리포트 이름을 문구로만 보여 준다 — 고르는 콤보는 없다(§5.1).
+
+        한 파일에 리포트가 여럿이면 그 사실만 알린다. 어느 것을 쓸지는 템플릿의
+        Report 컬럼이 정한다.
+        """
+        others = [r for r in self.state.reports if r != name]
+        if not name:
+            self.lbl_report.setText("")
             return
-        from etreport.model.templates import build_report
-        st.report = build_report(st.templates, name)
-        self.cfg().report = name
-        self.bus.report_changed.emit()
+        text = f"REPORT  {name}"
+        if others:
+            text += (f"\n템플릿에 리포트 {len(self.state.reports)}개 "
+                     f"({', '.join(others[:3])}{'…' if len(others) > 3 else ''}) — "
+                     f"다른 리포트를 쓰려면 템플릿의 Report 열을 바꾸세요")
+        self.lbl_report.setText(text)
 
     # ── 표시 갱신 ────────────────────────────────────────────
     def _refresh_dock(self) -> None:
@@ -377,7 +406,9 @@ class AnalysisWorkspace(QWidget):
         self.btn_rfm.setText(
             f"리포메터    {short(c.reformatter_path)}"
             + (f"  [{c.reformatter_sheet}]" if c.reformatter_sheet else ""))
-        self.btn_split.setText(f"실험 조건   {short(c.split_path)}")
+        src = ("붙여넣은 내용" if getattr(c, "split_text", "")
+               else short(c.split_path))
+        self.btn_split.setText(f"실험 조건   {src}")
 
         self.lbl_factor.setText(
             f"factor · {', '.join(st.factors) or '(없음)'}" if st.split
@@ -440,15 +471,32 @@ class AnalysisWorkspace(QWidget):
             self._apply_split()
 
     def _apply_split(self, silent: bool = False) -> None:
+        """factor 편집 결과를 반영한다. **[적용] 경로에서는 부르지 않는다** —
+        거기서는 loader.load_state가 같은 일을 이미 순서대로 끝낸다.
+
+        순서는 loader와 같다: split 배정 → manual 배정(사용자가 고른 쪽이 이긴다).
+        손으로 만든 그룹의 이름·색은 gid가 겹치면 보존한다.
+        """
+        from etreport.data.loader import apply_manual_groups
         st = self.state
         if st.split is None:
             return
-        st.groups = st.split.styles_for(st.factors)
+        keep = {g.gid: g for g in st.groups}
+        fresh = st.split.styles_for(st.factors)
+        for g in fresh:                     # 같은 gid면 사용자가 정한 이름·색 유지
+            old = keep.pop(g.gid, None)
+            if old is not None:
+                g.name, g.color, g.symbol, g.size = (old.name, old.color,
+                                                     old.symbol, old.size)
+        # split이 만들지 않은 그룹(손으로 추가한 것)은 뒤에 남긴다
+        used = set(st.manual_groups.values())
+        st.groups = fresh + [g for g in keep.values() if g.gid in used]
         if st.data is not None:
             assign = st.split.assignment(st.factors)
             st.data = st.data.with_columns(pl.Series(
                 "gid", [assign.get((lo, wa), "") for lo, wa
                         in zip(st.data["lot"], st.data["wafer"])]))
+            st.data = apply_manual_groups(st.data, st.manual_groups)
         if not silent:
             self.bus.groups_changed.emit()
 
@@ -471,6 +519,24 @@ class AnalysisWorkspace(QWidget):
         self._refresh_dock()
         QMessageBox.information(self, "Excel 캐시",
                                 f"{n}개 캐시를 비웠습니다 — 다음 읽기는 Excel을 엽니다")
+
+    def _open_s3(self) -> None:
+        """S3 창(기능 C) — boto3가 없는 PC에서는 안내만 남긴다."""
+        try:
+            from etreport.ui.widgets.s3_dialog import S3Dialog
+        except ImportError as e:               # 창 자체를 못 만드는 경우
+            QMessageBox.information(self, "S3", f"S3 기능을 쓸 수 없습니다: {e}")
+            return
+        S3Dialog(self, default_dir=str(Path(self.cfg().db_path).parent
+                                       if self.cfg().db_path else "")).exec()
+
+    def _open_metrology(self) -> None:
+        """inline 계측 창(기능 B) — 붙인 뒤에는 다시 그려야 하므로 알린다."""
+        dlg = MetrologyDialog(self.state, self)
+        dlg.exec()
+        if self.state.met_columns:
+            self.bus.data_changed.emit()
+            self._refresh_dock()
 
     def _open_sql(self) -> None:
         st = self.state

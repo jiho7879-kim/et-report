@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -21,8 +22,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from etreport.model.specs import POINT_MODES
 from etreport.model.state import AppState, StateBus
-from etreport.ui.tabs.common import StaleMixin
+from etreport.ui.tabs.common import StaleMixin, on_combo
 from etreport.ui.widgets.cards import Card, GhostButton, row
 from etreport.ui.widgets.plot_canvas import PlotCanvas
 from etreport.ui.widgets.slot_grid import SlotFrame, swap_slots
@@ -108,7 +110,9 @@ class ReportTab(StaleMixin, QWidget):
 
         lay.addWidget(self._build_inspector())
 
-        for sig in (bus.report_changed, bus.groups_changed, bus.data_changed):
+        # [적용]·템플릿 변경은 dirty만, 그룹 토글은 즉시 반영(확정 §3)
+        bus.groups_changed.connect(self.refresh_if_visible)
+        for sig in (bus.report_changed, bus.data_changed):
             sig.connect(self.mark_stale)
         bus.exclusion_changed.connect(self._on_exclusion)
         self._stale = True
@@ -158,9 +162,15 @@ class ReportTab(StaleMixin, QWidget):
         self.slot_card.body.addWidget(row("제목", self.ed_stitle, stretch_at=1))
         self.slot_card.body.addWidget(row("X", self.ed_sx, stretch_at=1))
         self.slot_card.body.addWidget(row("Y", self.ed_sy, stretch_at=1))
+        self.cmb_point = QComboBox()
+        self.cmb_point.addItems(["점: 측정점 그대로", "점: wafer 평균",
+                                 "점: wafer 중앙값", "점: wafer 산포(σ)"])
+        self.cmb_point.setToolTip("이 슬롯의 점을 무엇으로 찍을지 — 템플릿 Mode 열")
+        on_combo(self.cmb_point, self._slot_edited)
+        self.slot_card.body.addWidget(self.cmb_point)
         self.cmb_log = QComboBox()
         self.cmb_log.addItems(["Y축 자동", "Y축 log", "Y축 선형"])
-        self.cmb_log.currentIndexChanged.connect(self._slot_edited)
+        on_combo(self.cmb_log, self._slot_edited)
         self.slot_card.body.addWidget(self.cmb_log)
         b_del = GhostButton("이 슬롯 비우기")
         b_del.clicked.connect(self._clear_slot)
@@ -176,9 +186,15 @@ class ReportTab(StaleMixin, QWidget):
         self.cmb_tbl.addItems(["넘치게 두기 (9pt 유지)", "여러 장으로 분할"])
         self.cmb_tbl.setCurrentIndex(
             1 if self.state.table_slide_mode == "split" else 0)
-        self.cmb_tbl.currentIndexChanged.connect(self._mode_changed)
+        on_combo(self.cmb_tbl, lambda: self._mode_changed(
+            self.cmb_tbl.currentIndex()))
         self.info.body.addWidget(self.cmb_tbl)
         sv.addWidget(self.info)
+        # 탐색 탭과 **같은 카드** — 색·심볼·크기·REF를 여기서도 바꿀 수 있다
+        from etreport.ui.widgets.style_card import GroupStyleCard
+        self.style_card = GroupStyleCard(self.state, self.bus,
+                                         on_changed=self.refresh_if_visible)
+        sv.addWidget(self.style_card)
         sv.addStretch(1)
         return side
 
@@ -197,6 +213,8 @@ class ReportTab(StaleMixin, QWidget):
         spec.x = self.ed_sx.text()
         spec.y = self.ed_sy.text()
         spec.logy_mode = ("auto", "log", "linear")[self.cmb_log.currentIndex()]
+        i = self.cmb_point.currentIndex()
+        spec.mode = POINT_MODES[i] if 0 <= i < len(POINT_MODES) else "site"
         self.bus.report_changed.emit()
 
     def _clear_slot(self) -> None:
@@ -217,12 +235,18 @@ class ReportTab(StaleMixin, QWidget):
                         (self.ed_sy, spec.y if spec else "")):
             ed.setText(val)
             ed.setEnabled(spec is not None)
-        self.cmb_log.setEnabled(spec is not None)
+        for cmb in (self.cmb_log, self.cmb_point):
+            cmb.setEnabled(spec is not None)
         if spec:
-            self.cmb_log.blockSignals(True)
-            self.cmb_log.setCurrentIndex(
-                {"auto": 0, "log": 1, "linear": 2}.get(spec.logy_mode, 0))
-            self.cmb_log.blockSignals(False)
+            for cmb, idx in (
+                    (self.cmb_log,
+                     {"auto": 0, "log": 1, "linear": 2}.get(spec.logy_mode, 0)),
+                    (self.cmb_point,
+                     POINT_MODES.index(spec.mode)
+                     if spec.mode in POINT_MODES else 0)):
+                cmb.blockSignals(True)       # 채우는 동안은 편집으로 보지 않는다
+                cmb.setCurrentIndex(idx)
+                cmb.blockSignals(False)
         self.slot_card.setTitle(
             f"슬롯 {idx + 1}" if spec else f"슬롯 {idx + 1} (비어 있음)")
 
@@ -282,6 +306,20 @@ class ReportTab(StaleMixin, QWidget):
         self.lbl_excl.setText(f"제외 {len(st.excluded)}점")
 
     def rebuild(self) -> None:
+        """[미리보기] — 슬롯 6개를 그리는 동안 버튼을 잠그고 대기 커서를 띄운다.
+
+        렌더는 UI 스레드에 둔다 — matplotlib은 폰트 캐시가 스레드 안전하지 않아
+        워커에서 그리면 프로세스가 죽는다(탐색 탭과 같은 이유).
+        """
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self.btn_draw.setEnabled(False)
+        try:
+            self._rebuild()
+        finally:
+            self.btn_draw.setEnabled(True)
+            QApplication.restoreOverrideCursor()
+
+    def _rebuild(self) -> None:
         st = self.state
         self.mark_fresh()
         if st.report is None or not st.report.pages:

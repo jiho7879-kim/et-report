@@ -106,6 +106,11 @@ def test_trend_skips_item_without_geometry():
 
 
 def test_trend_target_and_spec_markers():
+    """타깃은 그리고, **X축 위치의 규격 세로 점선은 그리지 않는다**(사용자 확정).
+
+    규격은 y값의 한계라 WIDTH·LENGTH 위치에 세로선을 그으면 의미 없는 격자만
+    늘어난다. 예전에는 item마다 low/high 두 줄씩 그렸다.
+    """
     spec = PlotSpec(type="trend", x="W", y="A,B", mode="site")
     ax = _fig(spec, wide_of()).axes[0]
     # 타깃 X 마커는 linestyle none — A만 target=0.8
@@ -113,9 +118,7 @@ def test_trend_target_and_spec_markers():
     assert len(xmarks) == 1
     assert xmarks[0].get_xdata()[0] == 0.34
     assert xmarks[0].get_ydata()[0] == 0.8
-    # 규격 세로선: A(low 0.2, high 1.4) + B(low 0.1, high 1.1) = 4개
-    vlines = _vlines(ax)
-    assert len(vlines) == 4
+    assert _vlines(ax) == []
 
 
 def test_trend_mode_aggregates_to_wafer_level():

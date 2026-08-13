@@ -28,6 +28,9 @@ ZIP = ROOT / "dist" / f"{APP}-{__version__}-win64.zip"
 def build() -> None:
     sep = os.pathsep          # PyInstaller --add-data 구분자: Windows ';' / 그 외 ':'
     data = [f"{ROOT/'src'/'etreport'/'ui'/'style.qss'}{sep}etreport/ui"]
+    manual = ROOT / "src" / "etreport" / "assets" / "manual"
+    if manual.is_dir() and any(manual.iterdir()):       # 사용 설명서 PDF
+        data.append(f"{manual}{sep}etreport/assets/manual")
     ko_fonts = ROOT / "src" / "etreport" / "assets" / "fonts"
     if ko_fonts.is_dir() and any(ko_fonts.iterdir()):   # 있으면 한글 폰트도 동봉
         data.append(f"{ko_fonts}{sep}etreport/assets/fonts")

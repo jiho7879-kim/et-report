@@ -31,7 +31,23 @@ MARKER = {"o": "o", "s": "s", "t": "^", "d": "D", "+": "+"}
 SPEC_COLOR = "#d70015"      # 규격 — 빨간 실선
 TARGET_COLOR = "#0071e3"    # 타깃 — 파란 X
 REF_COLOR = "#8e8e93"       # REF 그룹 라인 — 회색
-FONT_MIN_PT = 6            # 6pt 하한 (계획서 §9)
+FONT_MIN_PT = 8            # 8pt 하한 — PPT에서 읽히는 최소 크기
+FONT_MAX_PT = 13.0         # 축 이름·제목 상한
+FONT_SCALE = 3.0           # figsize(인치)당 글자 크기 — 클수록 크게 나온다
+
+
+def _font_size(figsize: tuple[float, float], compact: bool) -> float:
+    """축 이름·눈금·제목 글자 크기.
+
+    PPT 슬롯(2×3)은 그림이 작아 예전 값(≈9.5pt 상한, 인치당 2.2)으로는 축
+    숫자가 안 읽혔다. 상한과 배율을 함께 올린다 — 화면 캔버스도 같은 함수를
+    쓰므로 "화면 = PPT"는 그대로다.
+    """
+    if compact:
+        # 화면 슬롯(2×3)은 그림이 손바닥만 해서 크게 하면 축 이름·눈금이 잘린다.
+        # PPT는 compact=False로 그리므로 여기 상한은 PPT 글자에 영향이 없다.
+        return max(FONT_MIN_PT - 2, min(8.0, figsize[0] * 2.4))
+    return max(FONT_MIN_PT, min(FONT_MAX_PT, figsize[0] * FONT_SCALE))
 
 # 한글 축 이름·제목이 □로 깨지지 않도록 OS별 한글 폰트를 잡는다(fonts.py 참조).
 fonts.setup_matplotlib()
@@ -58,7 +74,7 @@ def render(spec: PlotSpec,
         return _render_trend(spec, data, styles, rf, log_patterns, figsize,
                              excluded=excluded, compact=compact, fig=fig)
     if fig is None:
-        fig = Figure(figsize=figsize, dpi=110 if compact else 150)
+        fig = Figure(figsize=figsize, dpi=140 if compact else 180)
         ax = fig.add_subplot(111)
     else:
         fig.clear()
@@ -150,18 +166,16 @@ def render(spec: PlotSpec,
                   if a in rf.by_alias and rf.by_alias[a].unit), "")
         return ", ".join(aliases) + (f" [{u}]" if u else "")
 
-    fs = max(FONT_MIN_PT, min(9.5, figsize[0] * 2.2))
-    if compact:
-        fs = max(FONT_MIN_PT, min(7.5, figsize[0] * 2.6))
+    fs = _font_size(figsize, compact)
     ax.set_xlabel(_axis_name(spec.x_name, [p[0] for p in pairs]), fontsize=fs)
     ax.set_ylabel(_axis_name(spec.y_name, [p[1] for p in pairs]), fontsize=fs)
     if not compact:
         ax.set_title(spec.title, fontsize=fs + 1, fontweight="bold", loc="left")
-    ax.tick_params(labelsize=max(FONT_MIN_PT, fs - 1.5),
+    ax.tick_params(labelsize=max(FONT_MIN_PT, fs - 0.8),
                    pad=1 if compact else 3, length=2 if compact else 3)
     if compact:
-        ax.xaxis.set_major_locator(MaxNLocator(4))
-        ax.yaxis.set_major_locator(MaxNLocator(4))
+        ax.xaxis.set_major_locator(MaxNLocator(3))
+        ax.yaxis.set_major_locator(MaxNLocator(3))
     ax.grid(True, color="#ececee", lw=0.6, zorder=0)
     for sp in ax.spines.values():
         sp.set_color("#d2d2d7")
@@ -171,7 +185,7 @@ def render(spec: PlotSpec,
                         borderaxespad=0, markerscale=0.85)
         leg.get_frame().set_edgecolor("#d2d2d7")
         leg.get_frame().set_linewidth(0.6)
-    fig.tight_layout(pad=0.4 if compact else 0.8)
+    fig.tight_layout(pad=0.8 if compact else 0.9)
     return fig
 
 
@@ -210,7 +224,7 @@ def _render_trend(spec: PlotSpec,
     축 계산을 직접 한다. pyplot은 쓰지 않는다(scatter와 동일).
     """
     if fig is None:
-        fig = Figure(figsize=figsize, dpi=110 if compact else 150)
+        fig = Figure(figsize=figsize, dpi=140 if compact else 180)
         ax = fig.add_subplot(111)
     else:
         fig.clear()
@@ -284,16 +298,12 @@ def _render_trend(spec: PlotSpec,
             ax.plot(xs, ys, color=st.color, marker=MARKER.get(st.symbol, "o"),
                     markersize=3.5, linewidth=1.2, zorder=4, label=st.name)
 
+    # X축(WIDTH·LENGTH) 위치에 세로 점선은 그리지 않는다 — 규격은 y값의 한계라
+    # x 위치에 그으면 의미 없는 격자만 늘어난다(사용자 요청).
     for it in plotted:
         rule = rf.by_alias.get(it)
         if rule is None:
             continue
-        if rule.speclow is not None:
-            ax.axvline(xpos[it], color=SPEC_COLOR, lw=1.1, ls="--",
-                       zorder=2.2, ymin=0, ymax=1)
-        if rule.spechigh is not None:
-            ax.axvline(xpos[it], color=SPEC_COLOR, lw=1.1, ls="--",
-                       zorder=2.2, ymin=0, ymax=1)
         if rule.target is not None:
             ax.plot([xpos[it]], [rule.target], marker="x",
                     color=TARGET_COLOR, markersize=11,
@@ -313,18 +323,16 @@ def _render_trend(spec: PlotSpec,
                   if a in rf.by_alias and rf.by_alias[a].unit), "")
         return ", ".join(aliases) + (f" [{u}]" if u else "")
 
-    fs = max(FONT_MIN_PT, min(9.5, figsize[0] * 2.2))
-    if compact:
-        fs = max(FONT_MIN_PT, min(7.5, figsize[0] * 2.6))
+    fs = _font_size(figsize, compact)
     ax.set_xlabel(geom, fontsize=fs)
     ax.set_ylabel(_axis_name(spec.y_name, plotted), fontsize=fs)
     if not compact:
         ax.set_title(spec.title, fontsize=fs + 1, fontweight="bold", loc="left")
-    ax.tick_params(labelsize=max(FONT_MIN_PT, fs - 1.5),
+    ax.tick_params(labelsize=max(FONT_MIN_PT, fs - 0.8),
                    pad=1 if compact else 3, length=2 if compact else 3)
     if compact:
-        ax.xaxis.set_major_locator(MaxNLocator(4))
-        ax.yaxis.set_major_locator(MaxNLocator(4))
+        ax.xaxis.set_major_locator(MaxNLocator(3))
+        ax.yaxis.set_major_locator(MaxNLocator(3))
     ax.grid(True, color="#ececee", lw=0.6, zorder=0)
     for sp in ax.spines.values():
         sp.set_color("#d2d2d7")
@@ -334,7 +342,7 @@ def _render_trend(spec: PlotSpec,
                         borderaxespad=0, markerscale=0.85)
         leg.get_frame().set_edgecolor("#d2d2d7")
         leg.get_frame().set_linewidth(0.6)
-    fig.tight_layout(pad=0.4 if compact else 0.8)
+    fig.tight_layout(pad=0.8 if compact else 0.9)
     return fig
 
 

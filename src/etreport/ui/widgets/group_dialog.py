@@ -113,6 +113,19 @@ class GroupDialog(QDialog):
             self.filters[name] = cmb
             fl.addWidget(cmb)
         fl.addStretch(1)
+        # 자동 그룹핑 — 모드는 사용자가 고른다(wafer별 / lot별)
+        fl.addWidget(QLabel("자동 그룹핑"))
+        self.cmb_auto = QComboBox()
+        self.cmb_auto.addItems(["wafer별", "lot별"])
+        fl.addWidget(self.cmb_auto)
+        b = QPushButton("실행")
+        b.setToolTip("조회 범위를 wafer(또는 lot)마다 그룹으로 자동 배정합니다.\n"
+                     "다시 실행하면 이전 자동 배정은 지우고 새로 만듭니다.")
+        b.clicked.connect(self._auto_clicked)
+        fl.addWidget(b)
+        self.lbl_auto = QLabel()
+        self.lbl_auto.setObjectName("hint")
+        fl.addWidget(self.lbl_auto)
         v.addLayout(fl)
 
         mid = QHBoxLayout()
@@ -164,6 +177,56 @@ class GroupDialog(QDialog):
             self._lookup()
         return w
 
+    # ── 자동 그룹핑 (wafer별 / lot별) ────────────────────────
+    def auto_group(self, mode: str | None = None) -> int:
+        """조회 범위를 wafer별 또는 lot별로 자동 배정. 만든 그룹 수를 반환.
+
+        재실행해도 결과가 같도록(멱등) 기존 손배정을 먼저 지운다. 그룹 이름은
+        wafer ID(또는 lot ID)를 그대로 쓰고, 첫 그룹은 기존 `_add_group` 규칙대로
+        REF가 된다. [적용] 전에도 색인(wafer_index)만으로 동작한다.
+        """
+        from etreport.model.specs import GroupStyle
+
+        st = self.state
+        mode = mode or self.auto_mode()
+        if self.index.is_empty():
+            return 0
+        keys = (["lot"] if mode == "lot" else ["lot", "wafer"])
+        # DB 조회 순서는 보장되지 않는다 — lot·wafer 순으로 정렬해 그룹 번호와
+        # 색이 실행할 때마다 달라지지 않게 한다
+        rows = (self.index.select(keys).unique().sort(keys)
+                .iter_rows(named=True))
+        st.manual_groups.clear()               # 멱등 — 다시 돌리면 처음부터
+        st.groups = []
+        made = 0
+        for i, rec in enumerate(rows):
+            lot = rec["lot"]
+            name = lot if mode == "lot" else rec["wafer"]
+            gid = f"a{i}"
+            st.groups.append(GroupStyle(
+                gid=gid, name=name,
+                color=REF_COLOR if i == 0 else PALETTE_OKABE[i % len(PALETTE_OKABE)],
+                symbol="d" if i == 0 else SYMBOLS[i % len(SYMBOLS)],
+                ref=i == 0))
+            members = (self.index.filter(pl.col("lot") == lot) if mode == "lot"
+                       else self.index.filter((pl.col("lot") == lot)
+                                              & (pl.col("wafer") == rec["wafer"])))
+            for w in dict.fromkeys(members["wafer"].to_list()):
+                st.manual_groups[(lot, w, None, None, None)] = gid
+            made += 1
+        if st.data is not None:
+            st.data = loader.apply_manual_groups(st.data, st.manual_groups)
+        self._fill_groups()
+        return made
+
+    def auto_mode(self) -> str:
+        return "lot" if self.cmb_auto.currentIndex() == 1 else "wafer"
+
+    def _auto_clicked(self) -> None:
+        n = self.auto_group()
+        self.lbl_auto.setText(f"{n}개 그룹 생성" if n else "조회 결과가 없습니다")
+        self._refresh_lists()
+
     # ── 데이터 원천 ──────────────────────────────────────────
     def _load_index(self) -> None:
         """(lot, wafer, step, temp, site, 포인트 수) 색인을 만든다.
@@ -187,13 +250,24 @@ class GroupDialog(QDialog):
             self.lbl_db.setText(f"DB를 읽지 못했습니다: {e}")
 
     def _pick_db(self) -> None:
+        """DB를 바꾸면 **DB에서 파생된 것만** 새 DB 기준으로 다시 만든다.
+
+        이전 DB의 (lot, wafer) 배정은 새 DB와 무관하므로 비우고, 자동 그룹핑을
+        현재 모드로 다시 돌린다. 그룹 정의(이름·색·심볼·REF)는 자동 그룹핑이
+        다시 만들어 준다 — 손으로 고른 스타일까지 지키려면 같은 DB를 유지한다.
+        """
         p, _ = QFileDialog.getOpenFileName(self, "DuckDB 파일", "",
                                            "DuckDB (*.duckdb)")
         if not p:
             return
+        changed = p != self.db_path
         self.db_path = p
         self.state.data = None if self.state.db_path != p else self.state.data
         self._load_index()
+        if changed:
+            self.state.manual_groups.clear()   # 이전 DB의 배정은 무의미하다
+            n = self.auto_group()
+            self.lbl_auto.setText(f"새 DB 기준 {n}개 그룹" if n else "")
         self._lookup()
 
     # ── 필터 ─────────────────────────────────────────────────

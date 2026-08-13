@@ -20,19 +20,19 @@ from etreport.model.state import AppState
 
 # ── 리포메터 (실제 컬럼 스키마) ───────────────────────────────
 _RULES = [
-    # category itemid            alias           abs  scale form unit  low   high  target
-    ("REAL", "ET_IDSAT_N_SVT", "Idsat N SVT", False, 1e6, "", "uA", 0.34, 0.86, 0.60),
-    ("REAL", "ET_IDSAT_N_LVT", "Idsat N LVT", False, 1e6, "", "uA", None, None, None),
-    ("REAL", "ET_VTLIN_N_SVT", "Vtlin N SVT", False, 1.0, "", "V", 0.30, 0.62, 0.46),
-    ("REAL", "ET_VTSAT_N_SVT", "Vtsat N SVT", False, 1.0, "", "V", 0.36, 0.70, 0.53),
-    ("REAL", "ET_IOFF_N_SVT", "Ioff N SVT", True, 1e9, "", "nA", None, 0.90, None),
-    ("REAL", "ET_IDSAT_P_SVT", "Idsat P SVT", True, 1e6, "", "uA", 0.32, None, 0.50),
-    ("REAL", "ET_VTLIN_P_SVT", "Vtlin P SVT", True, 1.0, "", "V", 0.28, 0.66, 0.47),
-    ("REAL", "ET_CAP_MIM", "Cap MIM unit", False, 1e15, "", "fF", None, None, None),
-    ("ADDP", "CALC_RATIO_NP", "Idsat N/P", False, 1.0,
-     "{Idsat N SVT}/{Idsat P SVT}", "", 1.8, 2.6, 2.2),
+    # category itemid            alias           abs  scale form unit  low   high  target  w      l
+    ("REAL", "ET_IDSAT_N_SVT", "Idsat N SVT", False, 1e6, "", "uA", 0.34, 0.86, 0.60, 0.20, 0.03),
+    ("REAL", "ET_IDSAT_N_LVT", "Idsat N LVT", False, 1e6, "", "uA", None, None, None, 0.18, 0.03),
+    ("REAL", "ET_VTLIN_N_SVT", "Vtlin N SVT", False, 1.0, "", "V",  0.30, 0.62, 0.46, 0.22, 0.03),
+    ("REAL", "ET_VTSAT_N_SVT", "Vtsat N SVT", False, 1.0, "", "V",  0.36, 0.70, 0.53, 0.20, 0.035),
+    ("REAL", "ET_IOFF_N_SVT",  "Ioff N SVT",  True,  1e9, "", "nA", None, 0.90, None, 0.15, 0.03),
+    ("REAL", "ET_IDSAT_P_SVT", "Idsat P SVT", True,  1e6, "", "uA", 0.32, None, 0.50, 0.25, 0.04),
+    ("REAL", "ET_VTLIN_P_SVT", "Vtlin P SVT", True,  1.0, "", "V",  0.28, 0.66, 0.47, 0.25, 0.04),
+    ("REAL", "ET_CAP_MIM",     "Cap MIM unit", False, 1e15,"", "fF", None, None, None, None, None),
+    ("ADDP", "CALC_RATIO_NP",  "Idsat N/P",   False, 1.0,
+     "{Idsat N SVT}/{Idsat P SVT}", "", 1.8, 2.6, 2.2, None, None),
     ("ADDP", "CALC_VT_SPREAD", "Vt spread N", False, 1.0,
-     "Std({Vtlin N SVT},{Vtsat N SVT})", "V", None, 0.06, None),
+     "Std({Vtlin N SVT},{Vtsat N SVT})", "V", None, 0.06, None, None, None),
 ]
 
 _SPLIT = [
@@ -45,8 +45,9 @@ _SPLIT = [
 
 def _reformatter() -> Reformatter:
     rf = Reformatter()
-    for i, (cat, iid, alias, ab, sc, form, unit, lo, hi, tg) in enumerate(_RULES, 2):
-        rf.rules.append(Rule(cat, iid, alias, ab, sc, form, unit, lo, hi, tg, i))
+    for i, (cat, iid, alias, ab, sc, form, unit, lo, hi, tg, w, length) in enumerate(_RULES, 2):
+        rf.rules.append(Rule(cat, iid, alias, ab, sc, form, unit, lo, hi, tg, i,
+                             w=w, l=length))
     return rf
 
 
@@ -62,17 +63,23 @@ def _report() -> ReportSpec:
     p2.slots[0] = PlotSpec("Idsat vs Vtlin (P)", "Vtlin P SVT", "Idsat P SVT")
     p2.slots[1] = PlotSpec("N/P ratio", "Vtlin N SVT", "Idsat N/P")
     p2.slots[2] = PlotSpec("요약 — PMOS", type="table")
-    r.pages = [p1, p2]
+    p3 = PageSpec(3, "기하(W/L) trend")
+    p3.slots[0] = PlotSpec("Idsat vs W", type="trend", x="W",
+                           y="Idsat N SVT, Vtlin N SVT, Ioff N SVT, Idsat P SVT")
+    p3.slots[1] = PlotSpec("Vt vs L", type="trend", x="L",
+                           y="Vtlin N SVT, Vtsat N SVT, Vtlin P SVT")
+    p3.slots[2] = PlotSpec("요약 — 기하", type="table")
+    r.pages = [p1, p2, p3]
     r.table_rows = [
-        TableRowSpec("Idsat N SVT", "NMOS", "Idsat", "SVT"),
-        TableRowSpec("Idsat N LVT", "NMOS", "Idsat", "LVT"),
-        TableRowSpec("Vtlin N SVT", "NMOS", "Vt", "lin"),
-        TableRowSpec("Vtsat N SVT", "NMOS", "Vt", "sat"),
-        TableRowSpec("Idsat P SVT", "PMOS", "Idsat", "SVT"),
-        TableRowSpec("Vtlin P SVT", "PMOS", "Vt", "lin"),
-        TableRowSpec("Ioff N SVT", "Leakage", "Ioff", "N"),
-        TableRowSpec("Idsat N/P", "Ratio", "N/P", "Idsat"),
-        TableRowSpec("Vt spread N", "Ratio", "Spread", "Vt"),
+        TableRowSpec("Idsat N SVT", ["NMOS", "Idsat", "SVT"]),
+        TableRowSpec("Idsat N LVT", ["NMOS", "Idsat", "LVT"]),
+        TableRowSpec("Vtlin N SVT", ["NMOS", "Vt", "lin"]),
+        TableRowSpec("Vtsat N SVT", ["NMOS", "Vt", "sat"]),
+        TableRowSpec("Idsat P SVT", ["PMOS", "Idsat", "SVT"]),
+        TableRowSpec("Vtlin P SVT", ["PMOS", "Vt", "lin"]),
+        TableRowSpec("Ioff N SVT", ["Leakage", "Ioff", "N"]),
+        TableRowSpec("Idsat N/P", ["Ratio", "N/P", "Idsat"]),
+        TableRowSpec("Vt spread N", ["Ratio", "Spread", "Vt"]),
     ]
     return r
 

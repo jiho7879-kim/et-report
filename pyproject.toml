@@ -17,6 +17,8 @@ dependencies = [
 # bigdataquery(bdq)는 사내 패키지 — 사내 인덱스에서 별도 설치
 
 [project.optional-dependencies]
+# S3 저장소(기능 C) — 없는 PC에서는 그 창만 안내를 띄우고 나머지는 정상 동작
+s3 = ["boto3>=1.34"]
 # pip install -e ".[dev]"  (사내 PC에서도 오프라인이면 pytest·ruff만 따로 받으면 된다)
 dev = ["pytest>=8", "ruff>=0.6"]
 
@@ -29,6 +31,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# 사용 설명서 PDF·한글 폰트·스타일시트는 패키지와 함께 배포한다
+etreport = ["ui/*.qss", "assets/manual/*.pdf", "assets/fonts/*"]
 
 # ── 린터 ──────────────────────────────────────────────────────
 [tool.ruff]

@@ -106,6 +106,30 @@ class SqlExportDialog(QDialog):
                 SNIPPETS[name].replace("et_data", self.table))
 
     def _run(self) -> None:
+        """조회는 워커 스레드로 — 큰 DB에서는 수 초~수십 초 걸린다."""
+        sql = self.editor.toPlainText().strip().rstrip(";")
+        if not sql:
+            return
+        from etreport.ui.widgets.worker import run_in_background
+        t0 = time.monotonic()
+
+        def work():
+            from etreport.data.loader import open_readonly
+            con = open_readonly(self.db_path)
+            try:
+                return con.execute(sql).pl()
+            finally:
+                con.close()
+
+        run_in_background(self, "SQL 조회", work,
+                          done=lambda df: self._run_done(df, t0))
+
+    def _run_done(self, df, t0: float) -> None:
+        self.df = df
+        self._show_result(t0)
+
+    def _run_sync(self) -> None:
+        """테스트·스크립트용 동기 실행 경로(진행 창 없이)."""
         sql = self.editor.toPlainText().strip().rstrip(";")
         if not sql:
             return
@@ -121,6 +145,13 @@ class SqlExportDialog(QDialog):
             self.df = None
             self.lbl_stat.setText("실행 실패")
             QMessageBox.critical(self, "SQL 오류", str(e))
+            return
+        self._show_result(t0)
+
+    def _show_result(self, t0: float) -> None:
+        """조회 결과 요약 + 미리보기 — 동기·비동기 경로가 함께 쓴다."""
+        if self.df is None:
+            self.lbl_stat.setText("실행 실패")
             return
         el = time.monotonic() - t0
         self.lbl_stat.setText(
@@ -161,10 +192,14 @@ class SqlExportDialog(QDialog):
         # 엑셀에서 한글이 깨지지 않도록 BOM만 먼저 쓰고, 본문은 polars가 파일에
         # 직접 스트리밍한다 (예전처럼 CSV 전체를 문자열로 만들면 큰 결과에서
         # 메모리를 두 배로 쓴다).
-        with Path(p).open("wb") as f:
-            f.write(b"\xef\xbb\xbf")
-            self.df.write_csv(f)
-        self._done(p)
+        def work():
+            with Path(p).open("wb") as f:
+                f.write(b"\xef\xbb\xbf")
+                self.df.write_csv(f)
+            return p
+
+        from etreport.ui.widgets.worker import run_in_background
+        run_in_background(self, "CSV 저장", work, done=self._done)
 
     def _save_parquet(self) -> None:
         if not self._ready():
@@ -172,8 +207,10 @@ class SqlExportDialog(QDialog):
         p, _ = QFileDialog.getSaveFileName(self, "parquet 저장", "query.parquet",
                                            "Parquet (*.parquet)")
         if p:
-            self.df.write_parquet(p)
-            self._done(p)
+            from etreport.ui.widgets.worker import run_in_background
+            run_in_background(self, "parquet 저장",
+                              lambda: (self.df.write_parquet(p), p)[1],
+                              done=self._done)
 
     def _save_sbdf(self) -> None:
         if not self._ready():

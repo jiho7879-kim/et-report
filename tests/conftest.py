@@ -11,6 +11,24 @@ import pytest
 from tests import factory
 
 
+def qt_until(pred, ms: int = 3000) -> bool:
+    """조건이 참이 될 때까지 Qt 이벤트를 돌린다.
+
+    콤보 선택 처리는 팝업을 닫은 뒤 타이머로 실행되므로(ui/tabs/common.on_combo)
+    고정 시간 대기는 환경에 따라 흔들린다. 조건으로 기다린다.
+    """
+    import time
+
+    from PySide6.QtCore import QCoreApplication, QEventLoop
+
+    end = time.monotonic() + ms / 1000
+    while time.monotonic() < end:
+        if pred():
+            return True
+        QCoreApplication.processEvents(QEventLoop.AllEvents, 20)
+    return bool(pred())
+
+
 @pytest.fixture
 def fake_sheet(monkeypatch):
     """`etreport.data.reformatter.load()`가 읽을 시트를 지정한다.

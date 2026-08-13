@@ -116,15 +116,15 @@ def test_filters_chain_and_counts_follow(qapp, db_path, appdata):
 
     dlg.filters["step"].setCurrentText("M5")      # step을 좁히면
     assert _texts(dlg.filters["site"]) == ["전체", "13"]      # site 목록이 줄고
-    assert _texts(dlg.filters["temp"]) == ["전체", "25.0"]    # temp도 줄고
+    assert _texts(dlg.filters["temp"]) == ["전체", "25"]      # temp도 줄고
     assert "유효 2장" in dlg.lbl_valid.text()
     assert "4포인트" in dlg.lbl_valid.text()
 
     dlg.filters["step"].setCurrentText("M2")
-    assert _texts(dlg.filters["temp"]) == ["전체", "25.0", "85.0"]
+    assert _texts(dlg.filters["temp"]) == ["전체", "25", "85"]
     assert "8포인트" in dlg.lbl_valid.text()
 
-    dlg.filters["temp"].setCurrentText("85.0")
+    dlg.filters["temp"].setCurrentText("85")
     assert "4포인트" in dlg.lbl_valid.text()
 
 
@@ -210,7 +210,7 @@ def test_apply_manual_groups_last_write_wins():
     """같은 범위에 두 번 배정하면 나중 것이 이긴다."""
     df = pl.DataFrame({"lot": ["A", "A"], "wafer": ["01", "02"],
                        "gid": ["", ""], "step": ["M2", "M2"],
-                       "temp": ["25.0", "25.0"], "site": ["9", "9"]})
+                       "temp": ["25", "25"], "site": ["9", "9"]})
     groups = {("A", "01", None, None, None): "g0",
               ("A", "01", "M2", None, None): "g1"}
 

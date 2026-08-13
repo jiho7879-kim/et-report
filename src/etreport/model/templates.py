@@ -9,6 +9,7 @@ Report 컬럼이 두 템플릿의 공통 키 — 한 파일에 여러 리포트�
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -31,7 +32,20 @@ def _int(v, default: int = 0) -> int:
         return int(float(v))
     except (TypeError, ValueError):
         return default
+#: table 시트의 표준 컬럼(예시·되쓰기용).
 TBL_COLS = ["item_id", "CAT1", "CAT2", "CAT3", "Report"]
+#: 실제로 **있어야만 하는** 컬럼. CAT2 이후는 있으면 쓰고 없으면 그만이다 —
+#: 개수를 고정하면 CAT4·CAT5를 쓰는 템플릿을 못 받는다(§3.3 확정).
+TBL_REQUIRED = ["item_id", "CAT1", "Report"]
+_CAT_RE = re.compile(r"^\s*CAT\s*(\d+)\s*$", re.IGNORECASE)
+
+
+def cat_columns(df: pl.DataFrame | None) -> list[str]:
+    """시트에서 `CAT1, CAT2, …`를 찾아 **번호순**으로. 개수는 고정하지 않는다."""
+    if df is None:
+        return []
+    found = [(int(m[1]), c) for c in df.columns if (m := _CAT_RE.match(str(c)))]
+    return [c for _n, c in sorted(found)]
 
 
 @dataclass
@@ -138,7 +152,7 @@ def _validate(t: Templates, rf: Reformatter) -> None:
                 t.skip_plot.add(i)
 
     df = t.table_rows
-    miss = [c for c in TBL_COLS if df is None or c not in df.columns]
+    miss = [c for c in TBL_REQUIRED if df is None or c not in df.columns]
     if miss:
         t.errors.append(TemplateError("table", 0, f"컬럼 누락: {', '.join(miss)}"))
     elif df is not None:
@@ -188,14 +202,14 @@ def build_report(t: Templates, report: str) -> ReportSpec:
                 spec.pages.append(page)
 
     if t.table_rows is not None:
+        cats = cat_columns(t.table_rows)          # CAT1, CAT2, … 번호순 (개수 자유)
+        spec.cat_names = [c.upper().replace(" ", "") for c in cats[1:]]
         for r in t.table_rows.iter_rows(named=True):
             if int(r["_row"]) in t.skip_table \
                     or str(r.get("Report") or "") != report:
                 continue
             spec.table_rows.append(TableRowSpec(
                 item_id=str(r["item_id"] or ""),
-                cat1=str(r["CAT1"] or ""),
-                cat2=str(r["CAT2"] or ""),
-                cat3=str(r["CAT3"] or ""),
+                cats=[str(r[c] or "").strip() for c in cats],
             ))
     return spec

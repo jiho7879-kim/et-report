@@ -47,6 +47,25 @@ MERGE_ROLES = ("x", "y", "temp", "step", "site")
 # 분석 프레임에 함께 싣는 측정 조건 — 그룹 편집 4단 필터(§9.1)가 쓴다.
 CTX_ROLES = ("step", "temp", "site")
 
+TEMP_STEP = 5          # 측정 온도는 5단위 정수(-40·25·45·85·125·150)로 다룬다
+
+
+def temp_expr(col: str) -> str:
+    """온도를 **가장 가까운 5의 배수 정수**로 — 23.9→25, 149→150. NULL은 그대로.
+
+    DB에는 계측기가 준 raw 온도(23.9, 24.9…)가 그대로 들어 있다. 적재가 아니라
+    **읽는 시점**에 보정한다(ABSOLUTE를 로딩 때 다시 거는 것과 같은 이유) —
+    이미 쌓인 DB도 화면·표·PPT가 맞아야 하고, 보정 경로를 두 곳에 두지 않는다.
+    병합·필터·배정 비교가 모두 이 값을 쓰므로 **한 군데라도 빠뜨리면 어긋난다.**
+    """
+    return f'CAST(ROUND("{col}" / {TEMP_STEP}) AS BIGINT) * {TEMP_STEP}'
+
+
+def _ctx_col(role: str, col: str) -> str:
+    """조건 컬럼 하나를 표준 이름으로. 온도만 5단위 보정을 거친다."""
+    return (f"{temp_expr(col)} AS {role}" if role == "temp"
+            else f'"{col}" AS {role}')
+
 
 @dataclass
 class TableProfile:
@@ -153,7 +172,7 @@ def ctx_select(p: TableProfile) -> list[str]:
     적용한다 — 같은 wafer라도 step·온도가 다르면 다른 측정점이기 때문이다.
     없는 스키마에서도 프레임 모양이 흔들리지 않게 NULL로라도 자리를 만든다.
     """
-    return [f'"{p.roles[r]}" AS {r}' if r in p.roles else f"NULL AS {r}"
+    return [_ctx_col(r, p.roles[r]) if r in p.roles else f"NULL AS {r}"
             for r in CTX_ROLES]
 
 
@@ -202,8 +221,13 @@ def select_sql(p: TableProfile, dedup_latest: bool = True) -> str:
                                            "seq", "site", "time")
         group = [c for c in (lot, waf) if c] + [
             p.roles[r] for r in roles if r in p.roles]
+        temp_col = p.roles.get("temp")
+        # 온도는 보정한 값으로 묶는다 — raw 23.9와 25.0이 다른 측정점으로
+        # 갈라지면 §10.1 병합이 무의미해진다
+        sel = ", ".join(f'{temp_expr(c)} AS "{c}"' if c == temp_col else f'"{c}"'
+                        for c in group) or "1"
         gcols = ", ".join(f'"{c}"' for c in group) or "1"
-        base = (f'SELECT {gcols}, "{item}" AS item_id, "{val}" AS value '
+        base = (f'SELECT {sel}, "{item}" AS item_id, "{val}" AS value '
                 f'FROM "{p.table}"')
         return (f"WITH src AS ({base}) "
                 f"PIVOT src ON item_id USING any_value(value) GROUP BY {gcols}")
@@ -222,8 +246,12 @@ def select_sql(p: TableProfile, dedup_latest: bool = True) -> str:
                          *ctx_select(p), *items])
         return f'SELECT {sel} FROM "{p.table}"{dedup}'
 
+    temp_col = p.roles.get("temp")
+    # 병합 키에 들어가기 **전에** 온도를 보정한다(23.9와 25.0을 한 점으로)
+    mc_sel = [f'{temp_expr(c)} AS "{c}"' if c == temp_col else f'"{c}"'
+              for c in merge_cols(p)]
     mc = [f'"{c}"' for c in merge_cols(p)]
-    inner = (f'SELECT {", ".join([f"{key} AS key", lot_sel, waf_sel, *mc, *items])} '
+    inner = (f'SELECT {", ".join([f"{key} AS key", lot_sel, waf_sel, *mc_sel, *items])} '
              f'FROM "{p.table}"{dedup}')
     # step·temp·site는 병합 그룹 키이므로 집계 없이 그대로 뽑을 수 있다
     ctx = [f'"{p.roles[r]}" AS {r}' if r in p.roles else f"NULL AS {r}"

@@ -34,6 +34,30 @@ class Confound:
     codes: list[str]
 
 
+def parse_split_text(text: str,
+                     baseline: str = BASELINE_DEFAULT) -> SplitMatrix:
+    """붙여넣은 표(탭·쉼표 구분) → SplitMatrix.
+
+    엑셀에서 복사하면 탭 구분으로 붙는다. 엑셀이 없는 PC도 있고 붙여넣기가 더
+    빠를 때도 많아 **파일과 동등한 입력 경로**로 둔다(§3.4 확정). 첫 줄이 머리글,
+    구분자는 탭이 있으면 탭, 없으면 쉼표로 본다.
+    """
+    lines = [ln for ln in text.replace("\r\n", "\n").split("\n") if ln.strip()]
+    if len(lines) < 2:
+        raise ValueError("머리글 한 줄과 자료 한 줄 이상이 필요합니다")
+    sep = "\t" if "\t" in lines[0] else ","
+    head = [h.strip() for h in lines[0].split(sep)]
+    rows = []
+    for ln in lines[1:]:
+        # 빈 칸은 None으로 둔다 — ''로 두면 from_dataframe의 fill_null이 놓쳐서
+        # 빈 칸이 'Base'가 아니라 **별개의 조건 코드**가 되고 가짜 그룹이 생긴다.
+        cells: list[str | None] = [c.strip() or None for c in ln.split(sep)]
+        cells += [None] * (len(head) - len(cells))      # 짧은 줄도 같은 취급
+        rows.append(dict(zip(head, cells[:len(head)])))
+    df = pl.DataFrame(rows, schema=dict.fromkeys(head, pl.Utf8))
+    return SplitMatrix.from_dataframe(df, baseline)
+
+
 def load_split_file(path: str, baseline: str = BASELINE_DEFAULT,
                     sheet: str | int = 0) -> SplitMatrix:
     """csv/tsv는 polars로, xlsx는 xlwings로 읽는다 (Excel은 xlwings만 — 제약)."""

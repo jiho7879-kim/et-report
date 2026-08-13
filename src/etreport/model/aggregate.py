@@ -36,7 +36,9 @@ def _agg_expr(agg: str, alias: str) -> pl.Expr:
 def wafer_stats(data: pl.DataFrame, excluded: set[str],
                 aliases: list[str], agg: str = "avg") -> WaferStats:
     """wafer별 평균·중앙값 또는 표본표준편차(n-1)를 한 번에 계산."""
-    present = [a for a in aliases if a in data.columns]
+    # 같은 alias가 두 번 들어오면(x·y가 같은 item, 템플릿 중복) polars가
+    # DuplicateError를 낸다 — 집계 전에 한 번만 남긴다(§10.10)
+    present = list(dict.fromkeys(a for a in aliases if a in data.columns))
     active = (data.filter(~pl.col("key").is_in(list(excluded)))
               if excluded else data)
 
@@ -78,7 +80,7 @@ def ref_values(data: pl.DataFrame, excluded: set[str], ref_gid: str | None,
     """REF 그룹 전체의 대표값 — Δ 계산용."""
     if not ref_gid:
         return {}
-    present = [a for a in aliases if a in data.columns]
+    present = list(dict.fromkeys(a for a in aliases if a in data.columns))
     sub = (data.filter(~pl.col("key").is_in(list(excluded)))
            if excluded else data).filter(pl.col("gid") == ref_gid)
     if sub.is_empty() or not present:

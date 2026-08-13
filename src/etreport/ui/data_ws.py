@@ -28,11 +28,11 @@ from PySide6.QtWidgets import (
 
 from etreport.config.catalog import Catalog
 from etreport.config.settings import Condition, ExtractPreset, Settings
-from etreport.data import querybuilder as qb
 from etreport.data.querybuilder import (
     ConditionError,
     build_extract_sql,
     build_item_probe_sql,
+    build_preview_sql,
 )
 from etreport.data.reformatter import load as rf_load
 from etreport.model.state import AppState, StateBus
@@ -87,16 +87,21 @@ class _ExtractThread(QThread):
 
             # 2) 추출 ------------------------------------------
             t = time.monotonic()
-            chunks = extractor.plan_chunks(self.d_from, self.d_to)
+            rf_items = [r.itemid for r in rf.reals() if r.itemid]
+            groups = extractor.item_groups(rf_items)
+            if len(groups) > 1:
+                self.log.emit(
+                    f"조회 item {len(rf_items):,}개 (REAL만, ADDP 제외) — "
+                    f"상한 초과로 {len(groups)}개 그룹 분할")
+            units = extractor.plan_units(self.d_from, self.d_to, rf_items)
             self.log.emit(f"추출 시작 — {self.d_from} ~ {self.d_to} "
-                          f"· 청크 {len(chunks)}개 · 워커 {extractor.N_WORKERS}")
-            self.step.emit("추출 중", 0, len(chunks))
+                          f"· 청크 {len(units)}개 · 워커 {extractor.N_WORKERS}")
+            self.step.emit("추출 중", 0, len(units))
 
             def on_prog(done: int, total: int, label: str) -> None:
                 self.step.emit("추출 중", done, total)
                 self.log.emit(f"  청크 {done}/{total} 완료  ({label})")
 
-            rf_items = [r.itemid for r in rf.reals() if r.itemid]
             files = extractor.extract_to_parquet(
                 self.p.conditions, self.d_from, self.d_to, self.catalog,
                 staging_dir(), on_prog, self.isInterruptionRequested,
@@ -453,12 +458,11 @@ class DataWorkspace(QWidget):
 
     def _refresh_sql(self) -> None:
         try:
-            sql = build_extract_sql(
+            # 실제 목록은 실행할 때만 만든다(§10.10) — 여기서는 개수 주석만
+            sql = build_preview_sql(
                 self.preset().conditions, self.d_from.date().toPython(),
                 self.d_to.date().toPython(), self.catalog,
                 item_ids=self._rf_items)
-            if self._rf_items:
-                sql = sql + "\n" + qb._item_comment(self._rf_items)
             self.sql.setPlainText(sql)
         except ConditionError as e:
             self.sql.setPlainText(f"-- {e.col}: {e}")

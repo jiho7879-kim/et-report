@@ -60,6 +60,17 @@ myenv/bin/ruff check --fix .                        # 안전한 것만 자동 �
 | `test_pptgen_deck.py` | **§7** 16:9 고정 · 페이지 순서 · 표 전용 페이지 · 병합 순서(§10.5) |
 | `test_reformatter_flags.py` | **§3.1** ABSOLUTE 토큰 · LOG(상용)/LN(자연)/EXP |
 | `test_group_dialog.py` | **§9.1** 4단 연쇄 필터 · [적용] 없이 조회 · 배정 범위 |
+| `test_cat_levels.py` | **§3.3** CAT 개수 자유 — 화면·복사·PPT까지 열이 따라간다 |
+| `test_explore_cards.py` | **§5.2** 스케일·범위 카드, 그룹 스타일 카드, 스타일 동기화 |
+| `test_manual.py` | 사용 설명서 PDF 내용·생성·메뉴 |
+| `test_ux_requests2.py` | 점 표시 모드·PPT 그룹 평균 페이지·그룹별 wafer 표 |
+| `test_ux_requests.py` | 사용자 요청 8건(표지 장표·그룹별 평균·콤보 지연…) |
+| `test_bugfix_9.py` | 분석 화면 버그 9건 회귀(온도 5단위·자동그룹핑·표 그룹 반영…) |
+| `test_fabtracking.py` | 기능 A — PHOTO=recipe/그 외=ppid, 갈리는 step만 factor |
+| `test_metrology.py` | 기능 B — subitem 규칙·(lot,wafer) 매칭·top-k |
+| `test_s3.py` | 기능 C — 키 조립·페이지네이션·자격 증명 보관(가짜 클라이언트) |
+| `test_chunk_plan.py` | **§4.2·§10.10** 기간×item 그룹 청크 · 진행 라벨 · 미리보기 |
+| `test_dock_and_samples.py` | **§5.1·§11.4·§3.4·§14** REPORT 문구·예시 파일·붙여넣기·배정 lot |
 | `test_db_buckets.py` | 버킷 수가 저장 결과를 바꾸지 않는다는 불변식(예전 DB 호환) |
 | `test_analysis_core.py` | 축 범위 ×1.2 · 로그 패턴 · wafer 집계 · 자릿수 |
 | `test_review_fixes.py` | 코드 리뷰에서 고친 것들의 회귀(업데이트 가드·Figure 누수·연결·복사 값…) |
@@ -134,10 +145,27 @@ UI는 스모크 수준만 있다(`test_ui_smoke.py`, offscreen). 화면을 바�
 바뀐다). 렌더러는 **pyplot을 쓰지 않는다** — `Figure()`를 직접 만든다. pyplot로
 만들면 전역 매니저에 등록돼 덱 하나당 수백 개가 남는다.
 
+**REF μ±3σ 밴드는 넣지 않는다.** 사양서 §6·§5.2에 남아 있지만 2026-08-11에
+**전체 plot에서 삭제하기로 확정**됐고(`docs/trend-chart-plan.md` §2-4),
+`test_render_trend.py`의 `test_ref_band_field_removed`·
+`test_renderer_module_has_no_ref_band`가 재발을 막는다. 사양서만 보고 되살리지 말 것.
+
+**콤보 처리는 `ui/tabs/common.on_combo()`로 연결한다** — 선택 즉시 팝업을 닫고
+(hidePopup) 60ms 뒤에 실행한다. 핸들러에서 바로 무거운 일을 하면 팝업이 화면에
+남는다(실제로 두 번 재발했다). 창이 닫힌 뒤 도는 지연 처리는 조용히 건너뛴다.
+
+**사용 설명서**: `tools/make_manual.py`가 데모를 offscreen으로 띄워 캡처하고
+`export/manual.py`(QPdfWriter)가 PDF로 묶는다. 산출물은
+`assets/manual/ET_Report_사용설명서.pdf`이고 [도움말] 메뉴가 연다. 화면을 바꿨으면
+이 스크립트를 다시 돌려 설명서를 갱신한다.
+
 UI 구조: 도크는 `ui/analysis_ws.py`, 탭 3종은 `ui/tabs/`(explore·summary·report).
 지연 계산 토글(버튼 주황색 → 보고 있을 때만 갱신)은 `ui/tabs/common.py`의
 `StaleMixin` 하나에 있다 — 탭을 추가하면 여기에 붙인다. 오래 걸리는 작업
-(PPT·xlsx)은 `ui/widgets/worker.py`의 `run_in_background`로 넘긴다.
+(PPT·xlsx·[적용]·SQL 조회/저장)은 `ui/widgets/worker.py`의 `run_in_background`로
+넘긴다. **단 matplotlib 렌더는 워커에서 돌리지 않는다** — 폰트·텍스트 메트릭
+캐시가 스레드 안전하지 않아 QThread에서 그리면 프로세스가 abort한다(확인함).
+[그리기]/[미리보기]는 UI 스레드에서 그리되 버튼 잠금 + 대기 커서로 표시한다.
 
 ### 계산은 명시적으로만
 표·plot·미리보기는 자동 재계산하지 않는다. Summary [표 만들기] / 탐색 [그리기] /
@@ -153,6 +181,13 @@ UI 구조: 도크는 `ui/analysis_ws.py`, 탭 3종은 `ui/tabs/`(explore·summar
 무효화한다. Excel을 읽는 새 코드는 반드시 이 모듈을 경유한다.
 `frame_from_rows()`의 열 타입 규칙(전부 숫자/None → Float64, 그 외 → Utf8)은
 ADDP FORM 열처럼 위가 비어 있는 열 때문에 필요하다 — 추론으로 바꾸지 말 것.
+
+**추출 청크** (`data/extractor.py`) — 조회는 `item_id IN (...)`으로 반드시 좁히고
+(리포메터 REAL의 ITEMID만), 청크는 **기간 × item 그룹의 곱**이다(`plan_units`).
+item은 9999개씩 나눠 쿼리 하나가 Impala IN 상한을 넘지 않게 한다. 그 곱 전체가
+병렬 대상이며(bdq는 스레드 안전) 진행 라벨은 `08-04 item 2/3` 형태다. 화면의 SQL
+미리보기는 `build_preview_sql()`로 **개수 주석만** 만든다 — 목록을 문자열로 펴면
+24,180개 기준 43만 자가 되어 조건을 고칠 때마다 다시 그린다.
 
 **추출 결과 정규화** (`data/extractor.py: normalize_schema`) — bdq 결과는 반드시
 여기를 거쳐 long 고정 스키마가 된다. `cast` 하나로 끝내면 안 되는 이유가 둘 있다:
@@ -198,6 +233,29 @@ tkout_time이 null이 되면 `key_hash`가 뭉쳐 서로 다른 측정이 중복
   **작업 단위일 뿐 저장 내용과 무관**하므로 예전에 512개로 적재한 DB와 섞여도
   안전하다 — 이 불변식은 `test_db_buckets.py`가 지킨다.
 
+## 사내 소스 3종 (ET 계측 외)
+
+**fab tracking** (`data/fabtracking.py`) — `fab.f_fab_tracking`에서 split 실험
+lot을 찾는다. **`area='PHOTO'`면 recipe(`reticle_id`), 그 외는 `ppid`**로 step별
+조건을 비교하고, **조건이 갈리는 step만** 실험 축(factor)으로 올린다. 그룹핑과
+혼입 감지는 `model/split.SplitMatrix`가 하며 여기서 매트릭스만 만들어 넘긴다 —
+그룹핑 로직을 두 곳에 두지 않는다.
+
+**inline 계측** (`data/metrology.py`) — `fab.f_fab_wf_met`. 조회는 **분석 중인
+lot으로 반드시 좁힌다**(전체 스캔 금지). subitem 규칙은 확정 사항이다: site
+level은 `RANGE/STD/MIN/VALUE/SLOTID/Q2/MAX`를 **뺀** 나머지, wafer level은 `Q2`.
+계측 열 이름은 `step_id::item_id`(다른 step의 같은 item이 뭉치지 않게).
+`top_factors()`는 wafer 집계를 `model/aggregate`에서 가져와 상관(r)·그룹 차이
+(Welch t)로 순위를 매기고, 결과는 `state.met_top` → PPT 슬라이드로 나간다.
+
+**S3** (`data/s3.py`) — boto3는 **선택 의존성**(`pip install -e ".[s3]"`).
+자격 증명은 `settings.json`이 아니라 `%APPDATA%\ETReport\s3_credentials.json`
+(POSIX 0600)에 두고, 저장 여부는 사용자가 고른다. 폴더 목록은 Delimiter로 한
+단계씩만 읽는다(큰 버킷을 재귀로 훑지 않는다).
+
+세 소스 모두 bdq/boto3가 없는 리눅스에서 **가짜 프레임·가짜 클라이언트**로
+테스트한다 — 컬럼명은 원본 그대로 유지하고 축약하지 않는다.
+
 ## 리포메터와 템플릿 (Excel 스키마 = 계약)
 
 **리포메터** (`data/reformatter.py`): `CATEGORY ITEMID ALIAS ABSOLUTE
@@ -224,10 +282,19 @@ SUM STD`. **`LN`은 자연로그(밑 e), `LOG`·`LOG10`은 상용로그(밑 10)*
 `TRUE`로 적은 행의 절대값이 조용히 무시된다.
 
 **템플릿** (`model/templates.py`): plot 시트는 `page x y order title1 title2
-Report Type x_name y_name`, table 시트는 `item_id CAT1 CAT2 CAT3 Report`.
+Report Type x_name y_name`, table 시트는 `item_id CAT1 … Report`.
 `Report` 컬럼이 두 시트의 공통 키 — 한 파일에 여러 리포트를 담고 UI에서 고른다.
 `order`는 1~6(윗줄 1·2·3 / 아랫줄 4·5·6). `item_id`와 plot의 x/y는 리포메터
-ALIAS여야 하고, 아니면 그 행만 건너뛴다. 리포트 구성 화면의 드래그 결과는
+ALIAS여야 하고, 아니면 그 행만 건너뛴다.
+
+**CAT 개수는 고정하지 않는다**(§3.3 확정). `templates.cat_columns()`가 정규식
+`CAT\d+`로 찾아 **번호순**으로 정렬하므로 CAT4·CAT5를 더 두면 그만큼 계층이
+늘어난다. 필수 컬럼은 `TBL_REQUIRED`(`item_id CAT1 Report`)뿐이다 — CAT3이
+없다고 중단하면 안 된다. 값은 `TableRowSpec.cats`(CAT1부터 번호순)에 담기고
+`cat1`은 표를 나누는 기준, `subcats`가 표 안 계층이다. 화면·복사·xlsx·PPT는
+전부 `TableData.labels()`/`label_values()` 한 쌍으로 열을 만든다 — 라벨 열
+개수를 코드에 박지 말 것. 세로 병합 키에는 **상위 CAT을 포함**해서 상위가
+바뀌면 하위 병합이 끊기게 한다. 리포트 구성 화면의 드래그 결과는
 `export/template_writer.py`가 원본 엑셀에 되쓴다(.bak 백업 후 캐시 무효화).
 
 ## 릴리스

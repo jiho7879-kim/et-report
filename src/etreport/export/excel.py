@@ -9,13 +9,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import polars as pl
+
 from etreport.model.specs import fmt_value
 from etreport.render.pptgen import TableData
 
 
 @dataclass
 class SummaryOptions:
-    agg: str = "avg"            # avg | std   (동시 표시는 필요 없음 — 확정)
+    #: avg(wafer 평균) | std(wafer 내 산포) | gavg(그룹별 평균)
+    #: | gwafer(그룹으로 묶은 wafer 표)
+    #: gavg는 열이 그룹 하나씩, gwafer는 열이 wafer이되 그룹 머리글로 묶인다.
+    agg: str = "avg"
     delta_vs_ref: bool = False
     session_caption: str = ""
 
@@ -29,6 +34,10 @@ def build_table(state, cat1: str, opt: SummaryOptions) -> TableData:
     """
     from etreport.model.aggregate import offspec, ref_values, wafer_stats
 
+    if opt.agg == "gavg":
+        return _group_table(state, cat1, opt)
+    if opt.agg == "gwafer":
+        return _group_wafer_table(state, cat1, opt)
     header = state.wafer_columns()
     rows_spec = [r for r in state.report.table_rows if r.cat1 == cat1]
     aliases = [r.item_id for r in rows_spec]
@@ -53,9 +62,126 @@ def build_table(state, cat1: str, opt: SummaryOptions) -> TableData:
                     v -= rv
                 vals.append(v)
                 offs.append(off)
-        rows.append({"cat2": rs.cat2, "cat3": rs.cat3, "item": rs.item_id,
+        rows.append({"cats": rs.subcats, "item": rs.item_id,
                      "values": vals, "offspec": offs})
-    return TableData(cat1, header, rows)
+    return TableData(cat1, header, rows,
+                     cat_names=list(getattr(state.report, "cat_names", []) or []))
+
+
+def group_wafer_columns(state) -> list[tuple[str, list[tuple[str, str]]]]:
+    """그룹 머리글 → 그 그룹의 (lot, wafer) 목록. **그룹 순서로 정렬**한다.
+
+    표의 lot 머리글 자리에 그룹 이름이 오고, 그 아래에 소속 wafer가 늘어선다.
+    미배정 wafer는 그룹이 하나라도 있으면 빼고(plot과 같은 기준), 그룹이 아예
+    없으면 lot 머리글로 되돌아간다.
+    """
+    df = state.data
+    if df is None or df.is_empty():
+        return []
+    import re
+
+    def wkey(w: str) -> list:
+        return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", w)]
+
+    groups = [g for g in state.groups if g.visible]
+    if not groups or "gid" not in df.columns:
+        return [(lot, [(lot, w) for w in ws]) for lot, ws in
+                state.wafer_columns()]
+    out: list[tuple[str, list[tuple[str, str]]]] = []
+    for g in groups:
+        sub = df.filter(pl.col("gid") == g.gid)
+        pairs = sorted({(lot, w) for lot, w in zip(sub["lot"], sub["wafer"])},
+                       key=lambda p: (p[0], wkey(p[1])))
+        if pairs:
+            out.append((g.name, pairs))
+    return out
+
+
+def _group_wafer_table(state, cat1: str, opt: SummaryOptions) -> TableData:
+    """그룹으로 묶은 wafer 표 — 값은 wafer 평균(또는 산포)."""
+    from etreport.model.aggregate import offspec, ref_values, wafer_stats
+
+    rows_spec = [r for r in state.report.table_rows if r.cat1 == cat1]
+    aliases = [r.item_id for r in rows_spec]
+    header = group_wafer_columns(state)
+    ws = wafer_stats(state.data, state.excluded, aliases, "avg")
+    ref = {}
+    if opt.delta_vs_ref:
+        g = state.ref_group()
+        ref = ref_values(state.data, state.excluded, g.gid if g else None,
+                         aliases, "avg")
+
+    rows = []
+    for rs in rows_spec:
+        rule = state.rf.by_alias.get(rs.item_id)
+        rv = ref.get(rs.item_id)
+        vals, offs = [], []
+        for _name, pairs in header:
+            for lot, wf in pairs:
+                v = ws.get(rs.item_id, lot, wf)
+                off = not opt.delta_vs_ref and offspec(v, rule)
+                if opt.delta_vs_ref and v is not None and rv is not None:
+                    v -= rv
+                vals.append(v)
+                offs.append(off)
+        rows.append({"cats": rs.subcats, "item": rs.item_id,
+                     "values": vals, "offspec": offs})
+    # 그룹 기준 헤더면 wafer 셀에 "lot·wafer"를 남긴다(그룹 이름 ≠ lot)
+    grouped = any(name != lot for name, pairs in header for lot, _ in pairs)
+    header_lots = [(name, [f"{lot}·{w}" if grouped else w for lot, w in pairs])
+                   for name, pairs in header]
+    return TableData(cat1, header_lots, rows,
+                     cat_names=list(getattr(state.report, "cat_names", []) or []))
+
+
+def _group_table(state, cat1: str, opt: SummaryOptions) -> TableData:
+    """그룹별 평균 표 — 열이 wafer 대신 **그룹**이다.
+
+    각 그룹의 (lot, wafer) 평균을 다시 평균한다. wafer 집계는
+    `model/aggregate.wafer_stats`를 그대로 쓰므로 화면·xlsx·PPT가 같은 숫자다.
+    """
+    from etreport.model.aggregate import offspec, wafer_stats
+
+    rows_spec = [r for r in state.report.table_rows if r.cat1 == cat1]
+    aliases = [r.item_id for r in rows_spec]
+    groups = [g for g in state.groups if g.visible] or []
+    header = [("그룹", [g.name for g in groups])] if groups else \
+        [("전체", ["전체"])]
+
+    per_group: list[dict[str, float | None]] = []
+    for g in groups or [None]:
+        sub = (state.data if g is None
+               else state.data.filter(pl.col("gid") == g.gid))
+        ws = wafer_stats(sub, state.excluded, aliases, "avg")
+        vals: dict[str, float | None] = {}
+        for a in aliases:
+            got = [v for per in ws.values.values()
+                   if (v := per.get(a)) is not None]
+            vals[a] = sum(got) / len(got) if got else None
+        per_group.append(vals)
+
+    ref = {}
+    if opt.delta_vs_ref:
+        g = state.ref_group()
+        idx = next((i for i, x in enumerate(groups) if g and x.gid == g.gid), None)
+        ref = per_group[idx] if idx is not None else {}
+
+    rows = []
+    for rs in rows_spec:
+        rule = state.rf.by_alias.get(rs.item_id)
+        rv = ref.get(rs.item_id)
+        vals, offs = [], []
+        for vg in per_group:
+            v = vg.get(rs.item_id)
+            off = not opt.delta_vs_ref and offspec(v, rule)
+            if opt.delta_vs_ref and v is not None and rv is not None:
+                v -= rv
+            vals.append(v)
+            offs.append(off)
+        rows.append({"cats": rs.subcats, "item": rs.item_id,
+                     "values": vals, "offspec": offs})
+    return TableData(cat1, header, rows,
+                     cat_names=list(getattr(state.report, "cat_names", []) or []))
 
 
 def to_tsv(td: TableData, opt: SummaryOptions | None = None) -> str:
@@ -65,16 +191,31 @@ def to_tsv(td: TableData, opt: SummaryOptions | None = None) -> str:
     셀에 붙이지 않고 마지막 캡션으로 넘긴다 — 엑셀에 붙였을 때 숫자로 남도록.
     """
     delta = bool(opt and opt.delta_vs_ref)
-    lines = ["\t".join(["", "", ""] + [lot for lot, ws in td.header_lots
-                                       for _ in ws]),
-             "\t".join(["CAT2", "CAT3", "item"] +
+    labels = td.labels()                    # CAT2…CATn + item (개수는 템플릿이)
+    lines = ["\t".join([""] * len(labels) + [lot for lot, ws in td.header_lots
+                                             for _ in ws]),
+             "\t".join(labels +
                        [wf for _, ws in td.header_lots for wf in ws])]
     for r in td.rows:
-        lines.append("\t".join([r["cat2"], r["cat3"], r["item"]] +
+        lines.append("\t".join(td.label_values(r) +
                                [fmt_value(v, delta) for v in r["values"]]))
     if opt and opt.session_caption:
         lines += ["", opt.session_caption]
     return "\n".join(lines)
+
+
+def _runs(keys: list[tuple]) -> list[tuple[int, int]]:
+    """같은 값이 이어지는 구간의 (시작, 끝) 인덱스 — 세로 병합용.
+
+    키에 상위 CAT을 포함해 넘기므로 **상위가 바뀌면 하위 병합도 끊긴다**(§3.3).
+    """
+    out: list[tuple[int, int]] = []
+    start = 0
+    for i in range(1, len(keys) + 1):
+        if i == len(keys) or keys[i] != keys[start]:
+            out.append((start, i - 1))
+            start = i
+    return out
 
 
 # ── xlsx (xlwings) ───────────────────────────────────────────
@@ -114,33 +255,35 @@ def export_xlsx(tables: list[TableData], path: str, opt: SummaryOptions) -> None
         for td in tables:
             sht = wb.sheets.add(sheet_name(td.name, used), after=wb.sheets[-1])
             n_w = sum(len(ws) for _, ws in td.header_lots)
+            labels = td.labels()          # CAT2…CATn + item — 개수는 템플릿이
+            n_lab = len(labels)
+            vals = [td.label_values(r) for r in td.rows]
             # 제목
             sht["A1"].value = td.name
             sht["A1"].font.size, sht["A1"].font.bold = 14, True
             # 헤더 2행
-            sht["A2"].value = [["CAT2", "CAT3", "item"] +
+            sht["A2"].value = [labels +
                                [lot for lot, ws in td.header_lots for _ in ws],
-                               ["", "", ""] +
+                               [""] * n_lab +
                                [wf for _, ws in td.header_lots for wf in ws]]
-            c = 4
+            c = n_lab + 1
             for _lot, ws in td.header_lots:             # lot 가로 병합
                 if len(ws) > 1:
                     sht.range((2, c), (2, c + len(ws) - 1)).merge()
                 c += len(ws)
-            for col in range(1, 4):                     # 라벨 세로 병합
+            for col in range(1, n_lab + 1):             # 라벨 세로 병합
                 sht.range((2, col), (3, col)).merge()
-            hdr = sht.range((2, 1), (3, 3 + n_w))
+            hdr = sht.range((2, 1), (3, n_lab + n_w))
             hdr.color = HDR_BG
             hdr.font.bold = True
             hdr.api.HorizontalAlignment = HAlign.xlHAlignCenter
             # 본문
-            body = [[r["cat2"], r["cat3"], r["item"]] +
-                    [None if v is None else round(v, 6) for v in r["values"]]
-                    for r in td.rows]
+            body = [v + [None if x is None else round(x, 6) for x in r["values"]]
+                    for v, r in zip(vals, td.rows)]
             sht["A4"].value = body
             for ri, r in enumerate(td.rows, start=4):   # 자릿수 + 규격 이탈
                 for ci, (v, off) in enumerate(zip(r["values"], r["offspec"]),
-                                              start=4):
+                                              start=n_lab + 1):
                     cell = sht.range((ri, ci))
                     if v is not None:
                         a = abs(v)
@@ -150,26 +293,25 @@ def export_xlsx(tables: list[TableData], path: str, opt: SummaryOptions) -> None
                         cell.color = RED_BG
                         cell.font.color = RED_TX
                         cell.font.bold = True
-            # CAT2 세로 병합
-            r0, prev = 4, td.rows[0]["cat2"] if td.rows else None
-            for r in range(5, 4 + len(td.rows) + 1):
-                cur = td.rows[r - 4]["cat2"] if r - 4 < len(td.rows) else None
-                if cur != prev:
-                    if r - 1 > r0:
-                        rng = sht.range((r0, 1), (r - 1, 1))
+            # CAT 세로 병합 — item 열은 빼고, 상위가 바뀌면 하위도 끊는다(§3.3)
+            for col in range(1, n_lab):
+                for r0, r1 in _runs([tuple(v[:col]) for v in vals]):
+                    if r1 > r0:
+                        rng = sht.range((4 + r0, col), (4 + r1, col))
                         rng.merge()
                         rng.color = CAT_BG
                         rng.api.VerticalAlignment = VAlign.xlVAlignCenter
-                    r0, prev = r, cur
             # 테두리·너비·틀 고정·캡션
-            full = sht.range((2, 1), (3 + len(td.rows), 3 + n_w))
+            full = sht.range((2, 1), (3 + len(td.rows), n_lab + n_w))
             for b in range(7, 13):
                 full.api.Borders(b).Weight = 2
-            sht.range((1, 1), (1, 3)).column_width = (10, 20, 7)
-            sht.range((1, 4), (1, 3 + n_w)).column_width = 9
+            for col in range(1, n_lab):
+                sht.range((1, col), (1, col)).column_width = 14
+            sht.range((1, n_lab), (1, n_lab)).column_width = 20   # item 열
+            sht.range((1, n_lab + 1), (1, n_lab + n_w)).column_width = 9
             sht.range((4 + len(td.rows) + 1, 1)).value = opt.session_caption
             sht.api.Application.ActiveWindow.SplitRow = 3
-            sht.api.Application.ActiveWindow.SplitColumn = 3
+            sht.api.Application.ActiveWindow.SplitColumn = n_lab
             sht.api.Application.ActiveWindow.FreezePanes = True
         # 기본 빈 시트 제거 — 표가 하나라도 있을 때만(엑셀은 시트 0개를 허용하지 않는다)
         if len(wb.sheets) > len(tables) >= 1:

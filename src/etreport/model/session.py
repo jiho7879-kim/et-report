@@ -106,10 +106,11 @@ def apply_config(state: AppState, cfg: AnalysisConfig) -> LoadReport:
         rep.warnings += [f"[{w.sheet}] {w.row}행: {w.message}" for w in t.warnings]
 
     # 3) 실험 조건 --------------------------------------------
-    if cfg.split_path:
+    if cfg.split_path or getattr(cfg, "split_text", ""):
         try:
-            from etreport.model.split import load_split_file
-            state.split = load_split_file(cfg.split_path)
+            from etreport.model.split import load_split_file, parse_split_text
+            state.split = (load_split_file(cfg.split_path) if cfg.split_path
+                           else parse_split_text(cfg.split_text))
             if not state.factors:
                 state.factors = state.split.steps[:1]
             rep.lines.append(

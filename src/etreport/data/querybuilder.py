@@ -190,6 +190,36 @@ def build_extract_sql(
     )
 
 
+def build_preview_sql(
+    conditions: list[Condition],
+    d_from: date,
+    d_to: date,
+    catalog: Catalog,
+    table: str = "eds.f_et_test",
+    item_ids: list[str] | None = None,
+) -> str:
+    """화면에 보여 줄 SQL — **item 목록은 자리표시자와 개수 주석으로만**.
+
+    계획서 §10.10: item 수만 개를 문자열로 만들어 미리보기에 넣으면 조건을
+    고칠 때마다 수십만 자를 다시 그린다(24,180개 → 43만 자). 실제 목록은
+    실행할 때(build_extract_sql) 만든다.
+    """
+    where = _build_where(conditions, d_from, d_to, catalog)
+    n = len(item_ids or [])
+    if n:
+        groups = (n + ITEM_ID_CHUNK - 1) // ITEM_ID_CHUNK
+        where.append(f"item_id IN ( … {n:,}개 … )")
+    body = "\n  AND  ".join(where)
+    sql = (f"SELECT {SELECT_COLS}\n"
+           f"FROM   {table}\n"
+           f"WHERE  {body}")
+    if n:
+        sql += ("\n" + _item_comment(item_ids or []) +
+                f"\n-- 실행할 때 {groups}개 그룹(≤{ITEM_ID_CHUNK:,}개)으로 나눠 "
+                f"기간 × 그룹만큼 쿼리합니다")
+    return sql
+
+
 def build_item_probe_sql(
     conditions: list[Condition],
     d_from: date,

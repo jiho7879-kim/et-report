@@ -13,6 +13,7 @@ import numpy as np
 import polars as pl
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QSizePolicy
 
 from etreport.model.specs import GroupStyle, PlotSpec
@@ -34,31 +35,72 @@ class PlotCanvas(FigureCanvasQTAgg):
         self._series: list[tuple[np.ndarray, np.ndarray, list[str]]] = []
         super().__init__(Figure(figsize=(4, 3), dpi=100))
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # matplotlib 캔버스는 figure 크기를 최소 크기로 제안한다. 슬롯(2×3)은
+        # 그보다 작을 수 있어 그대로 두면 캔버스가 슬롯 밖으로 삐져나와
+        # 축 이름이 아래 슬롯 위에 겹쳐 그려진다 — 작게 줄어들 수 있게 한다.
+        self.setMinimumSize(80, 60)
         self.setParent(parent)
         self.mpl_connect("button_press_event", self._click)
+        # 크기가 바뀌면 여백(tight_layout)이 어긋나 축 이름이 밖으로 삐져나온다.
+        # 리사이즈가 멎은 뒤 한 번만 다시 그린다.
+        self._redraw_timer = QTimer(self)
+        self._redraw_timer.setSingleShot(True)
+        self._redraw_timer.setInterval(80)
+        self._redraw_timer.timeout.connect(self._redraw_current)
 
     # ── 그리기 ───────────────────────────────────────────────
-    def draw_spec(self, spec: PlotSpec) -> None:
-        self.spec = spec
-        self.figure.clear()
+    def render_args(self, spec: PlotSpec) -> tuple | None:
+        """렌더러에 넘길 인자 묶음 — 데이터 준비와 렌더를 나눠 둔다."""
         st = self.state
         if st.data is None or not spec.pairs():
-            self.draw_idle()
-            return
-
+            return None
         styles = st.groups or [_ALL]
         active = st.active()
         data = {g.gid: (active if g.gid == "" and not st.groups
                         else active.filter(pl.col("gid") == g.gid))
                 for g in styles}
         w, h = self.figure.get_size_inches()
-        mpl_renderer.render(spec, data, styles, st.rf,
-                            st.log_patterns, (w, h),
-                            excluded=self._excluded_frame(),
-                            compact=self.mini,
+        return (spec, data, styles, st.rf, st.log_patterns, (w, h),
+                self._excluded_frame(), self.mini)
+
+    def _sync_size(self) -> None:
+        """Figure 크기를 **위젯 실제 크기**에 맞춘다.
+
+        맞추지 않으면 그림이 위젯보다 크게 그려져 축 이름이 슬롯 밖으로
+        삐져나오고(아래 슬롯 위에 겹쳐 보인다) y축 눈금이 잘린다.
+        """
+        dpi = self.figure.get_dpi() or 100
+        w = max(1.2, self.width() / dpi)
+        h = max(1.0, self.height() / dpi)
+        if abs(w - self.figure.get_figwidth()) > 0.01 or \
+                abs(h - self.figure.get_figheight()) > 0.01:
+            self.figure.set_size_inches(w, h, forward=False)
+
+    def draw_spec(self, spec: PlotSpec) -> None:
+        self.spec = spec
+        self._sync_size()
+        self.figure.clear()
+        args = self.render_args(spec)
+        if args is None:
+            self.draw_idle()
+            return
+        s, data, styles, rf, patterns, size, excluded, compact = args
+        mpl_renderer.render(s, data, styles, rf, patterns, size,
+                            excluded=excluded, compact=compact,
                             fig=self.figure)      # 캔버스 figure에 직접
         self._collect_points(spec)
         self.draw_idle()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self.spec is not None:
+            self._redraw_timer.start()
+
+    def _redraw_current(self) -> None:
+        if self.spec is None:
+            return
+        self.draw_spec(self.spec)
+        self.draw()          # 즉시 다시 칠한다 — 예전 라벨 잔상이 남지 않게
 
     def _excluded_frame(self) -> pl.DataFrame | None:
         st = self.state
@@ -77,7 +119,10 @@ class PlotCanvas(FigureCanvasQTAgg):
         for ax_x, ax_y in spec.pairs():
             if ax_x not in st.data.columns or ax_y not in st.data.columns:
                 continue
-            sub = st.data.select(["key", ax_x, ax_y]).drop_nulls()
+            # x·y가 같은 item일 수 있다 — 중복 열을 그대로 select하면
+            # polars가 DuplicateError를 낸다(§10.10)
+            cols = list(dict.fromkeys(["key", ax_x, ax_y]))
+            sub = st.data.select(cols).drop_nulls()
             if sub.is_empty():
                 continue
             self._series.append((sub[ax_x].to_numpy(), sub[ax_y].to_numpy(),

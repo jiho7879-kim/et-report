@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from etreport.model.specs import fmt_value
 from etreport.model.state import AppState, StateBus
-from etreport.ui.tabs.common import StaleMixin, fit_table
+from etreport.ui.tabs.common import StaleMixin, fit_table, on_combo
 from etreport.ui.widgets.cards import Card, GhostButton
 from etreport.ui.widgets.worker import run_in_background
 
@@ -51,8 +51,12 @@ class SummaryTab(StaleMixin, QWidget):
         self.btn_build.clicked.connect(self.rebuild)
         bar.addWidget(self.btn_build)
         self.agg = QComboBox()
-        self.agg.addItems(["평균", "산포 (wafer 내)"])
-        self.agg.currentIndexChanged.connect(self.mark_stale)
+        self.agg.addItems(["평균", "산포 (wafer 내)", "그룹별 평균",
+                           "그룹별 wafer"])
+        self.agg.setToolTip("평균·산포는 wafer마다 한 열,\n"
+                            "그룹별 평균은 그룹마다 한 열,\n"
+                            "그룹별 wafer는 wafer 열을 그룹으로 묶어 정렬합니다.")
+        on_combo(self.agg, self.mark_stale)
         bar.addWidget(self.agg)
         self.chk_delta = QCheckBox("Δ vs REF")
         self.chk_delta.toggled.connect(self.mark_stale)
@@ -85,14 +89,26 @@ class SummaryTab(StaleMixin, QWidget):
     def refresh(self) -> None:
         self.rebuild()
 
+    AGG_MODES = ("avg", "std", "gavg", "gwafer")
+
+    def agg_mode(self) -> str:
+        i = self.agg.currentIndex()
+        return self.AGG_MODES[i] if 0 <= i < len(self.AGG_MODES) else "avg"
+
+    def agg_label(self) -> str:
+        return {"avg": "평균", "std": "wafer 내 std (n−1)",
+                "gavg": "그룹별 평균",
+                "gwafer": "그룹별 wafer (평균)"}[self.agg_mode()]
+
     # ── 계산 ─────────────────────────────────────────────────
     def _stats(self):
         """wafer별 통계를 한 번에 — item×wafer 반복 필터링 없음."""
         from etreport.model.aggregate import ref_values, wafer_stats
         st = self.state
         aliases = [r.item_id for r in st.report.table_rows]
-        agg = "avg" if self.agg.currentIndex() == 0 else "std"
-        ws = wafer_stats(st.data, st.excluded, aliases, agg)
+        agg = self.agg_mode()
+        ws = wafer_stats(st.data, st.excluded, aliases,
+                         agg if agg in ("avg", "std") else "avg")
         ref = {}
         if self.chk_delta.isChecked():
             g = st.ref_group()
@@ -101,6 +117,18 @@ class SummaryTab(StaleMixin, QWidget):
         return ws, ref, agg
 
     def rebuild(self) -> None:
+        """[표 만들기] — 집계는 group_by 1회라 빠르지만 표 위젯 생성이 있으므로
+        버튼을 잠그고 대기 커서를 띄운다."""
+        from PySide6.QtWidgets import QApplication
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self.btn_build.setEnabled(False)
+        try:
+            self._rebuild()
+        finally:
+            self.btn_build.setEnabled(True)
+            QApplication.restoreOverrideCursor()
+
+    def _rebuild(self) -> None:
         import time
 
         from etreport.model.aggregate import offspec
@@ -123,6 +151,9 @@ class SummaryTab(StaleMixin, QWidget):
         ws, ref, agg = self._stats()
         header = st.wafer_columns()
         delta = self.chk_delta.isChecked()
+        if agg in ("gavg", "gwafer"):         # 열 구성이 다르다 — 표를 그대로 그린다
+            self._rebuild_groups(t0)
+            return
 
         for cat1 in st.report.table_names():
             rows = [r for r in st.report.table_rows if r.cat1 == cat1]
@@ -134,10 +165,16 @@ class SummaryTab(StaleMixin, QWidget):
             card.head.addWidget(cbtn)
             card.head.addWidget(xbtn)
 
-            ncol = 3 + sum(len(w) for _, w in header)
+            # 라벨 열 = CAT2…CATn + item. **개수는 템플릿이 정한다**(§3.3)
+            cat_names = list(getattr(st.report, "cat_names", []) or [])
+            n_cat = max((len(r.subcats) for r in rows), default=0)
+            cat_heads = [cat_names[i] if i < len(cat_names) else f"CAT{i + 2}"
+                         for i in range(n_cat)]
+            n_lab = n_cat + 1
+            ncol = n_lab + sum(len(w) for _, w in header)
             t = QTableWidget(len(rows), ncol)
             t.setObjectName("sumTable")
-            heads = ["CAT2", "CAT3", "item"]
+            heads = [*cat_heads, "item"]
             for lot, wl in header:
                 heads += [f"{lot}\n{w}" for w in wl]
             t.setHorizontalHeaderLabels(heads)
@@ -148,9 +185,11 @@ class SummaryTab(StaleMixin, QWidget):
             for ri, rs in enumerate(rows):
                 rule = st.rf.by_alias.get(rs.item_id)
                 rv = ref.get(rs.item_id) if delta else None
-                for ci, txt in enumerate((rs.cat2, rs.cat3, rs.item_id)):
+                labels = [*rs.subcats, *[""] * (n_cat - len(rs.subcats)),
+                          rs.item_id]
+                for ci, txt in enumerate(labels):
                     t.setItem(ri, ci, QTableWidgetItem(txt))
-                ci = 3
+                ci = n_lab
                 for lot, wl in header:
                     for wf in wl:
                         v = ws.get(rs.item_id, lot, wf)
@@ -173,7 +212,7 @@ class SummaryTab(StaleMixin, QWidget):
             card.body.addWidget(t)
             cap = QLabel(
                 f"{st.report.report} · "
-                f"{'평균' if agg == 'avg' else 'wafer 내 std (n−1)'}"
+                f"{self.agg_label()}"
                 f" · 제외 {len(st.excluded)}점 반영"
                 f"{' · Δ = REF 대비' if delta else ''}"
                 " · 붉은 셀은 SPECLOW/SPECHIGH 이탈")
@@ -181,6 +220,57 @@ class SummaryTab(StaleMixin, QWidget):
             card.body.addWidget(cap)
             self.vbox.addWidget(card)
 
+        self.mark_fresh()
+        self.lbl_state.setText(
+            f"{len(st.report.table_names())}개 표 · {time.monotonic() - t0:.2f}초")
+
+    def _rebuild_groups(self, t0: float) -> None:
+        """그룹별 평균 표 — 값은 build_table(단일 진실)이 만든 것을 그대로 그린다."""
+        import time
+
+        from etreport.export.excel import build_table
+        st = self.state
+        opt = self._options()
+        for cat1 in st.report.table_names():
+            td = build_table(st, cat1, opt)
+            card = Card(cat1, f"{len(td.rows)}개 item")
+            cbtn = GhostButton("복사")
+            cbtn.clicked.connect(lambda _=False, c=cat1: self._copy(c))
+            card.head.addWidget(cbtn)
+            xbtn = GhostButton("xlsx")
+            xbtn.clicked.connect(lambda _=False, c=cat1: self._export([c]))
+            card.head.addWidget(xbtn)
+            labels = td.labels()
+            if opt.agg == "gwafer":
+                # 그룹(첫 줄) + lot·wafer(둘째 줄) — 값이 어느 wafer의 것인지 보인다
+                cols = [*labels, *[f"{lot}\n{w}" for lot, ws in td.header_lots
+                                   for w in ws]]
+            else:                        # gavg — 그룹 이름만
+                cols = [*labels, *[w for _lot, ws in td.header_lots for w in ws]]
+            t = QTableWidget(len(td.rows), len(cols))
+            t.setObjectName("sumTable")
+            t.setHorizontalHeaderLabels(cols)
+            t.verticalHeader().setVisible(False)
+            t.setAlternatingRowColors(True)
+            t.setEditTriggers(QTableWidget.NoEditTriggers)
+            for r, row in enumerate(td.rows):
+                for c, text in enumerate(td.label_values(row)):
+                    t.setItem(r, c, QTableWidgetItem(text))
+                for c, (v, off) in enumerate(zip(row["values"], row["offspec"]),
+                                             start=len(labels)):
+                    it = QTableWidgetItem(fmt_value(v, opt.delta_vs_ref))
+                    it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    if off:
+                        it.setBackground(QColor("#ffecee"))
+                        it.setForeground(QColor("#d70015"))
+                    t.setItem(r, c, it)
+            fit_table(t)
+            card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+            card.body.addWidget(t)
+            cap = QLabel(opt.session_caption)
+            cap.setObjectName("hint")
+            card.body.addWidget(cap)
+            self.vbox.addWidget(card)
         self.mark_fresh()
         self.lbl_state.setText(
             f"{len(st.report.table_names())}개 표 · {time.monotonic() - t0:.2f}초")
@@ -203,13 +293,13 @@ class SummaryTab(StaleMixin, QWidget):
         """화면 상태 → SummaryOptions (복사·xlsx·PPT가 공유)."""
         from etreport.export.excel import SummaryOptions
         st = self.state
-        agg = "avg" if self.agg.currentIndex() == 0 else "std"
+        agg = self.agg_mode()
         return SummaryOptions(
             agg=agg,
             delta_vs_ref=self.chk_delta.isChecked(),
             session_caption=(
                 f"{st.report.report if st.report else ''} · "
-                f"{'평균' if agg == 'avg' else 'wafer 내 std (n−1)'}"
+                f"{self.agg_label()}"
                 f" · 제외 {len(st.excluded)}점 반영"
                 + (" · Δ = REF 대비" if self.chk_delta.isChecked() else "")))
 
