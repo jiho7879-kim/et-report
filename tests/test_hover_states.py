@@ -1,9 +1,13 @@
-"""hover 상태 픽셀 검증 — QSS를 실제로 로드해 hover 의사상태가 명세와 일치함을 확인.
+"""버튼 상태 픽셀 검증 — QSS를 실제로 로드해 상태별 색이 토큰과 맞는지 본다.
 
-app.py _load_style()과 동일하게 style.qss를 적용하고, QTest.mouseMove로
-실제 :hover 의사상태를 트리거해 grab() 픽셀을 QSS 명세와 대조한다.
-오프스크린 플랫폼에서 창이 (0,0)에 겹치는 문제를 피하려면 각 버튼을
-y=220 간격으로 place()로 분리해야 한다.
+app.py `_load_style()`과 같은 경로로 스타일을 적용하고, `QTest.mouseMove`로
+진짜 `:hover`를 발화시켜 `grab()` 픽셀을 읽는다. 기대색은 **하드코딩하지 않고
+`ui/theme.TOKENS`에서 가져온다** — 팔레트를 바꿨는데 테스트가 옛날 색을 붙잡고
+있으면 검사가 의미를 잃는다. 여기서 고정하는 것은 "어떤 색인가"가 아니라
+**상태마다 색이 다르고, 그 색이 토큰에서 온다**는 계약이다.
+
+오프스크린 플랫폼에서는 창이 (0,0)에 겹쳐 커서가 첫 창에만 들어가므로
+각 버튼을 y=220 간격으로 떨어뜨린다.
 """
 from __future__ import annotations
 
@@ -13,26 +17,25 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
-# ── QSS 스펙 기준 색상 (style.qss 셀렉터별) ──────────────────────────────
+from etreport.ui.theme import TOKENS
+
+
+def rgb(token: str) -> tuple[int, int, int]:
+    h = TOKENS[token].lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+# ── style.qss 셀렉터 → 토큰 ─────────────────────────────────────────────
 C = {
-    # QPushButton { background:#0071e3; color:#ffffff; }
-    "base_n": (0, 113, 227),
-    # QPushButton:hover { background:#0077ed; }
-    "base_h": (0, 119, 237),
-    # QPushButton:disabled { background:#6b7280; color:#ffffff; }
-    "base_d": (107, 114, 128),
-    # QPushButton[dirty="true"] { background:#c26c00; }
-    "dirty_n": (194, 108, 0),
-    # QPushButton[dirty="true"]:hover { background:#b45309; }
-    "dirty_h": (180, 83, 9),
-    # QPushButton[ghost="true"] { background:#ffffff; color:#1d1d1f; }
-    "ghost_n": (255, 255, 255),
-    # QPushButton[ghost="true"]:hover { background:#f7f8fa; }
-    "ghost_h": (247, 248, 250),
-    # QPushButton[ghost="true"]:hover { border-color:#0071e3; }
-    "ghost_hb": (0, 113, 227),
-    # QPushButton[ghost="true"]:disabled { background:#6b7280; color:#ffffff; }
-    "ghost_d": (107, 114, 128),
+    "base_n":  rgb("ACC"),        # QPushButton
+    "base_h":  rgb("ACC_H"),      # QPushButton:hover
+    "base_d":  rgb("DISABLED"),   # QPushButton:disabled
+    "dirty_n": rgb("WARN"),       # [dirty="true"]
+    "dirty_h": rgb("WARN_H"),     # [dirty="true"]:hover
+    "ghost_n": rgb("PAPER"),      # [ghost="true"]
+    "ghost_h": rgb("FIELD"),      # [ghost="true"]:hover
+    "ghost_hb": rgb("ACC"),       # [ghost="true"]:hover 테두리
+    "ghost_d": rgb("FIELD"),      # [ghost="true"]:disabled
 }
 
 
@@ -159,7 +162,7 @@ class TestHoverStates:
         assert near(sample(g), C["ghost_n"]), f"실측 {sample(g)} ≠ 기대 {C['ghost_n']}"
 
     def test_disabled_states(self, qapp):
-        """인접 상태: ghost disabled, base disabled."""
+        """비활성: 채운 버튼은 흐린 회색 면, ghost는 흐린 입력면."""
         gd = mk("중지", ghost=True, enabled=False)
         place(gd)
         gd.show()
@@ -177,35 +180,31 @@ class TestHoverStates:
         assert not near(C["base_n"], C["base_h"], 1)
         assert not near(C["dirty_n"], C["dirty_h"], 1)
         assert not near(C["ghost_n"], C["ghost_h"], 1)
-        assert not near(C["ghost_n"], C["ghost_d"], 1)
-        assert not near(C["dirty_n"], (255, 149, 0), 1)
+        assert not near(C["base_n"], C["base_d"], 1)
+        # 미적용(앰버)과 주 동작(틸)은 한눈에 달라야 한다. 둘 다 흰 글자를
+        # 받으므로 밝기는 비슷해도 되고, 갈라져야 하는 것은 색조다.
+        assert not near(C["base_n"], C["dirty_n"], 40)
         assert not near(C["base_h"], C["dirty_h"], 1)
 
-    def test_wcag_contrast(self, qapp):
-        """WCAG AA (4.5:1) — B·C 수정 검증: dirty hover와 ghost disabled만 단언.
-
-        나머지 대비는 정보 제공만(단언하지 않음).
-        기본 hover는 4.32:1로 여전히 미달이지만 이번 작업 범위가 아니므로
-        단언하지 않는다.
-        """
-        print("\n== 대비 (WCAG 4.5:1 권장) ==")
+    def test_button_text_contrast(self, qapp):
+        """버튼 글자 대비 — 활성 상태는 WCAG AA(4.5:1)."""
+        paper = rgb("PAPER")
         for name, fg, bg in [
-            ("기본 hover 흰글자/#0077ed", (255, 255, 255), C["base_h"]),
-            ("dirty hover 흰글자/#b45309", (255, 255, 255), C["dirty_h"]),
-            ("ghost hover 검정/#f7f8fa", (29, 29, 31), C["ghost_h"]),
-            ("ghost disabled 흰글자/#6b7280", (255, 255, 255), C["ghost_d"]),
-            ("기본 normal 흰글자/#0071e3", (255, 255, 255), C["base_n"]),
+            ("주 버튼", paper, C["base_n"]),
+            ("주 버튼 hover", paper, C["base_h"]),
+            ("미적용 버튼", paper, C["dirty_n"]),
+            ("미적용 hover", paper, C["dirty_h"]),
+            ("ghost 본문", rgb("TEXT"), C["ghost_n"]),
+            ("ghost hover", rgb("TEXT"), C["ghost_h"]),
         ]:
             r = contrast(fg, bg)
-            print(f"  {name}: {r:.2f}:1")
+            assert r >= 4.5, f"{name} 대비 {r:.2f}:1 < 4.5:1"
 
-        print("\n== WCAG AA (4.5:1) — B·C 수정 검증 ==")
-        # dirty hover #b45309
-        r = contrast((255, 255, 255), C["dirty_h"])
-        assert r >= 4.5, f"dirty hover #b45309 대비 {r:.2f}:1 < 4.5:1"
-        print(f"  ✅ dirty hover #b45309: {r:.2f}:1 달성")
-
-        # ghost disabled #6b7280
-        r = contrast((255, 255, 255), C["ghost_d"])
-        assert r >= 4.5, f"ghost disabled #6b7280 대비 {r:.2f}:1 < 4.5:1"
-        print(f"  ✅ ghost disabled #6b7280: {r:.2f}:1 달성")
+    def test_disabled_text_contrast(self, qapp):
+        """비활성 글자는 AA 예외지만, 읽을 수는 있어야 한다(3:1)."""
+        for name, fg, bg in [
+            ("채운 버튼 비활성", rgb("MUTED"), C["base_d"]),
+            ("ghost 비활성", rgb("DIM"), C["ghost_d"]),
+        ]:
+            r = contrast(fg, bg)
+            assert r >= 3.0, f"{name} 대비 {r:.2f}:1 < 3:1"

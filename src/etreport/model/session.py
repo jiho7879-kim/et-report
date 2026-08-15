@@ -108,9 +108,15 @@ def apply_config(state: AppState, cfg: AnalysisConfig) -> LoadReport:
     # 3) 실험 조건 --------------------------------------------
     if cfg.split_path or getattr(cfg, "split_text", ""):
         try:
-            from etreport.model.split import load_split_file, parse_split_text
-            state.split = (load_split_file(cfg.split_path) if cfg.split_path
-                           else parse_split_text(cfg.split_text))
+            from etreport.model.split import (
+                BASELINE_DEFAULT,
+                load_split_file,
+                parse_split_text,
+            )
+            base = getattr(cfg, "split_baseline", "") or BASELINE_DEFAULT
+            state.split = (load_split_file(cfg.split_path, base)
+                           if cfg.split_path
+                           else parse_split_text(cfg.split_text, base))
             if not state.factors:
                 state.factors = state.split.steps[:1]
             rep.lines.append(

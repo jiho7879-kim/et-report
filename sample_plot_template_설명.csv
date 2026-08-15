@@ -1,0 +1,10 @@
+﻿컬럼,의미,예시,규칙
+page,페이지 번호,1,같은 번호끼리 한 슬라이드에 모인다
+order,페이지 안 위치,1~6,"1·2·3 윗줄 / 4·5·6 아랫줄, 왼쪽에서 오른쪽"
+"x, y",축에 쓸 리포메터 ALIAS,Vtlin N,쉼표로 여러 개를 적으면 순서대로 xy쌍이 되어 한 그림에 겹친다
+title1,페이지 제목,NMOS 특성,같은 page의 첫 행에만 적는다
+title2,이 plot의 제목,Idsat–Vt,""
+Report,리포트 이름,M2_ET,table 템플릿과 짝을 이루는 키. 한 파일에 여러 리포트를 담을 수 있다
+Type,그림 종류,scatter,scatter(기본) / trend(x는 W 또는 L). 표는 전용 페이지로 자동 생성되므로 table 행을 둘 필요가 없다
+"x_name, y_name",축 표시 이름,(비움),비우면 ALIAS + 단위로 자동 생성
+Mode,그릴 데이터 레벨 (선택),site,site(측정점 그대로) / avg / med / std — 없으면 site

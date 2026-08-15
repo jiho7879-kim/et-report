@@ -158,8 +158,34 @@ def normalize_schema(df: pl.DataFrame) -> pl.DataFrame:
         log.warning("조회 결과에 없는 컬럼을 null로 채웁니다: %s", ", ".join(missing))
         df = df.with_columns([pl.lit(None, dtype=target[c]).alias(c)
                               for c in missing])
+    df = correct_temperature(df)
     rest = [c for c in df.columns if c not in target]
     return df.select([*target, *rest])
+
+
+def correct_temperature(df: pl.DataFrame,
+                        col: str = "temperature") -> pl.DataFrame:
+    """측정 온도를 **가장 가까운 5의 배수**로 보정한다 — 23.9→25, 149→150.
+
+    계측기가 준 raw 값(23.9·24.9…)을 그대로 두면 같은 조건의 측정이 온도별로
+    갈라진다. 보정은 **여기, 추출 직후**에 한다 — 그래야 리포메팅도 적재도
+    보정된 값으로 진행되고 **DuckDB에도 보정된 값이 저장된다**(요청 §10).
+    읽는 시점(`data/compat.temp_expr`)에도 같은 보정이 걸려 있는데, 반올림은
+    멱등이라 이미 보정된 값에 다시 걸어도 결과가 같다 — 예전에 raw로 적재해
+    둔 DB도 화면·표·PPT가 맞는다.
+
+    단위는 `data/compat.TEMP_STEP` 하나로 맞춘다(규칙을 두 곳에 두지 않는다).
+    반올림은 **DuckDB `ROUND`와 같은 규칙**(0.5는 0에서 먼 쪽)으로 맞춘다 —
+    polars의 `round`는 짝수로 붙는(banker's) 방식이라 22.5°C 같은 경계값에서
+    적재값과 조회값이 갈린다. `tests/test_extract_schema.py`가 둘이 같은지
+    확인한다.
+    """
+    from etreport.data.compat import TEMP_STEP
+    if col not in df.columns:
+        return df
+    q = pl.col(col).cast(pl.Float64, strict=False) / TEMP_STEP
+    half_away = (q.abs() + 0.5).floor() * q.sign()
+    return df.with_columns((half_away * TEMP_STEP).alias(col))
 
 
 def extract_to_parquet(

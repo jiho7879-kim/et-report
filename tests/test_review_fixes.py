@@ -17,6 +17,7 @@ from etreport.data import db, loader
 from etreport.data.querybuilder import _q, condition_sql
 from etreport.export.excel import sheet_name
 from etreport.export.template_writer import merged_frame
+from etreport.model import wafers
 from etreport.model.specs import PageSpec, PlotSpec, ReportSpec
 from etreport.model.split import SplitMatrix
 from etreport.paths import cleanup_staging, write_json_atomic
@@ -269,7 +270,7 @@ def test_split_labels_survive_separator_in_codes():
     assert set(combos) == {("Base",), ("A · B",)}
     styles = sm.styles_for(["M1"])
     assert [s.ref for s in styles] == [True, False]     # Base만 REF
-    assert sm.assignment(["M1"])[("L1", "02")] == styles[1].gid
+    assert sm.assignment(["M1"])[wafers.key("L1", "02")] == styles[1].gid
 
 
 # ── P3: split_table 인덱싱 ──────────────────────────────────

@@ -101,6 +101,8 @@ class S3Dialog(QDialog):
         c = s3.S3Credentials(**{k: ed.text().strip()
                                 for k, ed in self.fields.items()})
         c.remember = self.chk_remember.isChecked()
+        # 연결할 때 감지한 키 접두어는 화면에 입력칸이 없으므로 이어받는다
+        c.root_prefix = getattr(self.cred, "root_prefix", "")
         return c
 
     def _connect(self) -> None:
@@ -108,13 +110,15 @@ class S3Dialog(QDialog):
         if not c.ok():
             self.lbl.setText("Bucket·AccessKey·Secret은 모두 필요합니다")
             return
+        c.root_prefix = ""                  # 연결할 때마다 다시 감지한다
         self.cred = c
-        s3.save_credentials(c)              # remember=False면 지운다
         self.lbl.setText("연결 중…")
         run_in_background(self, "S3 연결", lambda: s3.check(c),
                           done=self._connected)
 
     def _connected(self, msg: str) -> None:
+        # check()가 root_prefix를 정한 뒤에 저장한다 (remember=False면 지운다)
+        s3.save_credentials(self.cred)
         self.lbl.setText(str(msg))
         self._refresh()
 
@@ -123,7 +127,8 @@ class S3Dialog(QDialog):
         if not self.cred.ok():
             return
         self.tree.clear()
-        root = QTreeWidgetItem(self.tree, ["/", "", ""])
+        label = f"{self.cred.bucket}/{self.cred.root_prefix}".rstrip("/") + "/"
+        root = QTreeWidgetItem(self.tree, [label, "", ""])
         root.setData(0, FOLDER_ROLE, "")
         self.tree.setCurrentItem(root)
         self._fill(root, "")

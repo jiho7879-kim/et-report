@@ -15,6 +15,7 @@ import duckdb
 import polars as pl
 
 from etreport.data import compat, exclusions
+from etreport.model import wafers
 from etreport.model.state import AppState
 
 log = logging.getLogger(__name__)
@@ -24,9 +25,59 @@ log = logging.getLogger(__name__)
 RESERVED = ("key", "lot", "wafer", "gid", "step", "temp", "site")
 
 
+def readonly_config() -> dict:
+    """읽기 전용 연결의 **공통 설정**.
+
+    DuckDB는 같은 파일에 대해 설정이 다른 연결을 동시에 열지 못한다
+    (`can't open a connection to same database file with a different
+    configuration than existing connections`). 그래서 읽기 전용으로 여는
+    자리는 전부 이 설정을 쓴다 — 새 코드가 `duckdb.connect(...)`를 직접
+    부르면 그 순간 충돌한다.
+
+    `temp_directory`는 큰 조회에서 디스크로 흘려보내기 위한 것이다. 없으면
+    결과를 통째로 메모리에 만들다 `Out of Memory Error: Arrow buffer failed
+    to allocate`로 죽는다.
+    """
+    from etreport.paths import appdata_dir
+    tmp = appdata_dir() / "duckdb_tmp"
+    try:
+        tmp.mkdir(parents=True, exist_ok=True)
+    except OSError as e:                       # 권한이 없으면 기본값으로
+        log.debug("DuckDB 임시 폴더를 만들지 못했습니다(%s) — 기본값 사용", e)
+        return {"threads": 4}
+    return {"threads": 4, "temp_directory": str(tmp)}
+
+
 def open_readonly(db_path: str) -> duckdb.DuckDBPyConnection:
-    """읽기 전용 연결 — 원본 파일을 절대 수정하지 않는다."""
-    return duckdb.connect(db_path, read_only=True)
+    """읽기 전용 연결 — 원본 파일을 절대 수정하지 않는다.
+
+    **DB를 읽는 모든 자리가 이 함수를 쓴다.** 설정이 하나로 유지돼야
+    같은 파일을 동시에 열 수 있다(readonly_config 참조).
+    """
+    try:
+        return duckdb.connect(db_path, read_only=True,
+                              config=readonly_config())
+    except duckdb.Error as e:
+        raise RuntimeError(explain_conn_error(e, db_path, write=False)) from e
+
+
+def explain_conn_error(e: Exception, db_path: str, write: bool) -> str:
+    """DuckDB 연결 오류를 사람이 읽을 수 있는 안내로 바꾼다.
+
+    현장에서 가장 많이 보는 것이 "설정이 다른 연결" 오류인데, 원문만으로는
+    무엇을 해야 하는지 알 수 없다. 원인은 하나다 — **같은 파일을 쓰기와 읽기
+    전용으로 동시에 열었다**(적재 중에 분석 화면이 그 DB를 붙잡고 있거나,
+    그 반대).
+    """
+    msg = str(e)
+    if "different configuration" not in msg and "already open" not in msg:
+        return f"DB를 열지 못했습니다: {msg}"
+    what = ("적재(쓰기)" if write else "분석(읽기 전용)")
+    other = ("분석 화면" if write else "데이터 화면의 적재")
+    return (f"{Path(db_path).name}을(를) {what}로 열 수 없습니다 — "
+            f"같은 파일을 {other}이(가) 이미 다른 방식으로 열고 있습니다.\n\n"
+            f"[분석] 화면에서 다른 DB를 고르거나 [적용]을 다시 누른 뒤, "
+            f"또는 앱을 재시작한 뒤 다시 시도하세요.\n\n원문: {msg}")
 
 
 def item_columns(df: pl.DataFrame) -> list[str]:
@@ -65,13 +116,18 @@ def apply_manual_groups(df: pl.DataFrame,
 
     조건 비교는 문자열로 한다 — 온도 25.0을 콤보에서 고를 때와 프레임에 든
     값이 같은 표기가 되도록.
+
+    lot·wafer는 **정규화한 표기로 비교한다**(`model/wafers`) — 붙여넣기로 적어
+    둔 `1`과 DB의 `W01`이 같은 wafer로 붙어야 한다.
     """
     if df is None or not groups or "gid" not in df.columns:
         return df
+    lot_k = wafers.lot_key_expr("lot")
+    waf_k = wafers.wafer_key_expr("wafer")
     expr = pl.col("gid")
     for key, gid in groups.items():          # 나중에 배정한 것이 이긴다
         lot, wafer, *ctx = key
-        cond = (pl.col("lot") == lot) & (pl.col("wafer") == wafer)
+        cond = (lot_k == wafers.norm_lot(lot)) & (waf_k == wafers.norm_wafer(wafer))
         for name, val in zip(compat.CTX_ROLES, ctx):
             if val is not None and name in df.columns:
                 cond = cond & (pl.col(name).cast(pl.Utf8) == val)
@@ -166,8 +222,7 @@ def load_state(state: AppState, db_path: str, table: str | None = None) -> str:
         assign = state.split.assignment(state.factors)
         state.groups = state.split.styles_for(state.factors)
         state.data = state.data.with_columns(pl.Series(
-            "gid", [assign.get((lo, wa), "") for lo, wa
-                    in zip(df["lot"], df["wafer"])]))
+            "gid", wafers.map_gids(df["lot"], df["wafer"], assign)))
     # 손으로 배정한 그룹은 [적용]으로 DB를 다시 읽어도 살아남는다. 실험 조건
     # 배정보다 뒤에 걸어 사용자가 직접 고른 쪽이 이기게 한다.
     state.data = apply_manual_groups(state.data, state.manual_groups)

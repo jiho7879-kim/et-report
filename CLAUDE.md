@@ -66,6 +66,7 @@ myenv/bin/ruff check --fix .                        # 안전한 것만 자동 �
 | `test_ux_requests2.py` | 점 표시 모드·PPT 그룹 평균 페이지·그룹별 wafer 표 |
 | `test_ux_requests.py` | 사용자 요청 8건(표지 장표·그룹별 평균·콤보 지연…) |
 | `test_bugfix_9.py` | 분석 화면 버그 9건 회귀(온도 5단위·자동그룹핑·표 그룹 반영…) |
+| `test_ux_requests3.py` | 요청 15건 — 연결 충돌·SQL OOM·S3 트리·wafer 표기 통일·온도 적재 보정 |
 | `test_fabtracking.py` | 기능 A — PHOTO=recipe/그 외=ppid, 갈리는 step만 factor |
 | `test_metrology.py` | 기능 B — subitem 규칙·(lot,wafer) 매칭·top-k |
 | `test_s3.py` | 기능 C — 키 조립·페이지네이션·자격 증명 보관(가짜 클라이언트) |
@@ -74,6 +75,9 @@ myenv/bin/ruff check --fix .                        # 안전한 것만 자동 �
 | `test_db_buckets.py` | 버킷 수가 저장 결과를 바꾸지 않는다는 불변식(예전 DB 호환) |
 | `test_analysis_core.py` | 축 범위 ×1.2 · 로그 패턴 · wafer 집계 · 자릿수 |
 | `test_review_fixes.py` | 코드 리뷰에서 고친 것들의 회귀(업데이트 가드·Figure 누수·연결·복사 값…) |
+| `test_theme.py` | **시각 토큰 계약** — 치환 누락·WCAG AA 대비·QSS가 덮는 범위 |
+| `test_ux_redesign.py` | 단축키(F5·Ctrl+Enter)·상태 레일 램프·미적용 `•`·비모달 알림 |
+| `test_hover_states.py` | 버튼 상태 픽셀(기본·dirty·ghost)이 `theme.TOKENS`와 일치 |
 | `test_app_boot.py` | 부팅 — 콘솔 없는 exe에서의 로깅, excepthook, 카탈로그 폴백 |
 | `test_ui_smoke.py` | 데모 데이터로 창을 조립(headless) — 탭 구성·지연 계산·복사 일치 |
 | `test_bigset.py` (slow) | 실측 규모 성능·정확성 회귀 (`-s`로 단계별 시간 출력) |
@@ -120,10 +124,12 @@ UI는 스모크 수준만 있다(`test_ui_smoke.py`, offscreen). 화면을 바�
 
 | 규칙 | 위치 |
 |---|---|
-| 앱 전역 상태 + 변경 알림 | `model/state.py` (`AppState`, `StateBus` 시그널 5종) |
+| 앱 전역 상태 + 변경 알림 | `model/state.py` (`AppState`, `StateBus` 시그널 6종) |
+| 색·모서리·글자 크기 | `ui/theme.py: TOKENS` — `style.qss`의 `%TOKEN%`으로만 들어간다 |
 | 축 범위·로그 판정 | `render/ranges.py` — SPEC∪데이터를 중심 기준 ×1.2 |
 | 자릿수 포맷 | `model/specs.py: fmt_value` (<1→3자리, ≤10→2자리, >10→1자리) |
 | wafer 집계(평균/n-1 표준편차) | `model/aggregate.py` — 화면·xlsx·PPT 공용, group_by 1회 |
+| lot·wafer 표기 비교 | `model/wafers.py` — `W01`·`W1`·`01`·`1`을 한 키로 |
 | 그리기 | `render/mpl_renderer.py` — **화면 캔버스도 이걸 쓴다** |
 | 덱 조립 | `render/pptgen.py: build_deck` — 크기·순서·표 페이지가 전부 여기 |
 
@@ -150,6 +156,20 @@ UI는 스모크 수준만 있다(`test_ui_smoke.py`, offscreen). 화면을 바�
 `test_render_trend.py`의 `test_ref_band_field_removed`·
 `test_renderer_module_has_no_ref_band`가 재발을 막는다. 사양서만 보고 되살리지 말 것.
 
+**화면 테마는 `ui/theme.py`가 전부 갖는다**(2026-08-15 리디자인, "계측기 콘솔").
+상단바·도크는 무채색 그래파이트(크롬), 카드·표·캔버스는 흰색(측정면)이고 액센트는
+딥 틸 하나다 — 차트가 이미 Okabe-Ito 8색과 규격 빨강을 쓰므로 UI가 같은 색조로
+경쟁하지 않게 한 결정이다. 지켜야 할 것 셋:
+- 색·모서리·글자 크기는 **`TOKENS`에만** 적는다. `style.qss`는 `%TOKEN%`을 쓰고
+  파이썬 코드에 hex를 박지 않는다(`tests/test_theme.py`가 대비를 이 표로 검사한다).
+- **전역 `QWidget { background: … }` 규칙을 두지 않는다.** 그 규칙이 있으면 어두운
+  도크 안의 자식 위젯이 전부 밝은 회색으로 칠해진다. 배경은 QPalette와 이름 있는
+  표면(`#topbar` `#dock` `#card` …)에만 준다.
+- 스타일은 **Fusion 고정**(`theme._use_fusion`). Windows 기본 스타일은 스크롤바·
+  체크박스·콤보 화살표를 자기 식으로 그려서 QSS로 칠한 나머지와 따로 논다.
+- 콤보 화살표·체크 표시 아이콘은 토큰 색으로 **부팅 때 만들어** `%APPDATA%\\ETReport\\
+  icons`에 둔다(`theme.icon_dir`). 파일로 들고 다니면 색이 두 곳이 된다.
+
 **콤보 처리는 `ui/tabs/common.on_combo()`로 연결한다** — 선택 즉시 팝업을 닫고
 (hidePopup) 60ms 뒤에 실행한다. 핸들러에서 바로 무거운 일을 하면 팝업이 화면에
 남는다(실제로 두 번 재발했다). 창이 닫힌 뒤 도는 지연 처리는 조용히 건너뛴다.
@@ -167,10 +187,20 @@ UI 구조: 도크는 `ui/analysis_ws.py`, 탭 3종은 `ui/tabs/`(explore·summar
 캐시가 스레드 안전하지 않아 QThread에서 그리면 프로세스가 abort한다(확인함).
 [그리기]/[미리보기]는 UI 스레드에서 그리되 버튼 잠금 + 대기 커서로 표시한다.
 
+단축키는 창 전역(`MainWindow._build_shortcuts`: Ctrl+1·Ctrl+2·F1)과 화면별
+(`AnalysisWorkspace`: F5·Ctrl+Enter·Ctrl+Z / `DataWorkspace`: F5·Esc)로 나뉜다.
+Ctrl+Enter는 보고 있는 탭의 `stale_button_attr` 버튼을 누른다 — 탭을 추가해도
+그 속성만 정의하면 따라온다. 새 단축키를 넣으면 [도움말] → [단축키]와 설명서의
+단축키 절도 함께 고친다.
+
+확인만 받는 알림(캐시 비움·예시 저장 등)은 모달이 아니라
+`ui/widgets/toast.py`의 `toast()`를 쓴다. 모달은 실패와 되돌릴 수 없는 확인에만.
+
 ### 계산은 명시적으로만
 표·plot·미리보기는 자동 재계산하지 않는다. Summary [표 만들기] / 탐색 [그리기] /
-리포트 [미리보기] 버튼이 트리거이고, 변경이 생기면 버튼이 주황색이 되며 보고 있는
-탭만 갱신된다. 새 기능을 넣을 때 이 지연 계산 규약을 깨지 않는다.
+리포트 [미리보기] 버튼이 트리거이고, 변경이 생기면 버튼이 앰버색 + 라벨 끝에 `•`가
+되며(색만으로 알리지 않는다 — `tabs/common.set_dirty`) 보고 있는 탭만 갱신된다.
+새 기능을 넣을 때 이 지연 계산 규약을 깨지 않는다.
 
 ## 데이터 계층의 제약
 
@@ -195,9 +225,18 @@ Categorical → 숫자 직접 캐스팅은 polars가 막고(Utf8을 한 번 거�
 Datetime은 cast가 조용히 전부 null로 만든다**(`str.to_datetime()`으로 파싱).
 tkout_time이 null이 되면 `key_hash`가 뭉쳐 서로 다른 측정이 중복으로 지워진다.
 빠진 컬럼은 null로 채워 청크 parquet 스키마를 고정한다(`scan_parquet` 일괄 읽기).
+여기서 **온도도 5단위로 보정한다**(`correct_temperature`) — 리포메팅·적재가
+전부 보정된 값으로 진행되고 DuckDB에도 보정된 값이 들어간다. 반올림은 DuckDB
+`ROUND`와 같은 규칙(0.5는 0에서 먼 쪽)이라 읽는 시점 보정(`compat.temp_expr`)과
+값이 같고, 반올림은 멱등이라 raw로 적재해 둔 예전 DB도 그대로 맞는다.
 
 **DuckDB** — 기준 테이블 이름은 `et_data`(손코딩 시절과 동일, `fact`는 레거시).
-분석 화면은 DB를 **읽기 전용**으로 연다. 따라서:
+분석 화면은 DB를 **읽기 전용**으로 연다. **읽기 전용으로 여는 자리는 전부
+`loader.open_readonly()`를 쓴다** — DuckDB는 같은 파일에 설정이 다른 연결을
+동시에 열지 못해서(`can't open a connection to same database file with a
+different configuration`), `duckdb.connect(..., read_only=True)`를 직접 부르는
+코드가 하나만 생겨도 그 순간 충돌한다. 쓰기(적재)와 읽기도 함께 열 수 없으므로
+추출을 시작하기 전에 `loader.close_store(state)`로 읽기 연결을 닫는다. 따라서:
 - 컬럼 이름은 고정하지 않고 `data/compat.py`의 `ROLE_ALIASES`로 역할을 추론한다
   (`root_lot_id|lot_id|lot`, `wafer_id|slot_no`, `tkout_time|create_dttm` …).
   long(`item_id`/`value`) 테이블이면 `select_sql()`이 PIVOT으로 wide화한다.
@@ -314,7 +353,10 @@ ALIAS여야 하고, 아니면 그 행만 건너뛴다.
 
 ## 참고 문서
 
-`docs/ui-mockup-v12.html`이 화면 배치·동작의 기준 목업이고,
+`docs/ui-mockup-v12.html`은 **배치·동작**의 기준 목업이다 — 색·모서리·글자는
+2026-08-15 리디자인 이전(애플풍 라이트) 그대로이니 **시각은 이 목업이 아니라
+`ui/theme.py`를 따른다**. `design-plans/instrument-console-redesign.md`가 그
+리디자인의 근거와 결정을 남긴 문서다.
 `docs/data-report-tool-plan.md`가 계획서다(코드 주석의 "계획서 §N" 참조 대상).
 `README.md`의 폴더 구조 표는 일부 모듈(session/aggregate/compat/loader/fonts 등)이
 빠져 있어 최신이 아니다.

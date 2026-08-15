@@ -15,6 +15,7 @@ import polars as pl
 import pytest
 
 from etreport.data import fabtracking as ft
+from etreport.model import wafers
 
 ROW = {"part_id": "DEV1", "process_id": "M1", "step_seq": 1,
        "root_lot_id": "PA100", "wafer_id": "01", "area": "ETCH",
@@ -131,8 +132,8 @@ def test_split_matrix_uses_existing_grouping():
     assert sm.baseline == "Base"                     # 다수 조건이 기준(REF)
     styles = sm.styles_for(["M1"])
     assert [s.ref for s in styles] == [True, False]
-    assert sm.assignment(["M1"])[("PA100", "03")] != \
-        sm.assignment(["M1"])[("PA100", "01")]
+    assert sm.assignment(["M1"])[wafers.key("PA100", "03")] != \
+        sm.assignment(["M1"])[wafers.key("PA100", "01")]
 
 
 def test_confound_detection_still_works():
@@ -170,7 +171,7 @@ def test_multi_lot_grouping_survives():
     assign = sm.assignment(["M1"])
 
     assert sm.wide.height == 4
-    assert assign[("PA100", "01")] == assign[("PB200", "01")]   # 둘 다 Base
+    assert assign[wafers.key("PA100", "01")] == assign[wafers.key("PB200", "01")]   # 둘 다 Base
     assert len({*assign.values()}) == 3                          # Base·Hi·Lo
     assert ft.split_steps(df) == ["M1"]
 

@@ -1,0 +1,5 @@
+﻿item_id,CAT1,CAT2,CAT3,CAT4,Report
+Idsat N,DC,NMOS,Idsat,SVT,M2_ET
+Vtlin N,DC,NMOS,Vt,SVT,M2_ET
+Ioff N,Leakage,NMOS,Ioff,SVT,M2_ET
+Idsat N/P,Ratio,N/P,Idsat,SVT,M2_ET

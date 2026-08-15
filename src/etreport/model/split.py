@@ -161,10 +161,17 @@ class SplitMatrix:
         return out
 
     def assignment(self, factors: list[str]) -> dict[tuple[str, str], str]:
-        """(lot, wafer) → gid. UI 그룹 배정과 fact 필터 양쪽에서 쓴다."""
+        """(lot, wafer) → gid. UI 그룹 배정과 fact 필터 양쪽에서 쓴다.
+
+        키는 **정규화한 표기**다(`model/wafers`) — 실험 조건표에 `1`이라고
+        적혀 있고 DB에는 `W01`로 들어 있어도 같은 wafer로 붙는다. 찾는 쪽도
+        반드시 `wafers.key()`로 만든 키로 조회한다.
+        """
+        from etreport.model import wafers
+
         styles = self.styles_for(factors)
         out: dict[tuple[str, str], str] = {}
         for gid_style, members in zip(styles, self.combos_for(factors).values()):
-            for lw in members:
-                out[lw] = gid_style.gid
+            for lot, waf in members:
+                out[wafers.key(lot, waf)] = gid_style.gid
         return out

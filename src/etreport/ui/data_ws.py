@@ -6,12 +6,14 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QDate, Qt, QThread, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDateEdit,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -41,6 +43,16 @@ from etreport.ui.widgets.cards import Card, GhostButton, row
 from etreport.ui.widgets.item_check_dialog import ItemCheckDialog
 
 log = logging.getLogger(__name__)
+
+# 폭이 이만큼 되면 카드를 2열로 편다(1500px 창에서 좌우가 통째로 비지 않게)
+WIDE_BREAKPOINT = 1180
+WIDE_MAX = 1360
+NARROW_MAX = 900
+
+WAIT_TEXT = "준비됨"
+LOG_PLACEHOLDER = ("여기에 단계별 진행이 남습니다.\n"
+                   "리포메터 → 추출 → 리포메팅 → 적재 순서로 진행하고, "
+                   "각 단계의 소요 시간도 함께 적힙니다.")
 
 
 class _ExtractThread(QThread):
@@ -112,6 +124,8 @@ class _ExtractThread(QThread):
                       .collect().item() for f in files)
             self.log.emit(f"추출 완료 — {raw:,}행 (long) "
                           f"· {time.monotonic() - t:.1f}초")
+            self.log.emit("  온도 보정 적용 — 5단위 정수로 맞춰 적재합니다 "
+                          "(23.9 → 25)")
 
             # 3) 리포메팅 --------------------------------------
             t = time.monotonic()
@@ -235,6 +249,7 @@ class ConditionRow(QWidget):
 
     def _mode_changed(self, i: int) -> None:
         self.cond.mode = "regexp" if i else "auto"
+        self._sync()                       # 힌트 문구도 모드에 맞춘다
         self.changed.emit()
 
     def _sync(self) -> None:
@@ -247,9 +262,11 @@ class ConditionRow(QWidget):
         self.badge.style().unpolish(self.badge)
         self.badge.style().polish(self.badge)
         self.cmb_mode.setEnabled(not (num or ts))
+        rx = self.cond.mode == "regexp" and not (num or ts)
         self.ed_val.setPlaceholderText(
             "2026-08-01 ~ 2026-08-10" if ts else
             ">=25   ·   25 85   ·   25~85   ·   !0" if num else
+            "P040 L040 P049   (띄어쓰기 = OR, 자동으로 | 로 잇습니다)" if rx else
             "PA12*  PB201  !PA125")
 
 
@@ -267,6 +284,7 @@ class DataWorkspace(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setObjectName("dataScroll")
         host = QWidget()
         outer = QVBoxLayout(host)
         outer.setContentsMargins(24, 20, 24, 20)
@@ -278,12 +296,16 @@ class DataWorkspace(QWidget):
         lay.setSpacing(0)
         lay.addWidget(scroll, 1)
 
-        col = QWidget()
-        col.setMaximumWidth(880)
-        v = QVBoxLayout(col)
+        # 카드는 격자에 담는다 — 창이 넓으면 2열, 좁으면 1열(_relayout).
+        # 예전에는 880px 열 하나만 써서 1500px 창의 좌우가 통째로 비었다.
+        self.col = QWidget()
+        v = QGridLayout(self.col)
         v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(14)
-        outer.addWidget(col)
+        v.setHorizontalSpacing(14)
+        v.setVerticalSpacing(14)
+        self.grid = v
+        self._cols = 0
+        outer.addWidget(self.col)
         outer.addStretch(1)
 
         # 프리셋 ----------------------------------------------
@@ -296,7 +318,7 @@ class DataWorkspace(QWidget):
         b_new = GhostButton("새 설정")
         b_new.clicked.connect(self._save_as)
         pc.body.addWidget(row(self.cmb_preset, b_save, b_new, stretch_at=0))
-        v.addWidget(pc)
+        self.card_preset = pc
 
         # 대상 ------------------------------------------------
         tc = Card("대상")
@@ -312,7 +334,7 @@ class DataWorkspace(QWidget):
         b3 = GhostButton("새로고침")
         b3.clicked.connect(self._refresh_catalog)
         tc.body.addWidget(row("컬럼 정보", self.lbl_cat, None, b3, stretch_at=1))
-        v.addWidget(tc)
+        self.card_target = tc
 
         # 기간 ------------------------------------------------
         dc = Card("기간", "tkout_time 기준 · 파티션 컬럼이라 좁을수록 빠릅니다")
@@ -327,7 +349,7 @@ class DataWorkspace(QWidget):
         q30 = GhostButton("30일")
         q30.clicked.connect(lambda: self._quick(30))
         dc.body.addWidget(row(self.d_from, "—", self.d_to, q7, q30, None))
-        v.addWidget(dc)
+        self.card_period = dc
 
         # 조건 ------------------------------------------------
         cc = Card("조회 조건", "line_id는 파티션 컬럼이라 필수입니다")
@@ -336,46 +358,57 @@ class DataWorkspace(QWidget):
         cc.body.addLayout(self.cond_host)
         add = GhostButton("＋ 조건 추가")
         add.clicked.connect(self._add_cond)
-        cc.body.addWidget(add)
+        cc.body.addWidget(row(add, None))       # 버튼은 내용만큼만
         self.sql = QPlainTextEdit()
         self.sql.setReadOnly(True)
         self.sql.setObjectName("sqlBox")
-        self.sql.setFixedHeight(128)
-        cc.body.addWidget(QLabel("SQL 미리보기"))
+        self.sql.setFixedHeight(120)
+        lab_sql = QLabel("SQL 미리보기")
+        lab_sql.setObjectName("sectionLabel")
+        cc.body.addWidget(lab_sql)
         cc.body.addWidget(self.sql)
         b_item = GhostButton("item_id 확인")
+        b_item.setToolTip("리포메터의 ITEMID와 실제 데이터의 item_id를 대조합니다.")
         b_item.clicked.connect(self._open_item_check)
-        cc.body.addWidget(b_item)
-        v.addWidget(cc)
+        cc.body.addWidget(row(b_item, None))
+        self.card_cond = cc
 
         # 실행 ------------------------------------------------
+        # 버튼은 **동작만** 말한다. 진행 단계는 라벨과 진행 막대가 말한다 —
+        # 예전에는 버튼 글자가 "추출 중"으로 바뀌어 한 요소가 두 일을 했다.
         rc = Card("실행")
         self.btn_run = QPushButton("추출하고 적재")
-        self.btn_run.setMinimumWidth(210)          # 단계명이 길어도 안 잘리게
+        self.btn_run.setMinimumWidth(150)
+        self.btn_run.setToolTip("리포메터의 item만 조회해 추출·리포메팅·적재까지 (F5)")
         self.btn_run.clicked.connect(self._run)
         self.btn_cancel = GhostButton("중지")
         self.btn_cancel.setEnabled(False)
+        self.btn_cancel.setToolTip("진행 중인 청크가 끝나면 멈춥니다 (Esc)")
         self.btn_cancel.clicked.connect(self._cancel)
         self.chk_csv = QCheckBox("완료 후 CSV 저장")
         self.chk_csv.setChecked(True)
+        self.lbl_step = QLabel(WAIT_TEXT)
+        self.lbl_step.setObjectName("hint")
         rc.body.addWidget(row(self.btn_run, self.btn_cancel, self.chk_csv,
                               QCheckBox("SBDF"), None))
-        self.lbl_step = QLabel("대기 중")
-        self.lbl_step.setObjectName("hint")
+        # 진행 문구는 제 줄에 둔다 — 체크박스 옆에 붙이면 그 체크박스의 설명처럼 읽힌다
+        rc.body.addWidget(row(self.lbl_step, None))
         self.bar = QProgressBar()
         self.bar.setTextVisible(False)
-        self.bar.setFixedHeight(6)
-        rc.body.addWidget(row(self.lbl_step, None))
+        self.bar.setFixedHeight(5)
         rc.body.addWidget(self.bar)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setObjectName("logBox")
-        self.log_view.setFixedHeight(170)
+        self.log_view.setFixedHeight(150)
+        self.log_view.setPlaceholderText(LOG_PLACEHOLDER)
         b_copy = GhostButton("로그 복사")
         b_copy.clicked.connect(self._copy_log)
         b_clear = GhostButton("지우기")
         b_clear.clicked.connect(lambda: self.log_view.clear())
-        rc.body.addWidget(row(QLabel("진행 로그"), None, b_copy, b_clear))
+        lab_log = QLabel("진행 로그")
+        lab_log.setObjectName("sectionLabel")
+        rc.body.addWidget(row(lab_log, None, b_copy, b_clear))
         rc.body.addWidget(self.log_view)
         self.run_card = rc
 
@@ -384,20 +417,59 @@ class DataWorkspace(QWidget):
         foot.setObjectName("runFooter")
         fl = QHBoxLayout(foot)
         fl.setContentsMargins(24, 10, 24, 14)
-        inner = QWidget()
-        inner.setMaximumWidth(880)
-        inner.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        il = QVBoxLayout(inner)
+        self.foot_inner = QWidget()
+        self.foot_inner.setMaximumWidth(880)
+        self.foot_inner.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        il = QVBoxLayout(self.foot_inner)
         il.setContentsMargins(0, 0, 0, 0)
         il.addWidget(self.run_card)
         fl.addStretch(1)
-        fl.addWidget(inner, 10)
+        fl.addWidget(self.foot_inner, 10)
         fl.addStretch(1)
         lay.addWidget(foot)
 
         self._rows: list[ConditionRow] = []
         self._rf_items: list[str] = []   # 리포메터 REAL itemid (미리보기/필터/대조용)
+        self._relayout(1)
+        self._build_shortcuts()
         self._load_preset(0)
+
+    # ── 레이아웃 ─────────────────────────────────────────────
+    def _relayout(self, cols: int) -> None:
+        """카드를 1열/2열로 다시 배치한다. 폭이 바뀔 때만 부른다."""
+        if cols == self._cols:
+            return
+        self._cols = cols
+        g = self.grid
+        for c in (self.card_preset, self.card_target,
+                  self.card_period, self.card_cond):
+            g.removeWidget(c)
+        g.setColumnStretch(1, 0)
+        if cols == 2:
+            g.addWidget(self.card_preset, 0, 0)
+            g.addWidget(self.card_target, 1, 0)
+            g.addWidget(self.card_period, 2, 0)
+            g.addWidget(self.card_cond, 0, 1, 3, 1)   # 가장 긴 카드가 오른쪽 한 벌
+            g.setColumnStretch(0, 1)
+            g.setColumnStretch(1, 1)
+            self.col.setMaximumWidth(WIDE_MAX)
+            self.foot_inner.setMaximumWidth(WIDE_MAX)
+        else:
+            for i, c in enumerate((self.card_preset, self.card_target,
+                                   self.card_period, self.card_cond)):
+                g.addWidget(c, i, 0)
+            g.setColumnStretch(0, 1)
+            self.col.setMaximumWidth(NARROW_MAX)
+            self.foot_inner.setMaximumWidth(NARROW_MAX)
+        g.setRowStretch(3, 1)
+
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        self._relayout(2 if self.width() >= WIDE_BREAKPOINT else 1)
+
+    def _build_shortcuts(self) -> None:
+        QShortcut(QKeySequence("F5"), self, activated=self._run)
+        QShortcut(QKeySequence("Esc"), self, activated=self._cancel)
 
     # ── 프리셋 ───────────────────────────────────────────────
     def preset(self) -> ExtractPreset:
@@ -486,8 +558,10 @@ class DataWorkspace(QWidget):
         p = self.preset()
         if p.db_path and Path(p.db_path).exists():
             try:
-                import duckdb
-                con = duckdb.connect(str(p.db_path), read_only=True)
+                # 읽기 전용 연결은 반드시 loader를 경유한다 — 설정이 하나여야
+                # 같은 파일을 여러 곳에서 열 수 있다(loader.readonly_config)
+                from etreport.data.loader import open_readonly
+                con = open_readonly(str(p.db_path))
                 try:
                     cols = [r[0] for r in con.execute(
                         "SELECT column_name FROM information_schema.columns "
@@ -583,6 +657,11 @@ class DataWorkspace(QWidget):
             QMessageBox.warning(self, "설정 필요",
                                 "DuckDB 파일과 리포메터를 먼저 지정하세요")
             return
+        # 분석 화면이 같은 DB를 읽기 전용으로 붙잡고 있으면 적재(쓰기)가
+        # "different configuration" 오류로 떨어진다. 프레임은 이미 메모리에
+        # 있으므로 연결만 닫아도 분석 화면은 그대로 돌아간다.
+        from etreport.data.loader import close_store
+        close_store(self.state)
         self.btn_run.setEnabled(False)
         self.btn_cancel.setEnabled(True)
         self.log_view.clear()
@@ -621,14 +700,15 @@ class DataWorkspace(QWidget):
         sb.setValue(sb.maximum())
 
     def _on_step(self, name: str, done: int, total: int) -> None:
-        self.lbl_step.setText(
-            f"{name}   {done}/{total}" if total else name)
+        text = f"{name}   {done}/{total}" if total else name
+        self.lbl_step.setText(text)
         if total:
             self.bar.setRange(0, total)
             self.bar.setValue(done)
         else:
             self.bar.setRange(0, 0)          # 불확정 애니메이션
-        self.btn_run.setText(name.split(" · ")[0])
+        # 다른 화면을 보고 있거나 창이 작업표시줄에 내려가 있어도 보이게
+        self._note(text)
 
     def _cancel(self) -> None:
         if getattr(self, "_th", None) and self._th.isRunning():
@@ -636,21 +716,28 @@ class DataWorkspace(QWidget):
             self._append("중지 요청 — 진행 중인 청크가 끝나면 멈춥니다")
             self.btn_cancel.setEnabled(False)
 
+    def _note(self, text: str) -> None:
+        """진행 상황을 상단 상태 레일로 올린다(화면을 떠나 있어도 보이게)."""
+        self.state.status_note = text
+        self.bus.status_changed.emit()
+
     def _reset_run_ui(self) -> None:
         self.btn_run.setEnabled(True)
-        self.btn_run.setText("추출하고 적재")
         self.btn_cancel.setEnabled(False)
         self.bar.setRange(0, 1)
         self.bar.setValue(0)
 
     def _done(self, n: int, elapsed: str) -> None:
         self._reset_run_ui()
-        self.lbl_step.setText(f"완료 — {n:,}행 · {elapsed}")
+        msg = f"적재 완료 — {n:,}행 · {elapsed}"
+        self.lbl_step.setText(msg)
+        self._note(msg)
         self.loaded.emit()
 
     def _fail(self, msg: str) -> None:
         self._reset_run_ui()
-        self.lbl_step.setText("실패")
+        self.lbl_step.setText("실패 — 아래 로그를 확인하세요")
+        self._note("추출 실패")
         QMessageBox.critical(self, "추출 실패", msg)
 
     def _copy_log(self) -> None:

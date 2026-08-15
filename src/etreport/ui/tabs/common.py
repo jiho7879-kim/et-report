@@ -84,9 +84,18 @@ def fit_table(t: QTableWidget) -> None:
     t.setFixedHeight(hh + ROW_H * t.rowCount() + 6)
 
 
+DIRTY_MARK = " •"
+
+
 def set_dirty(button, on: bool) -> None:
-    """버튼의 dirty 상태 전환 (style.qss가 주황색으로 그린다)."""
+    """버튼의 dirty 상태 전환 (style.qss가 앰버로 그린다).
+
+    라벨 끝에 `•`도 함께 붙인다 — 색만으로 알리면 색각 이상 사용자에게는
+    아무 신호도 아니고, 캡처·설명서에서도 구분되지 않는다.
+    """
     button.setProperty("dirty", "true" if on else "false")
+    text = button.text().removesuffix(DIRTY_MARK)
+    button.setText(text + DIRTY_MARK if on else text)
     button.style().unpolish(button)
     button.style().polish(button)
 

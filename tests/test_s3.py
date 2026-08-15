@@ -115,19 +115,61 @@ def test_credentials_need_all_three():
 # ── 폴더 목록 ────────────────────────────────────────────────
 def test_list_folder_splits_one_level():
     """★ 한 단계씩만 펼친다 — 큰 버킷을 재귀로 훑지 않는다."""
-    cli = FakeS3(["ns1/2026/08/a.duckdb", "ns1/2026/08/b.csv",
-                  "ns1/2026/07/c.csv", "ns1/root.csv"])
+    cli = FakeS3(["2026/08/a.duckdb", "2026/08/b.csv",
+                  "2026/07/c.csv", "root.csv"])
 
     folders, files = s3.list_folder(_cred(), "", cli=cli)
 
     assert folders == ["2026"]
     assert [f["name"] for f in files] == ["root.csv"]
     assert cli.calls[0]["Delimiter"] == "/"
-    assert cli.calls[0]["Prefix"] == "ns1/"
+    assert cli.calls[0]["Prefix"] == ""
+
+
+def test_namespace_is_not_a_key_prefix():
+    """★ 사내 버킷은 namespace가 아니라 **버킷 바로 아래** 폴더로 나뉜다.
+
+    예전에는 namespace를 무조건 접두어로 붙여 조회해서 트리가 통째로 비었다.
+    """
+    cli = FakeS3(["8nm_sram/a.csv", "17lpv/b.csv"])
+
+    folders, _files = s3.list_folder(_cred(namespace="ns1"), "", cli=cli)
+
+    assert folders == ["17lpv", "8nm_sram"]
+    assert cli.calls[0]["Prefix"] == ""
+
+
+class NamespacedS3(FakeS3):
+    """루트 목록이 비어 있고 <namespace>/ 아래에서만 보이는 버킷."""
+
+    def list_objects_v2(self, **kw):
+        if not kw.get("Prefix"):
+            self.calls.append(kw)
+            return {"CommonPrefixes": [], "Contents": []}
+        return super().list_objects_v2(**kw)
+
+
+def test_namespace_prefix_is_used_only_when_root_is_empty():
+    """루트가 비어 있을 때만 <namespace>/를 접두어로 쓴다 — 연결할 때 감지."""
+    cli = NamespacedS3(["ns1/2026/a.csv"])
+    c = _cred()
+
+    assert s3.detect_root_prefix(c, cli=cli) == "ns1"
+    s3.check(c, cli=cli)                       # check가 c.root_prefix를 채운다
+
+    assert c.root_prefix == "ns1"
+    folders, _ = s3.list_folder(c, "", cli=cli)
+    assert folders == ["2026"]
+
+
+def test_root_listing_wins_over_namespace():
+    """루트에 폴더가 보이면 접두어는 없다 — 사내 버킷의 실제 모습."""
+    cli = FakeS3(["ns1/2026/a.csv"])
+    assert s3.detect_root_prefix(_cred(), cli=cli) == ""
 
 
 def test_list_folder_descends():
-    cli = FakeS3(["ns1/2026/08/a.duckdb", "ns1/2026/08/b.csv"])
+    cli = FakeS3(["2026/08/a.duckdb", "2026/08/b.csv"])
     folders, files = s3.list_folder(_cred(), "2026/08", cli=cli)
 
     assert folders == []
@@ -135,7 +177,7 @@ def test_list_folder_descends():
 
 
 def test_list_folder_follows_pagination():
-    cli = FakeS3([f"ns1/f{i}.csv" for i in range(250)], page=100)
+    cli = FakeS3([f"f{i}.csv" for i in range(250)], page=100)
     _folders, files = s3.list_folder(_cred(), "", cli=cli)
     assert len(files) == 250
 
@@ -149,7 +191,7 @@ def test_namespace_may_be_empty():
 
 # ── 업로드 · 다운로드 ────────────────────────────────────────
 @pytest.mark.parametrize("ext", [".duckdb", ".csv", ".sbdf", ".parquet"])
-def test_upload_builds_namespaced_key(tmp_path, ext):
+def test_upload_builds_key_from_folder(tmp_path, ext):
     """★ duckdb·csv·sbdf 전부 같은 경로 규칙으로 올라간다."""
     f = tmp_path / f"result{ext}"
     f.write_text("x", encoding="utf-8")
@@ -157,14 +199,21 @@ def test_upload_builds_namespaced_key(tmp_path, ext):
 
     key = s3.upload(_cred(), f, "2026/08", cli=cli)
 
-    assert key == f"ns1/2026/08/result{ext}"
+    assert key == f"2026/08/result{ext}"
     assert cli.uploaded == [(str(f), "b1", key)]
+
+
+def test_upload_uses_detected_root_prefix(tmp_path):
+    f = tmp_path / "a.csv"
+    f.write_text("x", encoding="utf-8")
+    assert s3.upload(_cred(root_prefix="ns1"), f, "2026",
+                     cli=FakeS3()) == "ns1/2026/a.csv"
 
 
 def test_upload_to_root_folder(tmp_path):
     f = tmp_path / "a.csv"
     f.write_text("x", encoding="utf-8")
-    assert s3.upload(_cred(), f, "", cli=FakeS3()) == "ns1/a.csv"
+    assert s3.upload(_cred(), f, "", cli=FakeS3()) == "a.csv"
 
 
 def test_upload_missing_file_is_reported(tmp_path):
@@ -177,13 +226,14 @@ def test_download_writes_into_chosen_folder(tmp_path):
     out = s3.download(_cred(), "a.duckdb", "2026/08", tmp_path, cli=cli)
 
     assert out == tmp_path / "a.duckdb" and out.exists()
-    assert cli.downloaded == [("b1", "ns1/2026/08/a.duckdb", str(out))]
+    assert cli.downloaded == [("b1", "2026/08/a.duckdb", str(out))]
 
 
 def test_check_touches_the_bucket():
-    cli = FakeS3(["ns1/a.csv"])
-    assert "b1" in s3.check(_cred(), cli=cli)
-    assert cli.calls[0]["MaxKeys"] == 1
+    cli = FakeS3(["a.csv"])
+    msg = s3.check(_cred(), cli=cli)
+    assert "b1" in msg and "파일 1" in msg
+    assert cli.calls[0]["Delimiter"] == "/"
 
 
 def test_client_needs_boto3():

@@ -64,6 +64,9 @@ class AnalysisConfig:
     log_patterns: list[str] = field(default_factory=lambda: ["Ioff*", "*Leak*", "Jg*"])
     split_path: str = ""
     split_text: str = ""      # 붙여넣기로 넣은 실험 조건(§3.4)
+    # fab tracking에서 뽑은 조건은 기준(REF) 코드가 'Base'가 아니다 —
+    # 그대로 두면 [적용] 때 REF가 바뀌므로 함께 저장한다.
+    split_baseline: str = ""
 
 
 @dataclass
@@ -74,6 +77,7 @@ class Settings:
     analysis_configs: list[AnalysisConfig] = field(default_factory=list)
     last_extract_preset: str = ""
     last_analysis_config: str = ""
+    dock_tools_open: bool = False               # 도크 [도구] 묶음 펼침 여부
 
     # ── 영속화 ────────────────────────────────────────────────
     def save(self) -> None:
@@ -95,6 +99,7 @@ class Settings:
             skipped_version=raw.get("skipped_version"),
             last_extract_preset=raw.get("last_extract_preset", ""),
             last_analysis_config=raw.get("last_analysis_config", ""),
+            dock_tools_open=bool(raw.get("dock_tools_open", False)),
         )
         # 버전 간 필드가 늘거나 줄어도 설정 파일 때문에 앱이 죽지 않도록,
         # 현재 dataclass가 아는 키만 남기고 나머지는 버린다.

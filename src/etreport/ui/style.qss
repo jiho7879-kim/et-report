@@ -1,97 +1,282 @@
-/* 애플풍 라이트 — 목업 v12 토큰 */
-QWidget { background:#f2f3f5; color:#1d1d1f;
-          font-family:%UI_FONT%;
-          font-size:13px; }
+/* ET Report — 계측기 콘솔 테마.
+ *
+ * 값은 전부 ui/theme.py의 TOKENS에서 온다(퍼센트로 감싼 자리). 색을 여기 직접 적지
+ * 말 것 — 대비 검사(tests/test_theme.py)가 토큰 표만 본다.
+ *
+ * 두 영역으로 나뉜다:
+ *   크롬(#topbar·#dock)   무채색 그래파이트. 도구·상태.
+ *   측정면(카드·표·캔버스) 종이 흰색. 데이터.
+ * 그래서 **전역 QWidget 배경 규칙을 두지 않는다** — 그 규칙이 있으면 도크 안의
+ * 모든 자식 위젯이 밝은 회색으로 칠해져 어두운 도크가 얼룩진다. 배경은
+ * QPalette와 이름 있는 표면에만 준다(이름 없는 컨테이너는 기본이 투명이다).
+ */
 
-#topbar { background:#ffffff; border-bottom:1px solid rgba(0,0,0,.08); }
-#logo, #logoAccent { font-size:14px; font-weight:600; }
-#logoAccent { color:#0071e3; }
-#wsButton { background:transparent; color:#6e6e73; border:none; border-radius:8px;
-            padding:7px 18px; font-weight:600; }
-#wsButton:hover   { background:rgba(0,0,0,.04); color:#1d1d1f; }
-#wsButton:checked { background:#eaf3fd; color:#0071e3; }
-#dbPill { background:#f7f8fa; border:1px solid rgba(0,0,0,.08); border-radius:12px;
-          padding:5px 14px; color:#6e6e73; font-size:12px; }
+/* ── 기본 ─────────────────────────────────────────────────────────── */
+QWidget { font-family:%UI_FONT%; font-size:%FS_BASE%; color:%TEXT%; }
+QMainWindow, QDialog { background:%CANVAS%; }
+QLabel, QCheckBox, QRadioButton { background:transparent; }
+QToolTip { background:%INK%; color:%INK_TEXT%; border:1px solid %INK_LINE%;
+           border-radius:%RADIUS%; padding:6px 9px; font-size:%FS_SM%; }
 
-#card  { background:#ffffff; border:1px solid rgba(0,0,0,.06); border-radius:14px; }
-#cardTitle { font-size:14px; font-weight:600; }
-#cardSub, #hint { color:#a1a1a6; font-size:12px; }
-#sectionLabel { color:#a1a1a6; font-size:10px; font-weight:700;
-                letter-spacing:1px; margin-top:6px; }
-#warn  { color:#a85e00; font-size:12px; }
-#warnBox { background:#fff3e2; color:#a85e00; border-radius:9px; padding:10px 12px; }
-#warnBox[level="ok"] { background:#e9f6ee; color:#1d8341; }
-#bigNum { font-size:30px; font-weight:600; color:#d70015; }
-#bigNum[zero="true"] { color:#c7c7cc; }
+/* ── 상단바 (크롬) ────────────────────────────────────────────────── */
+#topbar { background:%INK%; border-bottom:1px solid %INK_LINE%; }
+#topbar QLabel { color:%INK_TEXT%; }
+/* 크롬 안에서는 #topbar QLabel(1id+1type)이 #logoAccent(1id)보다 강하다 —
+   덮어쓰려면 선택자를 함께 적어야 한다. */
+#topbar #logo, #topbar #logoAccent { font-size:%FS_BASE%; font-weight:700;
+                                     letter-spacing:0.6px; }
+#topbar #logoAccent { color:%ACC_INK%; }
 
-QPushButton { background:#0071e3; color:#ffffff; border:none; border-radius:14px;
-              padding:7px 18px; font-weight:600; }
-QPushButton:hover    { background:#0077ed; }
-QPushButton:disabled { background:#6b7280; color:#ffffff; }
-/* 상태색. #ff9500은 계열색(group_dialog)이므로 쓰지 않는다 */
-QPushButton[dirty="true"] { background:#c26c00; }
-QPushButton[dirty="true"]:hover { background:#b45309; }
-QPushButton[ghost="true"] { background:#ffffff; color:#1d1d1f;
-                            border:1px solid rgba(0,0,0,.14); font-weight:500;
+#wsButton { background:transparent; color:%INK_MUTED%; border:none;
+            border-radius:%RADIUS%; padding:7px 16px; font-weight:600; }
+#wsButton:hover   { background:%INK_3%; color:%INK_TEXT%; }
+#wsButton:checked { background:%INK_3%; color:%ACC_INK%; }
+#wsButton:focus   { background:%INK_3%; color:%INK_TEXT%; }
+
+#menuButton { background:transparent; color:%INK_MUTED%; border:none;
+              border-radius:%RADIUS%; padding:6px 12px; font-weight:500; }
+#menuButton:hover, #menuButton:pressed { background:%INK_3%; color:%INK_TEXT%; }
+#menuButton::menu-indicator { image:none; width:0; }
+
+/* 상태 레일 — 지금 무엇이 물려 있고 계산이 최신인지 한 줄로 */
+#statusRail { background:%INK_2%; border:1px solid %INK_LINE%;
+              border-radius:%RADIUS%; }
+#railText { font-family:%MONO_FONT%; font-size:%FS_SM%; color:%INK_MUTED%; }
+#railLamp { font-size:%FS_SM%; color:%INK_MUTED%; }
+#railLamp[state="ok"]    { color:%OK_INK%; }
+#railLamp[state="dirty"] { color:%WARN_INK%; }
+#railLamp[state="off"]   { color:%INK_MUTED%; }
+
+/* ── 도크 (크롬) ──────────────────────────────────────────────────── */
+#dockScroll, #dock { background:%INK%; border:none;
+                     border-right:1px solid %INK_LINE%; }
+#dock QLabel { color:%INK_TEXT%; }
+#dock #sectionLabel { color:%INK_MUTED%; }
+#dock #hint, #dock #cardSub { color:%INK_MUTED%; }
+#dock QPushButton[ghost="true"] { background:%INK_2%; color:%INK_TEXT%;
+                                  border:1px solid %INK_LINE%; }
+#dock QPushButton[ghost="true"]:hover { background:%INK_3%;
+                                        border-color:%ACC_INK%; }
+#dock QPushButton[ghost="true"]:focus { background:%INK_3%;
+                                        border-color:%ACC_INK%; }
+#dock QPushButton[ghost="true"]:disabled { background:%INK_2%; color:%INK_MUTED%;
+                                           border-color:%INK_LINE%; }
+#dock QComboBox, #dock QLineEdit, #dock QAbstractSpinBox {
+  background:%INK_2%; color:%INK_TEXT%; border:1px solid %INK_LINE%; }
+#dock QComboBox:focus, #dock QLineEdit:focus { border-color:%ACC_INK%; }
+#dock QComboBox:disabled, #dock QLineEdit:disabled { color:%INK_MUTED%; }
+
+/* 파일 행 — 라벨 열 + 값(모노). 공백 문자로 맞추지 않는다 */
+#fileRow { background:%INK_2%; border:1px solid %INK_LINE%;
+           border-radius:%RADIUS%; }
+#fileRow:hover { background:%INK_3%; border-color:%ACC_INK%; }
+#fileRow:focus { border-color:%ACC_INK%; }
+#fileLabel { color:%INK_MUTED%; font-size:%FS_SM%; font-weight:600; }
+#fileValue { color:%INK_TEXT%; font-family:%MONO_FONT%; font-size:%FS_SM%; }
+#fileValue[empty="true"] { color:%INK_MUTED%; }
+
+#groupList { background:%INK_2%; color:%INK_TEXT%;
+             border:1px solid %INK_LINE%; border-radius:%RADIUS%; }
+#groupList::item { padding:5px 6px; }
+#groupList::item:selected { background:%INK_3%; color:%INK_TEXT%; }
+#dock #bigNum { color:%ERR_INK%; }
+#dock #bigNum[zero="true"] { color:%INK_MUTED%; }
+#dock #warn { color:%WARN_INK%; }
+
+/* ── 카드 · 구조 (측정면) ─────────────────────────────────────────── */
+#card { background:%PAPER%; border:1px solid %RULE%;
+        border-radius:%RADIUS_LG%; }
+#cardTitle { font-size:%FS_LG%; font-weight:600; }
+#cardSub, #hint { color:%MUTED%; font-size:%FS_SM%; }
+#emptyHint { color:%MUTED%; font-size:%FS_SM%; }
+#sectionLabel { color:%MUTED%; font-size:%FS_MICRO%; font-weight:700;
+                letter-spacing:1.2px; margin-top:8px; }
+#hline { color:%RULE%; }
+#warn { color:%WARN_TEXT%; font-size:%FS_SM%; }
+#warnBox { background:%WARN_SOFT%; color:%WARN_TEXT%;
+           border-radius:%RADIUS%; padding:10px 12px; }
+#warnBox[level="ok"]  { background:%OK_SOFT%;  color:%OK%; }
+#warnBox[level="err"] { background:%ERR_SOFT%; color:%ERR%; }
+#bigNum { font-family:%MONO_FONT%; font-size:%FS_XXL%; font-weight:600;
+          color:%ERR%; }
+#bigNum[zero="true"] { color:%DIM%; }
+#num { font-family:%MONO_FONT%; font-size:%FS_NUM%; }
+
+/* ── 버튼 ─────────────────────────────────────────────────────────── */
+/* 기본 테두리를 2px 투명으로 두고 포커스에서 색만 바꾼다 — 크기가 튀지 않는다 */
+QPushButton { background:%ACC%; color:%PAPER%; border:2px solid transparent;
+              border-radius:%RADIUS%; padding:5px 16px; font-weight:600;
+              min-height:20px; }
+QPushButton:hover    { background:%ACC_H%; }
+QPushButton:pressed  { background:%ACC_H%; padding-top:6px; padding-bottom:4px; }
+QPushButton:focus    { border-color:%ACC_LINE%; }
+QPushButton:disabled { background:%DISABLED%; color:%MUTED%; }
+
+/* 미적용(dirty) — 색만으로 알리지 않는다. 라벨에 •가 함께 붙는다 */
+QPushButton[dirty="true"]        { background:%WARN%; }
+QPushButton[dirty="true"]:hover  { background:%WARN_H%; }
+
+QPushButton[ghost="true"] { background:%PAPER%; color:%TEXT%;
+                            border:1px solid %RULE_2%; font-weight:500;
                             padding:6px 12px; }
-QPushButton[ghost="true"]:hover { background:#f7f8fa; border-color:#0071e3; }
-/* ghost는 :disabled 변형이 없으면 기본 비활성 규칙을 덮어쓴다 */
-QPushButton[ghost="true"]:disabled { background:#6b7280; color:#ffffff; }
-#cfgRow { text-align:left; padding:8px 12px; border-radius:9px;
-          background:#f7f8fa; border:1px solid transparent;
-          font-family:%MONO_FONT%; font-size:12px; }
-#cfgRow:hover { border-color:#0071e3; background:#eaf3fd; }
+QPushButton[ghost="true"]:hover    { background:%FIELD%; border-color:%ACC%; }
+/* 포커스는 **테두리로만** 알린다 — 배경까지 바꾸면 hover와 구분되지 않는다.
+   1px→2px로 굵히면서 padding을 1px 줄여 크기는 그대로 둔다. */
+QPushButton[ghost="true"]:focus    { border:2px solid %ACC%; padding:5px 11px; }
+QPushButton[ghost="true"]:pressed  { background:%ACC_SOFT%; }
+QPushButton[ghost="true"]:disabled { background:%FIELD%; color:%DIM%;
+                                     border-color:%RULE%; }
 
-QComboBox, QLineEdit, QDateEdit, QPlainTextEdit, QAbstractSpinBox {
-  background:#ffffff; border:1px solid rgba(0,0,0,.14); border-radius:9px;
-  padding:6px 10px; }
-QComboBox:focus, QLineEdit:focus, QDateEdit:focus { border-color:#0071e3; }
-#sqlBox { font-family:%MONO_FONT%; font-size:12px;
-          background:#f7f8fa; color:#3a5a3a; }
-#runFooter { background:#f2f3f5; border-top:1px solid rgba(0,0,0,.08); }
-#logBox { font-family:%MONO_FONT%; font-size:11.5px;
-          background:#1d1d1f; color:#d8d8dc; border:none; border-radius:9px;
-          padding:8px 10px; }
-QProgressBar { background:#e9eaee; border:none; border-radius:3px; }
-QProgressBar::chunk { background:#0071e3; border-radius:3px; }
-#typeBadge { border-radius:6px; padding:3px 6px; font-size:10px; font-weight:700;
-             background:#f0efec; color:#7a7168; }
-#typeBadge[kind="num"] { background:#eaf3fd; color:#0058b0; }
-#typeBadge[kind="ts"]  { background:#eef6ef; color:#1d8341; }
+/* 카드 제목 왼쪽의 ▾/▸ — 버튼이 아니라 글머리처럼 보여야 한다 */
+#collapseToggle { background:transparent; color:%MUTED%; border:none;
+                  padding:0; font-weight:700; font-size:%FS_SM%; }
+#collapseToggle:hover, #collapseToggle:focus { background:transparent;
+                                               color:%ACC%; }
+/* 접이식 섹션 머리 — 버튼이지만 섹션 라벨처럼 보인다 */
+#sectionToggle { background:transparent; color:%MUTED%; border:none;
+                 text-align:left; padding:6px 0 2px 0; font-weight:700;
+                 font-size:%FS_MICRO%; letter-spacing:1.2px; }
+#sectionToggle:hover, #sectionToggle:focus { background:transparent;
+                                             color:%ACC%; }
+#dock #sectionToggle { color:%INK_MUTED%; }
+#dock #sectionToggle:hover, #dock #sectionToggle:focus { color:%ACC_INK%; }
 
-QTabWidget::pane { border:none; background:#f2f3f5; }
-QTabBar::tab { background:transparent; padding:8px 22px; margin:6px 3px;
-               border-radius:8px; color:#6e6e73; }
-QTabBar::tab:selected { background:#eaf3fd; color:#0071e3; font-weight:600; }
+/* ── 입력 ─────────────────────────────────────────────────────────── */
+QComboBox, QLineEdit, QDateEdit, QPlainTextEdit, QTextEdit, QAbstractSpinBox {
+  background:%PAPER%; border:1px solid %RULE_2%; border-radius:%RADIUS%;
+  padding:5px 9px; selection-background-color:%ACC%;
+  selection-color:%PAPER%; min-height:20px; }
+QComboBox:hover, QLineEdit:hover, QDateEdit:hover { border-color:%DIM%; }
+QComboBox:focus, QLineEdit:focus, QDateEdit:focus,
+QPlainTextEdit:focus, QAbstractSpinBox:focus { border-color:%ACC%; }
+QComboBox:disabled, QLineEdit:disabled, QAbstractSpinBox:disabled {
+  background:%FIELD%; color:%DIM%; }
+QLineEdit[readOnly="true"] { background:%FIELD%; }
 
-#dockScroll, #dock { background:#ffffff; border-right:1px solid rgba(0,0,0,.07); }
-#groupList { background:#ffffff; border:1px solid rgba(0,0,0,.10);
-             border-radius:9px; }
-#groupList::item { padding:5px 4px; }
+QComboBox::drop-down, QDateEdit::drop-down {
+  border:none; background:transparent; width:22px; }
+QComboBox::down-arrow, QDateEdit::down-arrow { width:9px; height:9px; }
+/* 아이콘 규칙은 한 줄에 하나로 — 아이콘을 못 만든 환경에서 이 줄만 통째로
+   빼도 스타일시트가 깨지지 않아야 한다(theme.render_qss). */
+QComboBox::down-arrow, QDateEdit::down-arrow { image:url("%ICONS%/chevron.svg"); }
+QComboBox::down-arrow:disabled { image:url("%ICONS%/chevron-dim.svg"); }
+#dock QComboBox::down-arrow, #dock QDateEdit::down-arrow { image:url("%ICONS%/chevron-ink.svg"); }
+QComboBox QAbstractItemView {
+  background:%PAPER%; border:1px solid %RULE_2%; border-radius:%RADIUS%;
+  padding:3px; outline:none; selection-background-color:%ACC_SOFT%;
+  selection-color:%ACC%; }
+QComboBox QAbstractItemView::item { padding:5px 8px; border-radius:%RADIUS_SM%; }
 
-#slide { background:#ffffff; border-radius:12px; border:1px solid rgba(0,0,0,.07); }
-#slideTitle { font-size:16px; font-weight:600;
-              border-bottom:2px solid #1d1d1f; padding-bottom:6px; }
-#slot { background:#ffffff; border:1px solid rgba(0,0,0,.10); border-radius:8px; }
-#slot[selected="true"] { border:2px solid #0071e3; }
-#slot[dropTarget="true"] { border:2px dashed #0071e3; background:#f2f8ff; }
-#sqlEditor { font-family:%MONO_FONT%; font-size:12.5px;
-             background:#ffffff; border:1px solid rgba(0,0,0,.14);
-             border-radius:9px; padding:8px 10px; }
-#warnBox[level="err"] { background:#ffecee; color:#d70015; }
-#slotTitle { font-size:11px; font-weight:600; }
+QAbstractSpinBox::up-button, QAbstractSpinBox::down-button { width:16px;
+  border:none; background:transparent; }
 
-#sumTable { background:#ffffff; border:1px solid rgba(0,0,0,.08);
-            border-radius:8px; gridline-color:rgba(0,0,0,.06);
-            font-family:%MONO_FONT%; font-size:12px; }
-#sumTable QHeaderView::section { background:#f7f8fa; border:none;
-            border-right:1px solid rgba(0,0,0,.06);
-            border-bottom:1px solid rgba(0,0,0,.10);
-            padding:5px 8px; font-family:%UI_FONT%;
-            font-weight:600; font-size:11px; }
+/* 체크박스·라디오 — OS 기본 대신 토큰으로 그린다 */
+QCheckBox { spacing:7px; }
+QCheckBox::indicator, QRadioButton::indicator { width:15px; height:15px; }
+QCheckBox::indicator {
+  border:1px solid %RULE_2%; border-radius:%RADIUS_SM%; background:%PAPER%; }
+QCheckBox::indicator:hover { border-color:%ACC%; }
+QCheckBox::indicator:checked { background:%ACC%; border-color:%ACC%; }
+QCheckBox::indicator:indeterminate { background:%ACC%; border-color:%ACC%; }
+QCheckBox::indicator:checked { image:url("%ICONS%/check.svg"); }
+QCheckBox::indicator:indeterminate { image:url("%ICONS%/dash.svg"); }
+QCheckBox::indicator:disabled { background:%FIELD%; border-color:%RULE%; }
+QRadioButton::indicator {
+  border:1px solid %RULE_2%; border-radius:8px; background:%PAPER%; }
+QRadioButton::indicator:checked { border:4px solid %ACC%; background:%PAPER%; }
+#dock QCheckBox::indicator { background:%INK_2%; border-color:%INK_LINE%; }
+#dock QCheckBox::indicator:checked { background:%ACC%; border-color:%ACC%; }
 
-QScrollArea { border:none; }
-QListWidget { background:#ffffff; border:1px solid rgba(0,0,0,.10);
-              border-radius:9px; }
-QListWidget::item { padding:6px 8px; }
-QListWidget::item:selected { background:#eaf3fd; color:#0071e3; }
+/* ── 메뉴 ─────────────────────────────────────────────────────────── */
+QMenuBar { background:%INK%; color:%INK_TEXT%; }
+QMenuBar::item { background:transparent; padding:6px 12px; }
+QMenuBar::item:selected { background:%INK_3%; }
+QMenu { background:%PAPER%; border:1px solid %RULE_2%;
+        border-radius:%RADIUS%; padding:5px; }
+QMenu::item { padding:6px 22px 6px 14px; border-radius:%RADIUS_SM%; }
+QMenu::item:selected { background:%ACC_SOFT%; color:%ACC%; }
+QMenu::separator { height:1px; background:%RULE%; margin:5px 8px; }
+
+/* ── 탭 ───────────────────────────────────────────────────────────── */
+QTabWidget::pane { border:none; background:%CANVAS%; }
+QTabBar { background:transparent; }
+QTabBar::tab { background:transparent; color:%MUTED%; padding:9px 18px;
+               margin:6px 2px 0 2px; border:none;
+               border-bottom:2px solid transparent; font-weight:500; }
+QTabBar::tab:hover { color:%TEXT%; }
+QTabBar::tab:selected { color:%TEXT%; font-weight:600;
+                        border-bottom:2px solid %ACC%; }
+QTabBar::tab:focus { color:%ACC%; }
+
+/* ── 표 · 목록 ────────────────────────────────────────────────────── */
+QTableWidget, QTableView { background:%PAPER%; border:1px solid %RULE%;
+  border-radius:%RADIUS%; gridline-color:%RULE%; selection-background-color:%ACC_SOFT%;
+  selection-color:%TEXT%; }
+#sumTable { font-family:%MONO_FONT%; font-size:%FS_NUM%; }
+QHeaderView { background:transparent; }
+QHeaderView::section { background:%FIELD%; color:%MUTED%; border:none;
+  border-right:1px solid %RULE%; border-bottom:1px solid %RULE_2%;
+  padding:5px 8px; font-family:%UI_FONT%; font-weight:600;
+  font-size:%FS_SM%; }
+QHeaderView::section:last { border-right:none; }
+QTableCornerButton::section { background:%FIELD%; border:none; }
+
+QListWidget, QTreeWidget, QTreeView { background:%PAPER%;
+  border:1px solid %RULE_2%; border-radius:%RADIUS%; outline:none; }
+QListWidget::item, QTreeView::item { padding:6px 8px;
+                                     border-radius:%RADIUS_SM%; }
+QListWidget::item:hover, QTreeView::item:hover { background:%FIELD%; }
+QListWidget::item:selected, QTreeView::item:selected { background:%ACC_SOFT%;
+                                                       color:%ACC%; }
+QListWidget:focus, QTreeView:focus, QTableWidget:focus { border-color:%ACC%; }
+
+/* ── 스크롤바 — 얇게, 화살표 없이 ─────────────────────────────────── */
+QScrollBar:vertical { background:transparent; width:11px; margin:0; }
+QScrollBar:horizontal { background:transparent; height:11px; margin:0; }
+QScrollBar::handle:vertical { background:%RULE_2%; border-radius:4px;
+                              min-height:32px; margin:2px; }
+QScrollBar::handle:horizontal { background:%RULE_2%; border-radius:4px;
+                                min-width:32px; margin:2px; }
+QScrollBar::handle:hover { background:%DIM%; }
+QScrollBar::add-line, QScrollBar::sub-line { height:0; width:0; border:none;
+                                             background:transparent; }
+QScrollBar::add-page, QScrollBar::sub-page { background:transparent; }
+#dockScroll QScrollBar::handle:vertical { background:%INK_3%; }
+#dockScroll QScrollBar::handle:hover { background:%INK_MUTED%; }
+
+QScrollArea { border:none; background:transparent; }
+#dataScroll, #dataScroll > QWidget > QWidget { background:%CANVAS%; }
+#dockScroll > QWidget > QWidget { background:%INK%; }
+
+/* ── 실행 · 진행 ──────────────────────────────────────────────────── */
+#runFooter { background:%CANVAS%; border-top:1px solid %RULE%; }
+/* 트랙은 RULE — FIELD는 흰 카드 위에서 거의 보이지 않아 '진행 중'이 안 읽힌다 */
+QProgressBar { background:%RULE%; border:none; border-radius:3px; }
+QProgressBar::chunk { background:%ACC%; border-radius:3px; }
+#logBox { font-family:%MONO_FONT%; font-size:%FS_SM%;
+          background:%INK_2%; color:%INK_TEXT%; border:1px solid %INK_LINE%;
+          border-radius:%RADIUS%; padding:8px 10px;
+          selection-background-color:%ACC%; }
+#sqlBox { font-family:%MONO_FONT%; font-size:%FS_NUM%;
+          background:%FIELD%; color:%TEXT%; border:1px solid %RULE%; }
+#sqlEditor { font-family:%MONO_FONT%; font-size:%FS_NUM%; background:%PAPER%; }
+#typeBadge { border-radius:%RADIUS_SM%; padding:3px 6px; font-size:%FS_MICRO%;
+             font-weight:700; background:%FIELD%; color:%MUTED%; }
+#typeBadge[kind="num"] { background:%ACC_SOFT%; color:%ACC%; }
+#typeBadge[kind="ts"]  { background:%OK_SOFT%;  color:%OK%; }
+
+/* 비모달 알림 — 확인만 받는 모달을 대신한다 */
+#toast { background:%INK%; color:%INK_TEXT%; border:1px solid %INK_LINE%;
+         border-radius:%RADIUS_LG%; padding:10px 16px; font-size:%FS_SM%; }
+#toast QLabel { color:%INK_TEXT%; }
+
+/* ── 리포트 슬롯 ──────────────────────────────────────────────────── */
+#slide { background:%PAPER%; border:1px solid %RULE%;
+         border-radius:%RADIUS_LG%; }
+#slideTitle { font-size:%FS_LG%; font-weight:600;
+              border-bottom:2px solid %TEXT%; padding-bottom:6px; }
+#slot { background:%PAPER%; border:1px solid %RULE%;
+        border-radius:%RADIUS%; }
+#slot[selected="true"]   { border:2px solid %ACC%; }
+#slot[dropTarget="true"] { border:2px dashed %ACC%; background:%ACC_SOFT%; }
+#slotTitle { font-size:%FS_SM%; font-weight:600; color:%MUTED%; }

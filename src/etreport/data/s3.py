@@ -21,7 +21,7 @@ from etreport.paths import appdata_dir, write_json_atomic
 
 log = logging.getLogger(__name__)
 
-ENDPOINT = "http://s3.daaplatform.samsungds.net:9020"
+ENDPOINT = "http://s3.dataplatform.samsungds.net:9020"
 CRED_FILE = "s3_credentials.json"
 #: 이 툴이 다루는 형식 — 그 외 확장자는 그대로 올리고 내린다.
 FORMATS = (".duckdb", ".csv", ".sbdf", ".parquet")
@@ -35,6 +35,11 @@ class S3Credentials:
     secret_key: str = ""
     endpoint: str = ENDPOINT
     remember: bool = False          # 끄면 secret을 파일에 남기지 않는다
+    #: 키 접두어. **보통 비어 있다** — namespace는 계정 경계일 뿐 키의 일부가
+    #: 아니어서, 버킷 루트에 `8nm_sram/`·`17lpv/` 같은 폴더가 바로 보인다.
+    #: 예전에는 namespace를 무조건 접두어로 붙여 목록이 통째로 비었다.
+    #: 실제로 `<namespace>/` 아래에 넣어 쓰는 버킷도 있어 연결할 때 감지한다.
+    root_prefix: str = ""
 
     def ok(self) -> bool:
         return bool(self.bucket and self.access_key and self.secret_key)
@@ -82,10 +87,61 @@ def client(c: S3Credentials):
         aws_access_key_id=c.access_key, aws_secret_access_key=c.secret_key)
 
 
-def _prefix(namespace: str, path: str = "") -> str:
-    """namespace를 접두어로 붙인 키. namespace가 비면 버킷 루트를 그대로 쓴다."""
-    parts = [p.strip("/") for p in (namespace, path) if p and p.strip("/")]
+def _prefix(c: S3Credentials, path: str = "") -> str:
+    """키 접두어 + 경로. **namespace는 기본적으로 키에 들어가지 않는다.**
+
+    사내 버킷은 `list_objects_v2`가 `8nm_sram/`·`17lpv/`처럼 **버킷 바로 아래**
+    폴더를 돌려준다. 예전에는 namespace를 무조건 앞에 붙여 조회해서
+    `CommonPrefixes`가 항상 비었고, 그래서 트리에 아무것도 뜨지 않았다.
+    `root_prefix`를 쓰는 버킷(정말로 namespace 폴더 아래에 넣는 경우)만
+    `detect_root_prefix()`가 연결할 때 채워 준다.
+    """
+    parts = [p.strip("/") for p in (c.root_prefix, path) if p and p.strip("/")]
     return "/".join(parts)
+
+
+def _list_one(cli, bucket: str, prefix: str) -> tuple[list[str], list[dict]]:
+    """접두어 하나를 Delimiter로 한 단계만 읽는다(페이지네이션 포함)."""
+    folders: list[str] = []
+    files: list[dict] = []
+    token = None
+    while True:
+        kw = {"Bucket": bucket, "Prefix": prefix, "Delimiter": "/"}
+        if token:
+            kw["ContinuationToken"] = token
+        res = cli.list_objects_v2(**kw)
+        for cp in res.get("CommonPrefixes", []):
+            name = cp["Prefix"][len(prefix):].rstrip("/")
+            if name:
+                folders.append(name)
+        for obj in res.get("Contents", []):
+            name = obj["Key"][len(prefix):]
+            if not name or name.endswith("/") or "/" in name:
+                continue            # 폴더 표식용 빈 객체 · 더 깊은 키
+            files.append({"name": name, "size": obj.get("Size", 0),
+                          "modified": obj.get("LastModified")})
+        if not res.get("IsTruncated"):
+            break
+        token = res.get("NextContinuationToken")
+    return sorted(dict.fromkeys(folders)), sorted(files, key=lambda f: f["name"])
+
+
+def detect_root_prefix(c: S3Credentials, cli=None) -> str:
+    """이 버킷의 키가 실제로 어디서 시작하는지 한 번 확인한다.
+
+    버킷 루트에 폴더나 파일이 보이면 접두어는 없다(대부분의 경우).
+    루트가 비어 있고 `<namespace>/` 아래에 있으면 그것을 접두어로 쓴다.
+    """
+    cli = cli or client(c)
+    folders, files = _list_one(cli, c.bucket, "")
+    if folders or files:
+        return ""
+    ns = (c.namespace or "").strip("/")
+    if ns:
+        folders, files = _list_one(cli, c.bucket, f"{ns}/")
+        if folders or files:
+            return ns
+    return ""
 
 
 def list_folder(c: S3Credentials, path: str = "", cli=None) -> tuple[list[str], list[dict]]:
@@ -95,29 +151,10 @@ def list_folder(c: S3Credentials, path: str = "", cli=None) -> tuple[list[str], 
     (전체를 재귀로 훑으면 큰 버킷에서 몇 분씩 걸린다).
     """
     cli = cli or client(c)
-    prefix = _prefix(c.namespace, path)
+    prefix = _prefix(c, path)
     if prefix:
         prefix += "/"
-    folders: list[str] = []
-    files: list[dict] = []
-    token = None
-    while True:
-        kw = {"Bucket": c.bucket, "Prefix": prefix, "Delimiter": "/"}
-        if token:
-            kw["ContinuationToken"] = token
-        res = cli.list_objects_v2(**kw)
-        for cp in res.get("CommonPrefixes", []):
-            folders.append(cp["Prefix"][len(prefix):].rstrip("/"))
-        for obj in res.get("Contents", []):
-            name = obj["Key"][len(prefix):]
-            if not name or name.endswith("/"):
-                continue            # 폴더 표식용 빈 객체
-            files.append({"name": name, "size": obj.get("Size", 0),
-                          "modified": obj.get("LastModified")})
-        if not res.get("IsTruncated"):
-            break
-        token = res.get("NextContinuationToken")
-    return sorted(folders), sorted(files, key=lambda f: f["name"])
+    return _list_one(cli, c.bucket, prefix)
 
 
 def upload(c: S3Credentials, local: str | Path, folder: str = "",
@@ -126,7 +163,7 @@ def upload(c: S3Credentials, local: str | Path, folder: str = "",
     p = Path(local)
     if not p.is_file():
         raise FileNotFoundError(f"올릴 파일이 없습니다: {p}")
-    key = _prefix(c.namespace, f"{folder}/{p.name}" if folder else p.name)
+    key = _prefix(c, f"{folder}/{p.name}" if folder else p.name)
     (cli or client(c)).upload_file(str(p), c.bucket, key)
     log.info("S3 업로드: %s → %s/%s", p.name, c.bucket, key)
     return key
@@ -137,7 +174,7 @@ def download(c: S3Credentials, name: str, folder: str, dest_dir: str | Path,
     """폴더의 파일 하나를 내려받는다. 저장한 경로를 반환."""
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
-    key = _prefix(c.namespace, f"{folder}/{name}" if folder else name)
+    key = _prefix(c, f"{folder}/{name}" if folder else name)
     out = dest / Path(name).name
     (cli or client(c)).download_file(c.bucket, key, str(out))
     log.info("S3 다운로드: %s/%s → %s", c.bucket, key, out)
@@ -145,8 +182,15 @@ def download(c: S3Credentials, name: str, folder: str, dest_dir: str | Path,
 
 
 def check(c: S3Credentials, cli=None) -> str:
-    """연결 확인 — 버킷 목록을 한 번 읽어 본다. 실패는 예외로 올린다."""
+    """연결 확인 — 목록을 한 번 읽어 보고 **키 접두어를 정한다**.
+
+    `c.root_prefix`를 여기서 채우므로, 연결 뒤의 목록·업로드·다운로드가 전부
+    같은 기준을 쓴다. 실패는 예외로 올린다.
+    """
     cli = cli or client(c)
-    cli.list_objects_v2(Bucket=c.bucket, Prefix=_prefix(c.namespace),
-                        MaxKeys=1)
-    return f"{c.bucket} 연결됨"
+    c.root_prefix = detect_root_prefix(c, cli)
+    folders, files = _list_one(cli, c.bucket, _prefix(c) + "/"
+                               if _prefix(c) else "")
+    where = f"/{c.root_prefix}" if c.root_prefix else "/"
+    return (f"{c.bucket} 연결됨 · {where} 폴더 {len(folders)} · "
+            f"파일 {len(files)}")

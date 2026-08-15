@@ -1,0 +1,37 @@
+#사내 Fab tracking 정보 추출에 대한 정보
+sql = select * from fab.f_fab_tracking where line_id='KFBK' ...
+df = bdq.getData(sql)
+로 추출한다.
+
+#Fab tracking을 활용한 아이디어
+1. 단일 Lot 분석시 자동 Split 정보를 불러와서 Grouping까지 자동으로하기
+Lot이 진행된 step_id들의 ppid와 recipe가 유효 wafer들내에서 다른 step_id들만 listup해서
+실험정보를 자동으로 grouping해서 활용할 수 있도록한다.
+이때 recipe의 경우 area='PHOTO'인 경우에만 확인하고 나머지에 대해서는 ppid를 확인한다.
+
+2. 가능하면 멀티lot에서도 활용 할 수 있으면 좋겠어.
+
+3. select * from fab.f_fab_tracking에서
+where 조회 조건으로는 ein_ecn_no is not null로 하면 split 실험을 한것들을 우선적으로 listup할 수 있다.
+
+4. sql로 가져올 컬럼은 part_id, process_id, step_seq, root_lot_id, wafer_id, area, tkout_time, foup_id, eqp_model, eqp_id, unit_id, chamber_id, ppid, reticle_id, ein_ecn_no, line_id 를 사용한다.
+
+
+#사내 inline 계측 정보 추출에 대한 정보
+sql = select * from fab.f_fab_wf_met where ...
+df = bdq.getData(sql)
+로 추출한다.
+
+#inline 계측 정보를 활용한 아이디어
+1. user에게 템플릿 또는 엑셀에서 복사한 형식을 받아서 해당 step_id와 item_id들에 대한 fab_value를 분석하고 있는 et data lot에 해당하는 것들만 뽑아서 서머리 table과 scatter plot의 x축에 활용해서 분석에 활용할 수 있도록 한다.
+
+2. subitem_id에서 site level은 subitem_id에서 RANGE, STD, MIN, VALUE, SLOTID, Q2, MAX를 제외하면 되고 wafer level은 Q2값을 사용한다.
+
+3. 분석하는 lot에 한정해서 전체 계측 item에 대한 통계 분석을 진행하고 가장 유의미한 상관관계나 group간 유의차를 만들어내는 인자를 top-k를 추출하고 ppt에 리포트할 수 있게 한다. 이때 item_id는 REGEXP='CD|THK|DEPTH|TIP|RCS'를 사용한다.
+
+#사내 S3 Driver에 duckdb, csv, sbdf를 저장할 수 있게 하고 싶다.
+1. boto3를 사용하고 endpoint_ulr="http://s3.daaplatform.samsungds.net:9020"이다
+2. 접근을 위해서는 개인별 api key를 발급받아서 사용해야하기 때문에 아래와 같은 로그인 창을 하나 구현한다.
+Namespace name, Bucket name, AccessKey ID, Secret Access Key
+를 입력하는 창을 만들고 입력하면 해당 네임스페이스와 버켓을 중심으로 폴더 구성을 볼 수 있는 ui나 창을 구성한다.
+그리고 폴더를 선택하면 폴더에 업로드르 하거나 다운로드 할 수 있는 코드를 짜줘.

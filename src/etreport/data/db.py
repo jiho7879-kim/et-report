@@ -46,6 +46,34 @@ def plan_buckets(n_keys: int, n_items: int) -> int:
     return max(1, min(N_BUCKETS, math.ceil(n_keys * n_items / TARGET_CELLS)))
 
 
+def _connect_write(path: Path) -> duckdb.DuckDBPyConnection:
+    """쓰기 연결. 읽기 전용 연결이 남아 있으면 한 번 정리하고 다시 시도한다.
+
+    DuckDB는 **같은 파일에 설정이 다른 연결을 함께 열지 못한다** — 분석 화면이
+    그 DB를 읽기 전용으로 붙잡고 있으면 적재가
+    `can't open a connection to same database file with a different
+    configuration than existing connections`로 떨어진다. 기존 DB에 이어
+    적재할 때(특히 신규 item_id를 추가한 같은 lot을 다시 적재할 때) 자주
+    난다. UI가 `loader.close_store()`로 먼저 닫아 주지만, 이미 참조가 끊겼는데
+    아직 수거되지 않은 연결이 남아 있을 수 있어 여기서 한 번 더 밀어 준다.
+    """
+    import gc
+
+    try:
+        return duckdb.connect(str(path))
+    except duckdb.Error as first:
+        if "different configuration" not in str(first) \
+                and "already open" not in str(first):
+            raise
+        gc.collect()                     # 참조가 끊긴 읽기 전용 연결을 수거
+        try:
+            return duckdb.connect(str(path))
+        except duckdb.Error as e:
+            from etreport.data.loader import explain_conn_error
+            raise RuntimeError(
+                explain_conn_error(e, str(path), write=True)) from e
+
+
 def key_hash_expr() -> pl.Expr:
     """포인트 식별자. **절대 바꾸지 말 것** — 기존 DB에 이어 적재할 때 이 값으로
     중복을 걸러내므로, 계산식이 바뀌면 같은 포인트가 두 번 들어간다.
@@ -61,7 +89,7 @@ def key_hash_expr() -> pl.Expr:
 class Store:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
-        self.con = duckdb.connect(str(self.path))
+        self.con = _connect_write(self.path)
         self.con.execute("PRAGMA threads=4")
         self._ensure_meta()
 

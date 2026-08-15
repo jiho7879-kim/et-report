@@ -59,6 +59,14 @@ class GroupStyleCard(Card):
         self.chk_ref.toggled.connect(self.from_controls)
         self.body.addWidget(self.chk_ref)
 
+        self.btn_all = QPushButton("모든 plot에 적용")
+        self.btn_all.setToolTip(
+            "지금 고른 그룹의 심볼·크기를 **모든 그룹**에 똑같이 적용하고\n"
+            "모든 plot(탐색·리포트 슬롯·PPT)을 다시 그립니다.\n"
+            "색은 그룹을 구분하는 값이라 그대로 둡니다.")
+        self.btn_all.clicked.connect(self.apply_to_all)
+        self.body.addWidget(self.btn_all)
+
         bus.groups_changed.connect(self._external_change)
         self.fill_groups()
 
@@ -86,7 +94,8 @@ class GroupStyleCard(Card):
         g = self.current()
         for w in (self.cmb_symbol, self.cmb_size, self.chk_ref):
             w.blockSignals(True)
-        for w in (self.btn_color, self.cmb_symbol, self.cmb_size, self.chk_ref):
+        for w in (self.btn_color, self.cmb_symbol, self.cmb_size, self.chk_ref,
+                  self.btn_all):
             w.setEnabled(g is not None)
         if g is not None:
             self.btn_color.setStyleSheet(
@@ -111,6 +120,21 @@ class GroupStyleCard(Card):
         else:
             g.ref = False
         self._announce()
+
+    def apply_to_all(self) -> int:
+        """고른 그룹의 심볼·크기를 모든 그룹에 건다. 바뀐 그룹 수를 반환.
+
+        그룹 스타일은 원래 plot 전체가 공유하지만, 슬롯마다 따로 정하는
+        줄 알고 매번 다시 고르는 일이 잦았다(요청 §7). 한 번에 맞추고 즉시
+        다시 그리도록 명시적인 버튼을 둔다.
+        """
+        g = self.current()
+        if g is None:
+            return 0
+        for other in self.state.groups:
+            other.symbol, other.size = g.symbol, g.size
+        self._announce()
+        return len(self.state.groups)
 
     def _pick_color(self) -> None:
         from PySide6.QtWidgets import QColorDialog

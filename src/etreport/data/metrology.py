@@ -128,9 +128,13 @@ def attach(data: pl.DataFrame, met: pl.DataFrame,
     """ET 분석 프레임에 계측 열을 붙인다. (프레임, 붙은 계측 이름들) 반환.
 
     조인 키는 (lot, wafer) — 계측은 wafer 대표값이라 die 좌표가 없다.
+    **표기를 정규화해서 붙인다**(`model/wafers`) — 계측 테이블은 `01`,
+    ET DB는 `W01`로 적히는 일이 흔해서 그대로 조인하면 전부 null이 된다.
     같은 이름의 열이 이미 있으면 덮어쓰지 않고 건너뛴다(§오류 처리: 조용히
     바꾸지 않는다).
     """
+    from etreport.model import wafers
+
     wide = to_wide(met, level)
     if data is None or wide.is_empty():
         return data, []
@@ -138,8 +142,14 @@ def attach(data: pl.DataFrame, met: pl.DataFrame,
     fresh = [c for c in names if c not in data.columns]
     if not fresh:
         return data, []
-    joined = data.join(wide.select(["lot", "wafer", *fresh]),
-                       on=["lot", "wafer"], how="left")
+    keys = [wafers.lot_key_expr("lot").alias("_lk"),
+            wafers.wafer_key_expr("wafer").alias("_wk")]
+    right = wide.select(["lot", "wafer", *fresh]).with_columns(keys) \
+                .drop(["lot", "wafer"]) \
+                .unique(subset=["_lk", "_wk"], keep="first")
+    joined = (data.with_columns(keys)
+              .join(right, on=["_lk", "_wk"], how="left")
+              .drop(["_lk", "_wk"]))
     return joined, fresh
 
 

@@ -18,6 +18,21 @@ from PySide6.QtWidgets import QMessageBox, QProgressDialog
 log = logging.getLogger(__name__)
 
 EXCEL_MISSING = "xlwings/Excel이 없는 환경입니다 — 사내 PC에서 실행하세요"
+BDQ_MISSING = "bigdataquery가 없는 환경입니다 — 사내 PC에서 실행하세요"
+
+
+def bdq_call(fn: Callable[[], object]) -> Callable[[], object]:
+    """사내 조회(bdq)를 워커에 넘길 때 감싼다.
+
+    `run_in_background`는 ImportError를 **Excel 없음**으로 안내한다. bdq 조회의
+    ImportError는 의미가 다르므로 여기서 문구를 바꿔 올린다.
+    """
+    def wrapped() -> object:
+        try:
+            return fn()
+        except ImportError as e:
+            raise RuntimeError(BDQ_MISSING) from e
+    return wrapped
 
 
 class Worker(QThread):

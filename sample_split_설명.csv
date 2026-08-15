@@ -1,0 +1,7 @@
+﻿컬럼,의미,예시,규칙
+lot,lot ID,PA1234,DB의 lot과 같은 표기로 적는다
+wafer,wafer 번호,01,슬롯 번호 두 자리 표기를 권장
+"M1, M5, …",step별 조건 코드,Base / Hi / Lo,열 이름이 곧 step 이름이다. 비워 두면 Base로 본다
+(Base),기준 조건,Base,모든 factor가 Base인 조합이 자동으로 REF(회색)가 된다
+(long 형식),다른 입력 방법,lot | wafer | step_id | code,wide(위 예시) 대신 long 형식으로 적어도 인식한다
+(붙여넣기),파일 없이도 됨,"",엑셀에서 복사해 [실험 조건] 창에 그대로 붙여넣을 수 있다

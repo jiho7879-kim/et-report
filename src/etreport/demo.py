@@ -132,10 +132,10 @@ def apply_split(state: AppState) -> None:
     """현재 factor로 그룹을 다시 만들고 포인트에 gid를 배정한다."""
     if state.split is None or state.data is None:
         return
+    from etreport.model import wafers
     state.groups = state.split.styles_for(state.factors)
     assign = state.split.assignment(state.factors)
-    gids = [assign.get((lot, wf), "") for lot, wf
-            in zip(state.data["lot"], state.data["wafer"])]
+    gids = wafers.map_gids(state.data["lot"], state.data["wafer"], assign)
     state.data = state.data.with_columns(pl.Series("gid", gids))
 
 

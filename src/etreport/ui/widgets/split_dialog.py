@@ -27,6 +27,22 @@ from PySide6.QtWidgets import (
 from etreport.model.state import AppState
 
 
+def matrix_to_tsv(sm) -> str:
+    """SplitMatrix → 붙여넣기 칸에 넣을 TSV 표(첫 줄 머리글).
+
+    fab tracking 자동 조회 결과를 **붙여넣기와 같은 형식**으로 되돌려 놓기
+    위한 것 — 저장·재적용 경로를 하나로 유지한다.
+    """
+    if sm is None or sm.wide is None:
+        return ""
+    cols = ["lot", "wafer", *sm.steps]
+    lines = ["\t".join(cols)]
+    for rec in sm.wide.iter_rows(named=True):
+        lines.append("\t".join("" if rec.get(c) is None else str(rec[c])
+                               for c in cols))
+    return "\n".join(lines)
+
+
 class SplitSourceDialog(QDialog):
     """실험 조건 불러오기 — 파일(엑셀·CSV·TSV) 또는 붙여넣기.
 
@@ -34,12 +50,15 @@ class SplitSourceDialog(QDialog):
     붙여넣기면 `text` — 설정에 저장돼 [적용] 때 같은 방식으로 다시 읽힌다.
     """
 
-    def __init__(self, parent=None, path: str = "", text: str = "") -> None:
+    def __init__(self, parent=None, path: str = "", text: str = "",
+                 baseline: str = "") -> None:
         super().__init__(parent)
+        from etreport.model.split import BASELINE_DEFAULT
         self.setWindowTitle("실험 조건 불러오기")
         self.resize(720, 620)
         self.matrix = None
         self.path, self.text = path, text
+        self.baseline = baseline or BASELINE_DEFAULT
         self.tracking = None                   # fab tracking 원본(기능 A)
 
         v = QVBoxLayout(self)
@@ -66,9 +85,6 @@ class SplitSourceDialog(QDialog):
         self.paste.setPlaceholderText(
             "lot\twafer\tM1\tM5\nPA123\t01\tBase\tBase\nPA123\t02\tHi\tBase")
         self.paste.setMaximumHeight(150)
-        self.paste.textChanged.connect(self._text_changed)   # 즉시 파싱
-        if text:
-            self.paste.setPlainText(text)
         v.addWidget(self.paste)
 
         self.lbl_info = QLabel()
@@ -83,7 +99,15 @@ class SplitSourceDialog(QDialog):
         self.bb.accepted.connect(self.accept)
         self.bb.rejected.connect(self.reject)
         v.addWidget(self.bb)
-        if path:
+
+        # **연결은 위젯을 다 만든 뒤에.** 예전에는 textChanged를 먼저 잇고
+        # setPlainText로 저장된 내용을 채워서, 아직 만들어지지 않은
+        # self.preview를 _show()가 건드리며 창이 뜨자마자 죽었다
+        # (AttributeError: 'SplitSourceDialog' object has no attribute 'preview').
+        self.paste.textChanged.connect(self._text_changed)   # 즉시 파싱
+        if text:
+            self.paste.setPlainText(text)
+        elif path:
             self._load_file(path)
         self._sync_ok()
 
@@ -91,31 +115,40 @@ class SplitSourceDialog(QDialog):
     def _from_tracking(self) -> None:
         """fab tracking에서 split 조건을 읽어 온다(기능 A).
 
-        bdq가 없는 PC(사내 밖)에서는 조회가 안 되므로 안내만 남긴다 —
-        이 코드베이스의 "중단하지 않고 알린다" 방식.
+        조회는 사내망 왕복이라 수 초씩 걸리므로 **진행 창을 띄우고 워커에서**
+        돌린다(§6 요청). 결과는 붙여넣기 칸에 표(TSV)로 채워 넣는다 —
+        그래야 설정에 저장되고 [적용]에서 같은 조건이 그대로 다시 읽힌다.
+        예전에는 matrix만 들고 있다가 창을 닫는 순간 사라져서 "자동 추출은
+        되는데 적용이 안 되는" 상태였다(§5 요청).
         """
         from PySide6.QtWidgets import QInputDialog
 
         from etreport.data import fabtracking as ft
+        from etreport.ui.widgets.worker import bdq_call, run_in_background
         lots, ok = QInputDialog.getText(
             self, "fab tracking", "lot ID (쉼표로 여러 개, 비우면 전체)")
         if not ok:
             return
         wanted = [x.strip() for x in lots.replace(",", " ").split() if x.strip()]
         sql = ft.build_tracking_sql(lots=wanted or None)
-        try:
-            df = ft.fetch(sql)
-        except ImportError:
-            self.lbl_src.setText("bigdataquery가 없는 환경입니다 — 사내 PC에서 실행하세요")
-            return
-        except Exception as e:                 # noqa: BLE001 — 창은 살린다
-            self.lbl_src.setText(f"fab tracking 조회 실패: {e}")
-            return
-        self.matrix = ft.to_split_matrix(df)
-        self.path, self.text = "", ""
+        self.lbl_src.setText("fab tracking 조회 중…")
+        run_in_background(self, "fab tracking 조회",
+                          bdq_call(lambda: ft.fetch(sql)),
+                          done=self._tracking_done)
+
+    def _tracking_done(self, df) -> None:
+        from etreport.data import fabtracking as ft
+        sm = ft.to_split_matrix(df)
         self.tracking = df
-        self.lbl_src.setText(ft.summarize(df))
-        self._show()
+        if sm.wide is None or not sm.steps:
+            self.lbl_src.setText(
+                ft.summarize(df) + " — 조건이 갈리는 step이 없습니다")
+            return
+        self.baseline = sm.baseline
+        self.path = ""
+        self.lbl_src.setText(ft.summarize(df) + f" · 기준(REF) {sm.baseline}")
+        # 표로 채워 넣으면 나머지는 붙여넣기 경로와 완전히 같아진다
+        self.paste.setPlainText(matrix_to_tsv(sm))
 
     def _pick(self, patterns: str) -> None:
         p, _ = QFileDialog.getOpenFileName(self, "실험 조건 파일", "", patterns)
@@ -123,9 +156,10 @@ class SplitSourceDialog(QDialog):
             self._load_file(p)
 
     def _load_file(self, path: str) -> None:
-        from etreport.model.split import load_split_file
+        from etreport.model.split import BASELINE_DEFAULT, load_split_file
+        self.baseline = BASELINE_DEFAULT      # 파일은 'Base'가 기준이다
         try:
-            self.matrix = load_split_file(path)
+            self.matrix = load_split_file(path, self.baseline)
             self.path, self.text = path, ""
             self.paste.blockSignals(True)      # 파일을 고르면 붙여넣기는 비운다
             self.paste.clear()
@@ -144,7 +178,7 @@ class SplitSourceDialog(QDialog):
             self._show()
             return
         try:
-            self.matrix = parse_split_text(raw)
+            self.matrix = parse_split_text(raw, self.baseline)
             self.path, self.text = "", raw
             self.lbl_src.setText("붙여넣은 내용")
         except Exception as e:                 # noqa: BLE001 — 타이핑 중일 뿐이다
@@ -173,7 +207,8 @@ class SplitSourceDialog(QDialog):
         self.preview.resizeColumnsToContents()
         self.lbl_info.setText(
             f"lot {df['lot'].n_unique()} · wafer {df.height}행 · "
-            f"step {len(sm.steps)}개: {', '.join(sm.steps)}"
+            f"step {len(sm.steps)}개: {', '.join(sm.steps)} · "
+            f"기준(REF) {sm.baseline}"
             + ("  (미리보기 50행)" if df.height > 50 else ""))
         self._sync_ok()
 

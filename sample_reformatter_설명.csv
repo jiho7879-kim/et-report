@@ -1,0 +1,11 @@
+﻿컬럼,의미,예시,규칙
+CATEGORY,REAL(실측) / ADDP(계산),REAL,REAL만 DB에서 조회한다. ADDP는 계산 결과라 조회하지 않는다
+ITEMID,DB의 실제 item_id,P040_IDSAT_N,REAL에만 적는다
+ALIAS,툴 안에서 쓰는 이름,Idsat N,템플릿의 x·y·item_id가 이 값을 가리킨다. 중복되면 마지막 행이 이긴다
+ABSOLUTE,절대값 적용 여부,TRUE,참: TRUE/T/Y/1/O · 거짓: FALSE/N/0/X/빈칸 (대소문자 무관)
+SCALE FACTOR,원시값에 곱할 배율,1e-6,수식 계산 **전에** 적용된다
+ADDP FORM,계산식,{Idsat N}/{Vtlin N},"함수: ABS SQRT LN LOG LOG10 EXP MIN MAX AVG SUM STD · LN=자연로그, LOG·LOG10=상용로그 · 참조 대상은 **위쪽 행**에 있어야 한다"
+UNIT,단위 — 축 이름에 자동으로 붙는다,uA/um,비워도 된다
+SPECLOW/SPECHIGH,규격,500 / 900,"표의 규격 이탈 표시, plot의 빨간 규격 박스, 축 범위 산정에 쓰인다"
+TARGET,목표값,700,plot에 파란 X로 표시된다
+WIDTH / LENGTH,기하 (선택),1 / 0.03,trend 차트의 X축으로 쓴다(템플릿 x에는 W·L로 적는다). 없어도 된다

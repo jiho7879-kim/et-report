@@ -37,7 +37,10 @@ def test_sections_mention_the_new_features():
     """최신 기능이 설명서에 반영돼 있다(그룹별 표·점 종류·PPT 순서 등)."""
     from etreport.export.manual import sections
 
-    text = "\n".join(line for s in sections() for line in [s.title, *s.body])
+    text = "\n".join(
+        line for s in sections()
+        for line in [s.title, *s.body, *s.tail,
+                     *(f"{k} {v}" for k, v in s.rows)])
     for word in ("그룹별 평균", "그룹별 wafer", "중앙값", "표지",
                  "실험 조건", "S3", "inline 계측", "5의 배수"):
         assert word in text, word

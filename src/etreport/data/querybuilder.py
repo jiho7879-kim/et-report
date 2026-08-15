@@ -39,9 +39,27 @@ class ConditionError(ValueError):
         self.col = col
 
 
+def regexp_value(val: str) -> str:
+    """정규식 모드의 입력을 실제 패턴으로.
+
+    엔지니어는 값 목록을 **띄어쓰기로** 적는다(`P040 L040 P049`). RE2에서 공백은
+    문자 그대로라 그대로 넘기면 아무것도 잡히지 않으므로 `|`(OR)로 잇는다.
+    `P040|L040` 처럼 이미 `|`로 적었거나 `[A-Z] +` 같이 공백이 패턴의 일부인
+    경우(대괄호·중괄호·괄호가 열려 있는 상태)는 손대지 않는다.
+    """
+    v = val.strip()
+    if not v or "|" in v:
+        return v
+    # 공백이 패턴 문법의 일부일 수 있는 표현은 건드리지 않는다
+    if any(ch in v for ch in "[]{}()\\"):
+        return v
+    parts = v.split()
+    return "|".join(parts) if len(parts) > 1 else v
+
+
 def _string_sql(col: str, val: str, mode: str) -> str:
     if mode == "regexp":
-        return f"{col} REGEXP {_q(val)}"
+        return f"{col} REGEXP {_q(regexp_value(val))}"
     inc: list[str] = []
     exc: list[str] = []
     like: list[str] = []

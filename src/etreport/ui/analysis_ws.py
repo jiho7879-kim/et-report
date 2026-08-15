@@ -9,7 +9,7 @@ from pathlib import Path
 
 import polars as pl
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -34,7 +34,7 @@ from etreport.ui.tabs.common import pick_sheet as _pick_sheet
 from etreport.ui.tabs.explore import ExploreTab
 from etreport.ui.tabs.report import ReportTab
 from etreport.ui.tabs.summary import SummaryTab
-from etreport.ui.widgets.cards import GhostButton, SectionLabel
+from etreport.ui.widgets.cards import CollapsibleSection, GhostButton, SectionLabel
 from etreport.ui.widgets.group_dialog import GroupDialog
 from etreport.ui.widgets.metrology_dialog import MetrologyDialog
 from etreport.ui.widgets.reformatter_dialog import ReformatterDialog
@@ -68,7 +68,23 @@ class AnalysisWorkspace(QWidget):
 
         for sig in (bus.groups_changed, bus.exclusion_changed, bus.data_changed):
             sig.connect(self._refresh_dock)
+        self._build_shortcuts()
         self._refresh_dock()
+
+    def _build_shortcuts(self) -> None:
+        """이 화면의 동작 — 창 전역 단축키는 MainWindow가 갖는다."""
+        for keys, fn in (("F5", self.apply_config),
+                         ("Ctrl+Return", self._run_current_tab),
+                         ("Ctrl+Enter", self._run_current_tab),
+                         ("Ctrl+Z", self._undo)):
+            QShortcut(QKeySequence(keys), self, activated=fn)
+
+    def _run_current_tab(self) -> None:
+        """보고 있는 탭의 주 동작([그리기]·[표 만들기]·[미리보기])을 누른다."""
+        tab = self.tabs.currentWidget()
+        btn = getattr(tab, getattr(tab, "stale_button_attr", ""), None)
+        if btn is not None and btn.isEnabled():
+            btn.click()
 
     # ── 도크 ─────────────────────────────────────────────────
     def _build_dock(self) -> QWidget:
@@ -93,15 +109,17 @@ class AnalysisWorkspace(QWidget):
             btns.addWidget(b)
         v.addLayout(btns)
 
-        # 파일 4행 (고르면 경로만 담아 둔다) --------------------
-        for key, _label, fn in (
+        # 파일 5행 (고르면 경로만 담아 둔다) --------------------
+        # 라벨과 값을 두 열로 나눈다 — 예전처럼 공백 문자로 자리를 맞추면
+        # 배포 PC의 폰트에 따라 열이 어긋난다.
+        self._file_values: dict[str, QLabel] = {}
+        for key, label, fn in (
                 ("db", "DB", self._pick_db),
                 ("plot", "Plot", lambda: self._pick_tpl("plot")),
                 ("tbl", "Table", lambda: self._pick_tpl("table")),
                 ("rfm", "리포메터", self._pick_rfm),
                 ("split", "실험 조건", self._pick_split)):
-            b = GhostButton("")
-            b.setObjectName("cfgRow")
+            b = self._file_row(key, label)
             b.clicked.connect(fn)
             setattr(self, f"btn_{key}", b)
             v.addWidget(b)
@@ -124,27 +142,33 @@ class AnalysisWorkspace(QWidget):
         self.lbl_apply.setWordWrap(True)
         v.addWidget(self.lbl_apply)
 
-        b = GhostButton("S3 저장소")
-        b.setToolTip("사내 S3에 duckdb·csv·sbdf를 올리고 내려받습니다.")
-        b.clicked.connect(self._open_s3)
-        v.addWidget(b)
-
-        b = GhostButton("inline 계측 불러오기")
-        b.setToolTip("fab.f_fab_wf_met에서 계측값을 가져와 (lot, wafer)로 붙입니다.\n"
-                     "붙인 값은 탐색 X축·Summary에서 쓰고, 유의 인자 top-k는\n"
-                     "PPT 슬라이드로 나갑니다.")
-        b.clicked.connect(self._open_metrology)
-        v.addWidget(b)
-
-        b = GhostButton("SQL 조회 · 내보내기")
-        b.clicked.connect(self._open_sql)
-        v.addWidget(b)
+        # 자주 쓰지 않는 도구는 접어 둔다 — 도크가 같은 모양의 버튼 벽이 되지
+        # 않게. 펼침 여부는 설정에 남아 다음에 켤 때 그대로다.
+        tools = CollapsibleSection("도구",
+                                   collapsed=not self.settings.dock_tools_open)
+        tools.toggle.toggled.connect(self._tools_toggled)
+        self.tools_section = tools
+        for text, tip, fn in (
+                ("S3 저장소", "사내 S3에 duckdb·csv·sbdf를 올리고 내려받습니다.",
+                 self._open_s3),
+                ("inline 계측 불러오기",
+                 "fab.f_fab_wf_met에서 계측값을 가져와 (lot, wafer)로 붙입니다.\n"
+                 "붙인 값은 탐색 X축·Summary에서 쓰고, 유의 인자 top-k는\n"
+                 "PPT 슬라이드로 나갑니다.", self._open_metrology),
+                ("SQL 조회 · 내보내기",
+                 "DB를 직접 조회하고 결과를 csv·xlsx로 내보냅니다.",
+                 self._open_sql)):
+            b = GhostButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(fn)
+            tools.body.addWidget(b)
         self.btn_cache = GhostButton("")
         self.btn_cache.setToolTip(
             "Excel 읽기 결과를 로컬에 캐시합니다.\n"
             "누르면 캐시를 비우고 다음에 Excel에서 새로 읽습니다.")
         self.btn_cache.clicked.connect(self._clear_cache)
-        v.addWidget(self.btn_cache)
+        tools.body.addWidget(self.btn_cache)
+        v.addWidget(tools)
 
         # plot -------------------------------------------------
         v.addWidget(SectionLabel("plot"))
@@ -192,11 +216,48 @@ class AnalysisWorkspace(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(panel)
-        scroll.setFixedWidth(276)
+        scroll.setFixedWidth(282)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setObjectName("dockScroll")
         self._fill_cfg_combo()
         return scroll
+
+    def _file_row(self, key: str, label: str) -> QPushButton:
+        """파일 한 줄 — 라벨 열 + 값(모노). 눌러서 고른다."""
+        b = QPushButton()
+        b.setObjectName("fileRow")
+        b.setCursor(Qt.PointingHandCursor)
+        b.setMinimumHeight(38)
+        h = QHBoxLayout(b)
+        h.setContentsMargins(11, 5, 11, 5)
+        h.setSpacing(8)
+        lab = QLabel(label)
+        lab.setObjectName("fileLabel")
+        lab.setFixedWidth(62)
+        val = QLabel()
+        val.setObjectName("fileValue")
+        val.setTextInteractionFlags(Qt.NoTextInteraction)
+        h.addWidget(lab)
+        h.addWidget(val, 1)
+        self._file_values[key] = val
+        return b
+
+    def _set_file(self, key: str, value: str, sheet: str = "") -> None:
+        """파일 행의 값 갱신 — 비었으면 '고르기'를 흐리게 보여 준다."""
+        lab = self._file_values[key]
+        text = value or "고르기"
+        if value and sheet:
+            text = f"{value}  [{sheet}]"
+        lab.setProperty("empty", "true" if not value else "false")
+        # 도크 폭이 좁아 긴 파일명은 앞을 줄인다(끝의 이름·시트가 중요하다)
+        fm = lab.fontMetrics()
+        lab.setText(fm.elidedText(text, Qt.ElideLeft, max(lab.width(), 150)))
+        lab.setToolTip(text if value else "")
+        lab.style().unpolish(lab)
+        lab.style().polish(lab)
+
+    def _tools_toggled(self, collapsed: bool) -> None:
+        self.settings.dock_tools_open = not collapsed
 
     # ── 설정 프리셋 ──────────────────────────────────────────
     def _fill_cfg_combo(self) -> None:
@@ -306,18 +367,25 @@ class AnalysisWorkspace(QWidget):
         """엑셀 / CSV·TSV / 클립보드 붙여넣기 — 한 창에서 고른다(§3.4)."""
         c = self.cfg()
         dlg = SplitSourceDialog(self, path=c.split_path,
-                                text=getattr(c, "split_text", ""))
+                                text=getattr(c, "split_text", ""),
+                                baseline=getattr(c, "split_baseline", ""))
         if dlg.exec() and dlg.matrix is not None:
             c.split_path, c.split_text = dlg.path, dlg.text
-            self._mark_unapplied()
+            c.split_baseline = dlg.baseline
+            sm = dlg.matrix
+            self._mark_unapplied(
+                f"실험 조건 {len(sm.steps)}개 step · wafer {sm.wide.height}행을 "
+                f"읽었습니다 — [적용]을 눌러 그룹에 반영하세요")
 
     # ── 적용 (검증은 여기서 한 번) ───────────────────────────
-    def _mark_unapplied(self, msg: str = "변경됨 — [적용]을 누르세요") -> None:
+    def _mark_unapplied(self, msg: str = "바뀐 설정이 있습니다 — [적용] (F5)") -> None:
+        from etreport.ui.tabs.common import set_dirty
         self._applied = False
-        self.btn_apply.setProperty("dirty", "true")
-        self.btn_apply.style().unpolish(self.btn_apply)
-        self.btn_apply.style().polish(self.btn_apply)
+        self.state.applied = False
+        self.state.status_note = "미적용"
+        set_dirty(self.btn_apply, True)
         self.lbl_apply.setText(msg)
+        self.bus.status_changed.emit()
         self._refresh_dock()
 
     def apply_config(self) -> None:
@@ -340,9 +408,11 @@ class AnalysisWorkspace(QWidget):
         w.finished.connect(self._apply_unlock)
 
     def _apply_unlock(self) -> None:
+        from etreport.ui.tabs.common import set_dirty
         self.setEnabled(True)
         self.btn_apply.setEnabled(True)
         self.btn_apply.setText("적용")
+        set_dirty(self.btn_apply, not self._applied)   # 실패해도 표시는 남는다
 
     def _apply_done(self, c, rep) -> None:
         """워커가 끝난 뒤 UI 반영 — 여기서만 위젯을 만진다."""
@@ -352,13 +422,15 @@ class AnalysisWorkspace(QWidget):
             QMessageBox.critical(self, "적용 실패", rep.text())
             return
 
+        from etreport.ui.tabs.common import set_dirty
         self._applied = True
-        self.btn_apply.setProperty("dirty", "false")
-        self.btn_apply.style().unpolish(self.btn_apply)
-        self.btn_apply.style().polish(self.btn_apply)
+        self.state.applied = True
+        self.state.status_note = ""
+        set_dirty(self.btn_apply, False)
         self.lbl_apply.setText(
             f"적용됨 · {rep.elapsed:.1f}초"
             + (f" · 제외 {len(rep.warnings)}건" if rep.warnings else ""))
+        self.bus.status_changed.emit()
 
         self._show_report(c.report)
 
@@ -395,20 +467,14 @@ class AnalysisWorkspace(QWidget):
         st, c = self.state, self.cfg()
 
         def short(p: str) -> str:
-            return Path(p).name if p else "(선택 안 됨)"
+            return Path(p).name if p else ""
 
-        self.btn_db.setText(f"DB          {short(c.db_path)}"
-                            + (f"  [{st.table}]" if st.table else ""))
-        self.btn_plot.setText(f"Plot        {short(c.plot_template_path)}"
-                              + (f"  [{c.plot_sheet}]" if c.plot_sheet else ""))
-        self.btn_tbl.setText(f"Table       {short(c.table_template_path)}"
-                             + (f"  [{c.table_sheet}]" if c.table_sheet else ""))
-        self.btn_rfm.setText(
-            f"리포메터    {short(c.reformatter_path)}"
-            + (f"  [{c.reformatter_sheet}]" if c.reformatter_sheet else ""))
-        src = ("붙여넣은 내용" if getattr(c, "split_text", "")
-               else short(c.split_path))
-        self.btn_split.setText(f"실험 조건   {src}")
+        self._set_file("db", short(c.db_path), st.table)
+        self._set_file("plot", short(c.plot_template_path), c.plot_sheet)
+        self._set_file("tbl", short(c.table_template_path), c.table_sheet)
+        self._set_file("rfm", short(c.reformatter_path), c.reformatter_sheet)
+        self._set_file("split", "붙여넣은 내용" if getattr(c, "split_text", "")
+                       else short(c.split_path))
 
         self.lbl_factor.setText(
             f"factor · {', '.join(st.factors) or '(없음)'}" if st.split
@@ -492,10 +558,10 @@ class AnalysisWorkspace(QWidget):
         used = set(st.manual_groups.values())
         st.groups = fresh + [g for g in keep.values() if g.gid in used]
         if st.data is not None:
+            from etreport.model import wafers
             assign = st.split.assignment(st.factors)
             st.data = st.data.with_columns(pl.Series(
-                "gid", [assign.get((lo, wa), "") for lo, wa
-                        in zip(st.data["lot"], st.data["wafer"])]))
+                "gid", wafers.map_gids(st.data["lot"], st.data["wafer"], assign)))
             st.data = apply_manual_groups(st.data, st.manual_groups)
         if not silent:
             self.bus.groups_changed.emit()
@@ -515,10 +581,10 @@ class AnalysisWorkspace(QWidget):
 
     def _clear_cache(self) -> None:
         from etreport.data import xlio
+        from etreport.ui.widgets.toast import toast
         n = xlio.invalidate()
         self._refresh_dock()
-        QMessageBox.information(self, "Excel 캐시",
-                                f"{n}개 캐시를 비웠습니다 — 다음 읽기는 Excel을 엽니다")
+        toast(self, f"Excel 캐시 {n}개를 비웠습니다 — 다음 읽기는 Excel을 엽니다")
 
     def _open_s3(self) -> None:
         """S3 창(기능 C) — boto3가 없는 PC에서는 안내만 남긴다."""

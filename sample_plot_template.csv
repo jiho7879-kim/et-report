@@ -1,0 +1,5 @@
+﻿page,x,y,order,title1,title2,Report,Type,x_name,y_name,Mode
+1,Vtlin N,Idsat N,1,NMOS 특성,Idsat–Vt,M2_ET,scatter,,,site
+1,Vtlin N,Ioff N,2,,Ioff–Vt,M2_ET,scatter,,,site
+1,"Idsat N, Idsat P","Ioff N, Ioff P",3,,N·P 겹쳐 보기,M2_ET,scatter,,,avg
+2,Vtlin N,Vt spread,1,산포,Vt spread,M2_ET,scatter,,,site

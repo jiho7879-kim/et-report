@@ -44,10 +44,15 @@ class SummaryTab(StaleMixin, QWidget):
         super().__init__(parent)
         self.state, self.bus = state, bus
         self._stale = True
+        self._collapsed: set[str] = set()      # 접어 둔 CAT1 (표를 다시 만들어도 유지)
+        self._cards: dict[str, Card] = {}
         outer = QVBoxLayout(self)
+        outer.setContentsMargins(16, 10, 16, 14)
+        outer.setSpacing(10)
 
         bar = QHBoxLayout()
         self.btn_build = QPushButton("표 만들기")
+        self.btn_build.setToolTip("CAT1마다 wafer 표를 만듭니다 (Ctrl+Enter)")
         self.btn_build.clicked.connect(self.rebuild)
         bar.addWidget(self.btn_build)
         self.agg = QComboBox()
@@ -61,6 +66,13 @@ class SummaryTab(StaleMixin, QWidget):
         self.chk_delta = QCheckBox("Δ vs REF")
         self.chk_delta.toggled.connect(self.mark_stale)
         bar.addWidget(self.chk_delta)
+        # CAT1 표는 하나가 화면을 다 먹는다 — 접어 두고 필요한 것만 편다
+        b_fold = GhostButton("모두 접기")
+        b_fold.clicked.connect(lambda: self._fold_all(True))
+        bar.addWidget(b_fold)
+        b_open = GhostButton("모두 펼치기")
+        b_open.clicked.connect(lambda: self._fold_all(False))
+        bar.addWidget(b_open)
         bar.addStretch(1)
         self.lbl_state = QLabel()
         self.lbl_state.setObjectName("hint")
@@ -84,6 +96,27 @@ class SummaryTab(StaleMixin, QWidget):
                     bus.data_changed, bus.report_changed):
             sig.connect(self.mark_stale)
         self.mark_stale()
+
+    # ── 접기 ─────────────────────────────────────────────────
+    def _attach_collapse(self, card, cat1: str) -> None:
+        """CAT1 카드에 ▾/▸ 토글을 달고 접힘 상태를 기억한다."""
+        card.make_collapsible(cat1 in self._collapsed)
+        card._collapse_btn.toggled.connect(
+            lambda on, c=cat1: self._remember(c, on))
+        self._cards[cat1] = card
+
+    def _remember(self, cat1: str, on: bool) -> None:
+        (self._collapsed.add if on else self._collapsed.discard)(cat1)
+
+    def _fold_all(self, on: bool) -> None:
+        """표를 다시 만들지 않는다 — 보이기만 바꾼다."""
+        names = list(self._cards) or (
+            self.state.report.table_names() if self.state.report else [])
+        for cat1 in names:
+            self._remember(cat1, on)
+            card = self._cards.get(cat1)
+            if card is not None:
+                card.set_collapsed(on)
 
     # ── 지연 계산 (규약은 tabs/common.StaleMixin) ────────────
     def refresh(self) -> None:
@@ -137,12 +170,17 @@ class SummaryTab(StaleMixin, QWidget):
             it = self.vbox.takeAt(0)
             if it.widget():
                 it.widget().deleteLater()
+        self._cards.clear()          # 곧 파괴될 카드를 붙잡고 있지 않도록
         st = self.state
         if st.report is None or st.data is None:
-            lab = QLabel("표를 만들려면 DB와 Table 템플릿(REPORT 선택)이 필요합니다"
-                         if st.data is not None else
-                         "데이터 없음 — 설정에서 DB를 고르고 [적용]을 누르세요")
-            lab.setObjectName("hint")
+            lab = QLabel(
+                "Table 템플릿이 아직 없습니다.\n"
+                "왼쪽에서 Table 템플릿을 고른 뒤 [적용](F5)을 누르면 "
+                "CAT1마다 표가 한 장씩 만들어집니다."
+                if st.data is not None else
+                "아직 불러온 데이터가 없습니다.\n"
+                "왼쪽에서 DB를 고르고 [적용](F5)을 누르세요.")
+            lab.setObjectName("emptyHint")
             lab.setAlignment(Qt.AlignCenter)
             self.vbox.addWidget(lab)
             self.lbl_state.setText("")
@@ -218,6 +256,7 @@ class SummaryTab(StaleMixin, QWidget):
                 " · 붉은 셀은 SPECLOW/SPECHIGH 이탈")
             cap.setObjectName("hint")
             card.body.addWidget(cap)
+            self._attach_collapse(card, cat1)      # 내용을 다 넣은 뒤에
             self.vbox.addWidget(card)
 
         self.mark_fresh()
@@ -270,6 +309,7 @@ class SummaryTab(StaleMixin, QWidget):
             cap = QLabel(opt.session_caption)
             cap.setObjectName("hint")
             card.body.addWidget(cap)
+            self._attach_collapse(card, cat1)      # 내용을 다 넣은 뒤에
             self.vbox.addWidget(card)
         self.mark_fresh()
         self.lbl_state.setText(

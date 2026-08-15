@@ -36,11 +36,69 @@ from PySide6.QtWidgets import (
 )
 
 from etreport.data import loader
+from etreport.model import wafers as wnorm
 from etreport.model.split import PALETTE_OKABE, REF_COLOR, SYMBOLS
 from etreport.model.state import AppState
 
 ALL = "전체"                       # 필터 콤보의 '좁히지 않음'
 FILTERS = (("step_id", "step"), ("site", "site"), ("temp", "temp"))
+
+#: 머리글로 인정하는 단어 — 있으면 첫 줄을 건너뛰고, 없으면 첫 줄도 자료로 본다
+_HEAD_WORDS = {"lot", "lot_id", "root_lot_id", "랏", "로트",
+               "wafer", "wafer_id", "slot", "slot_no", "웨이퍼",
+               "group", "grp", "그룹", "조건"}
+
+
+def parse_group_rows(text: str) -> list[tuple[str, str, str]]:
+    """붙여넣은 표 → [(lot, wafer, group)] — **머리글은 있어도 없어도 같다**.
+
+    첫 줄에 lot/wafer/group 같은 낱말이 있으면 머리글로 보고 건너뛴다.
+    머리글이 있으면 열 이름으로 위치를 잡고(순서가 달라도 된다), 없으면
+    `lot wafer group`(3열) 또는 `lot group`(2열) 순으로 읽는다.
+    wafer는 비워 둘 수 있다 — 그러면 그 lot 전체가 대상이다.
+    """
+    rows = [ln for ln in text.replace("\r\n", "\n").split("\n") if ln.strip()]
+    if not rows:
+        return []
+
+    def cells(line: str) -> list[str]:
+        sep = "\t" if "\t" in line else ","
+        return [c.strip() for c in line.split(sep)]
+
+    first = cells(rows[0])
+    is_head = any(c.strip().lower() in _HEAD_WORDS for c in first)
+    order = ["lot", "wafer", "group"]
+    if is_head:
+        order = []
+        for c in first:
+            low = c.strip().lower()
+            if low in ("lot", "lot_id", "root_lot_id", "랏", "로트"):
+                order.append("lot")
+            elif low in ("wafer", "wafer_id", "slot", "slot_no", "웨이퍼"):
+                order.append("wafer")
+            elif low in ("group", "grp", "그룹", "조건"):
+                order.append("group")
+            else:
+                order.append("")
+        rows = rows[1:]
+    out: list[tuple[str, str, str]] = []
+    for line in rows:
+        parts = cells(line)
+        if len(parts) < 2:
+            continue
+        if is_head:
+            got = {name: parts[i] for i, name in enumerate(order)
+                   if name and i < len(parts)}
+            lot, wf, grp = (got.get("lot", ""), got.get("wafer", ""),
+                            got.get("group", ""))
+        elif len(parts) >= 3:
+            lot, wf, grp = parts[0], parts[1], parts[2]
+        else:                                # lot + group (wafer 열 없음)
+            lot, wf, grp = parts[0], "", parts[1]
+        if lot and grp:
+            out.append((lot, wf, grp))
+    return out
+
 
 _PALETTES = {
     "Okabe-Ito (색약 안전)": PALETTE_OKABE,
@@ -83,6 +141,7 @@ class GroupDialog(QDialog):
         self.lbl_db.setObjectName("hint")
         dbrow.addWidget(self.lbl_db, 1)
         b = QPushButton("DB 선택")
+        b.setProperty("ghost", True)
         b.clicked.connect(self._pick_db)
         dbrow.addWidget(b)
         v.addLayout(dbrow)
@@ -143,6 +202,7 @@ class GroupDialog(QDialog):
                          ("≫", lambda: self._move_all(True)),
                          ("≪", lambda: self._move_all(False))):
             btn = QPushButton(text)
+            btn.setProperty("ghost", True)
             btn.setFixedWidth(46)
             btn.clicked.connect(fn)
             arrows.addWidget(btn)
@@ -522,43 +582,67 @@ class GroupDialog(QDialog):
         v.addWidget(b)
         return w
 
+    def _lot_wafers(self, lot: str) -> list[str]:
+        """그 lot에 실제로 있는 wafer 표기 목록 (색인 → 없으면 프레임)."""
+        st = self.state
+        if not self.index.is_empty():
+            hit = self.index.filter(
+                wnorm.lot_key_expr("lot") == wnorm.norm_lot(lot))["wafer"].to_list()
+            if hit:
+                return sorted(dict.fromkeys(hit))
+        if st.data is not None and "lot" in st.data.columns:
+            hit = st.data.filter(
+                wnorm.lot_key_expr("lot") == wnorm.norm_lot(lot))["wafer"].to_list()
+            return sorted(dict.fromkeys(hit))
+        return []
+
     def _apply_paste(self) -> None:
-        """붙여넣은 lot·wafer·group 표를 반영. [적용] 전에도 기록해 둔다."""
+        """붙여넣은 lot·wafer·group 표를 반영. [적용] 전에도 기록해 둔다.
+
+        표기는 관대하게 받는다 — **머리글은 있어도 없어도 되고**, wafer는
+        `W01` `W1` `01` `1` 이 모두 같은 wafer로 붙는다(§13). 실제 DB에 있는
+        표기를 찾아 그 값으로 기록하므로 나중에 [적용]해도 배정이 유지된다.
+        """
         st = self.state
         text = self.paste.toPlainText().strip()
         if not text:
             return
-        name_to_gid = {g.name: g.gid for g in st.groups}
+        name_to_gid = {g.name.strip().casefold(): g.gid for g in st.groups}
         if not name_to_gid:
             QMessageBox.information(self, "그룹",
                                     "먼저 ＋로 그룹을 만들거나 실험 조건을 적용하세요")
             return
-        n = 0
-        for line in text.splitlines()[1:]:
-            parts = [p.strip() for p in line.replace(",", "\t").split("\t")]
-            if len(parts) < 2:
-                continue
-            lot, wf, grp = [*parts, "", ""][:3] if len(parts) >= 3 \
-                else (parts[0], "", parts[1])
-            gid = name_to_gid.get(grp)
+        rows = parse_group_rows(text)
+        n, miss_grp, miss_wf = 0, set(), []
+        for lot, waf, grp in rows:
+            gid = name_to_gid.get(grp.strip().casefold())
             if gid is None:
+                miss_grp.add(grp)
                 continue
-            if wf:
-                wf2 = wf if wf.upper().startswith("W") else f"W{int(wf):02d}"
-                wafers = [wf2]
+            known = self._lot_wafers(lot)
+            lot_actual = self._find_lot(lot) or lot
+            if waf:
+                actual = wnorm.resolve(waf, known)
+                if actual is None:
+                    # DB에 없는 표기라도 기록은 남긴다 — 나중에 [적용]으로 그
+                    # lot이 들어오면 정규화 비교로 붙는다
+                    miss_wf.append(f"{lot}·{waf}")
+                    actual = waf
+                targets = [actual]
             else:                       # wafer 열이 없으면 lot 전체
-                wafers = sorted(set(self.index.filter(
-                    pl.col("lot") == lot)["wafer"])) if not self.index.is_empty() \
-                    else []
-                if not wafers and st.data is not None:
-                    wafers = sorted(set(st.data.filter(
-                        pl.col("lot") == lot)["wafer"]))
-            for w in wafers:            # 붙여넣기는 조건을 안 따진다(전체 범위)
-                st.manual_groups[(lot, w, None, None, None)] = gid
+                targets = known
+            for w in targets:           # 붙여넣기는 조건을 안 따진다(전체 범위)
+                st.manual_groups[(lot_actual, w, None, None, None)] = gid
             n += 1
         if st.data is not None:
             st.data = loader.apply_manual_groups(st.data, st.manual_groups)
-        QMessageBox.information(self, "적용됨", f"{n}행을 반영했습니다")
+        msg = [f"{n}행을 반영했습니다"]
+        if miss_grp:
+            msg.append("없는 그룹 이름: " + ", ".join(sorted(miss_grp)[:5]))
+        if miss_wf:
+            msg.append(f"DB에서 못 찾은 wafer {len(miss_wf)}건: "
+                       + ", ".join(miss_wf[:5]))
+        QMessageBox.information(self, "적용됨", "\n".join(msg))
         self._refresh_lists()
 
     # ── 스타일 일괄 ──────────────────────────────────────────
@@ -573,6 +657,7 @@ class GroupDialog(QDialog):
         self.cmb_size.addItems(["크기 —", "4", "6", "8", "10"])
         h.addWidget(self.cmb_size)
         b = QPushButton("모든 그룹에 적용")
+        b.setProperty("ghost", True)
         b.clicked.connect(self._apply_bulk)
         h.addWidget(b)
         h.addSpacing(12)
@@ -580,6 +665,7 @@ class GroupDialog(QDialog):
         self.cmb_pal.addItems(list(_PALETTES))
         h.addWidget(self.cmb_pal)
         b2 = QPushButton("색 다시 배정")
+        b2.setProperty("ghost", True)
         b2.clicked.connect(self._apply_palette)
         h.addWidget(b2)
         h.addStretch(1)

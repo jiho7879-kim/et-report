@@ -27,11 +27,13 @@ def _styles_for(state: AppState, exp: str):
 
 
 def _assignment_for(state: AppState, exp: str) -> dict[tuple[str, str], str]:
+    """키는 `model/wafers.key()` — W01·01·1 표기 차이로 배정이 비지 않게."""
+    from etreport.model import wafers
     if exp and state.split is not None:
         return state.split.assignment([exp])
     if state.data is None:
         return {}
-    return {(lot, wf): gid for lot, wf, gid in
+    return {wafers.key(lot, wf): gid for lot, wf, gid in
             zip(state.data["lot"], state.data["wafer"], state.data["gid"])}
 
 
@@ -41,9 +43,9 @@ def _plot_data(state: AppState, exp: str, spec: PlotSpec) -> dict[str, pl.DataFr
         return {}
     active = df.filter(~pl.col("key").is_in(list(state.excluded))) \
         if state.excluded else df
+    from etreport.model import wafers
     assign = _assignment_for(state, exp)
-    gids = [assign.get((lot, wf), "") for lot, wf
-            in zip(active["lot"], active["wafer"])]
+    gids = wafers.map_gids(active["lot"], active["wafer"], assign)
     active = active.with_columns(pl.Series("_g", gids))
     return {st.gid: active.filter(pl.col("_g") == st.gid)
             for st in _styles_for(state, exp)}

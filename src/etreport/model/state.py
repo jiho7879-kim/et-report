@@ -51,6 +51,10 @@ class AppState:
     rf_path: str = ""
     rf_sheet: str | int = 0
     exclude_all_plots: bool = True     # 제외를 모든 plot에 적용할지
+    # 상단 상태 레일이 읽는다. "" 면 상태 문구 없음(적용됨), 그 밖에는 그 문구를
+    # 램프와 함께 띄운다 — 화면마다 따로 알리지 않고 여기 한 곳으로 모은다.
+    status_note: str = ""
+    applied: bool = False              # [적용]으로 읽은 뒤인가
 
     # ── 조회 ─────────────────────────────────────────────────
     def aliases(self) -> list[str]:
@@ -109,3 +113,4 @@ class StateBus(QObject):
     exclusion_changed = Signal()   # 제외/복원
     report_changed = Signal()      # 템플릿·Report 선택
     explore_changed = Signal()     # 탐색 축·옵션
+    status_changed = Signal()      # 상단 상태 레일 (적용 여부·진행 문구)

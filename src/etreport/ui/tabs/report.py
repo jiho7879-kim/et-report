@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 from etreport.model.specs import POINT_MODES
 from etreport.model.state import AppState, StateBus
 from etreport.ui.tabs.common import StaleMixin, on_combo
+from etreport.ui.widgets.autocomplete import AutoCompleteEdit
 from etreport.ui.widgets.cards import Card, GhostButton, row
 from etreport.ui.widgets.plot_canvas import PlotCanvas
 from etreport.ui.widgets.slot_grid import SlotFrame, swap_slots
@@ -48,6 +49,8 @@ class ReportTab(StaleMixin, QWidget):
         self._canvases: dict[int, PlotCanvas] = {}   # 슬롯 index → 살아 있는 캔버스
 
         lay = QHBoxLayout(self)
+        lay.setContentsMargins(16, 10, 16, 14)
+        lay.setSpacing(12)
         self.pages = QListWidget()
         self.pages.setFixedWidth(158)
         self.pages.currentRowChanged.connect(self._page_changed)
@@ -154,8 +157,9 @@ class ReportTab(StaleMixin, QWidget):
         sv.setContentsMargins(0, 0, 0, 0)
 
         self.slot_card = Card("선택한 슬롯")
-        self.ed_sx = QLineEdit()
-        self.ed_sy = QLineEdit()
+        # X·Y는 리포메터 ALIAS를 자동완성으로 — 빈 슬롯에서도 바로 그릴 수 있게
+        self.ed_sx = AutoCompleteEdit(self._alias_items)
+        self.ed_sy = AutoCompleteEdit(self._alias_items)
         self.ed_stitle = QLineEdit()
         for ed in (self.ed_sx, self.ed_sy, self.ed_stitle):
             ed.editingFinished.connect(self._slot_edited)
@@ -168,10 +172,22 @@ class ReportTab(StaleMixin, QWidget):
         self.cmb_point.setToolTip("이 슬롯의 점을 무엇으로 찍을지 — 템플릿 Mode 열")
         on_combo(self.cmb_point, self._slot_edited)
         self.slot_card.body.addWidget(self.cmb_point)
+        self.btn_point_all = GhostButton("모든 plot에 적용")
+        self.btn_point_all.setToolTip(
+            "이 점 표시 방식을 모든 페이지의 모든 plot 슬롯에 적용합니다.")
+        self.btn_point_all.clicked.connect(self._point_to_all)
+        self.slot_card.body.addWidget(self.btn_point_all)
         self.cmb_log = QComboBox()
         self.cmb_log.addItems(["Y축 자동", "Y축 log", "Y축 선형"])
         on_combo(self.cmb_log, self._slot_edited)
         self.slot_card.body.addWidget(self.cmb_log)
+        # 빈 슬롯에 X·Y만 적어 바로 plot을 만든다(요청 §14)
+        self.btn_make = GhostButton("이 슬롯에 plot 만들기")
+        self.btn_make.setToolTip(
+            "X·Y에 item(리포메터 ALIAS)을 적고 누르면 이 슬롯에 산점도를\n"
+            "만듭니다. X에 W 또는 L을 적으면 기하 trend로 그립니다.")
+        self.btn_make.clicked.connect(self._make_slot)
+        self.slot_card.body.addWidget(self.btn_make)
         b_del = GhostButton("이 슬롯 비우기")
         b_del.clicked.connect(self._clear_slot)
         self.slot_card.body.addWidget(b_del)
@@ -179,9 +195,14 @@ class ReportTab(StaleMixin, QWidget):
 
         self.info = Card("생성될 덱")
         self.lbl_info = QLabel()
-        self.lbl_info.setWordWrap(True)
+        # **일반 텍스트 + 직접 줄바꿈.** 리치 텍스트(<br>)는 Qt가 위젯 폭에 맞춰
+        # 다시 흘려보내는데, 폭이 고정된 사이드 카드에서는 sizeHint가 실제보다
+        # 낮게 잡혀 마지막 줄이 잘렸다.
+        self.lbl_info.setTextFormat(Qt.PlainText)
         self.info.body.addWidget(self.lbl_info)
-        self.info.body.addWidget(QLabel("표 슬라이드"))
+        lab = QLabel("표 슬라이드")
+        lab.setObjectName("sectionLabel")
+        self.info.body.addWidget(lab)
         self.cmb_tbl = QComboBox()
         self.cmb_tbl.addItems(["넘치게 두기 (9pt 유지)", "여러 장으로 분할"])
         self.cmb_tbl.setCurrentIndex(
@@ -196,7 +217,70 @@ class ReportTab(StaleMixin, QWidget):
                                          on_changed=self.refresh_if_visible)
         sv.addWidget(self.style_card)
         sv.addStretch(1)
-        return side
+
+        # 스크롤에 담는다 — 창이 낮으면 Qt가 카드를 sizeHint 아래로 눌러
+        # '생성될 덱' 마지막 줄이 잘렸다(1500×940에서 실제로 잘렸다).
+        from PySide6.QtWidgets import QScrollArea
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(side)
+        scroll.setFixedWidth(292)
+        return scroll
+
+    def _alias_items(self) -> list[str]:
+        """자동완성 후보 — 리포메터 ALIAS, 없으면 데이터의 item 컬럼."""
+        from etreport.data.loader import item_columns
+        st = self.state
+        if st.rf.rules:
+            return st.aliases()
+        return item_columns(st.data) if st.data is not None else []
+
+    def _point_to_all(self) -> int:
+        """점 표시 방식을 모든 페이지·모든 슬롯에 적용. 바뀐 슬롯 수 반환."""
+        st = self.state
+        if st.report is None:
+            return 0
+        i = self.cmb_point.currentIndex()
+        mode = POINT_MODES[i] if 0 <= i < len(POINT_MODES) else "site"
+        n = 0
+        for page in st.report.pages:
+            for spec in page.slots:
+                if spec is not None and spec.type != "table":
+                    spec.mode = mode
+                    n += 1
+        if n:
+            self.bus.report_changed.emit()
+            self.refresh_if_visible()
+        return n
+
+    def _make_slot(self) -> bool:
+        """빈 슬롯에 X·Y만으로 plot을 만든다(요청 §14).
+
+        탐색 탭의 [＋ 리포트에 추가]와 같은 결과지만, **자리를 고를 수 있다**.
+        X가 기하(W·L)면 탐색 탭과 같은 규칙으로 trend가 된다.
+        """
+        from etreport.model.specs import GEOM_COLUMNS, PlotSpec
+        st = self.state
+        if st.report is None or self.sel_slot is None:
+            QMessageBox.information(self, "plot 만들기", "먼저 슬롯을 고르세요")
+            return False
+        x, y = self.ed_sx.text().strip(), self.ed_sy.text().strip()
+        if not (x and y):
+            QMessageBox.information(self, "plot 만들기",
+                                    "X와 Y에 item을 적어 주세요")
+            return False
+        i = self.cmb_point.currentIndex()
+        spec = PlotSpec(
+            title=self.ed_stitle.text().strip() or f"{y} vs {x}",
+            x=x, y=y,
+            type="trend" if x in GEOM_COLUMNS else "scatter",
+            mode=POINT_MODES[i] if 0 <= i < len(POINT_MODES) else "site",
+            logy_mode=("auto", "log", "linear")[self.cmb_log.currentIndex()])
+        st.report.pages[self.page_idx].slots[self.sel_slot] = spec
+        self.bus.report_changed.emit()
+        self.rebuild()
+        return True
 
     def _current_slot(self):
         st = self.state
@@ -230,13 +314,16 @@ class ReportTab(StaleMixin, QWidget):
         for f in self._frames:
             f.set_selected(f.index == idx)
         spec = self._current_slot()
+        # 빈 슬롯이어도 입력칸은 열어 둔다 — X·Y를 적고 [이 슬롯에 plot 만들기]
         for ed, val in ((self.ed_stitle, spec.title if spec else ""),
                         (self.ed_sx, spec.x if spec else ""),
                         (self.ed_sy, spec.y if spec else "")):
             ed.setText(val)
-            ed.setEnabled(spec is not None)
+            ed.setEnabled(True)
         for cmb in (self.cmb_log, self.cmb_point):
-            cmb.setEnabled(spec is not None)
+            cmb.setEnabled(True)
+        self.btn_make.setEnabled(True)
+        self.btn_point_all.setEnabled(self.state.report is not None)
         if spec:
             for cmb, idx in (
                     (self.cmb_log,
@@ -300,9 +387,14 @@ class ReportTab(StaleMixin, QWidget):
         n_pg = len(st.report.pages) if st.report else 0
         n_w = sum(len(w) for _, w in st.wafer_columns())
         self.lbl_info.setText(
-            f"템플릿 {n_pg}페이지 × 실험 {n_exp}개 = <b>{n_pg * n_exp}페이지</b><br>"
+            f"plot {n_pg}페이지 × 실험 {n_exp}개 → {n_pg * n_exp}페이지\n"
             f"표 {len(st.report.table_names()) if st.report else 0}개 · "
-            f"wafer {n_w}장<br>제외 {len(st.excluded)}점 반영")
+            f"wafer {n_w}장\n"
+            f"제외한 점 {len(st.excluded)}개 반영")
+        # QLabel의 sizeHint가 QSS로 커진 글자를 몇 px 모자라게 잡아 마지막 줄이
+        # 잘린다 — 줄 수만큼 최소 높이를 직접 준다.
+        fm = self.lbl_info.fontMetrics()
+        self.lbl_info.setMinimumHeight(fm.lineSpacing() * 3 + 6)
         self.lbl_excl.setText(f"제외 {len(st.excluded)}점")
 
     def rebuild(self) -> None:

@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QStackedWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -42,6 +45,19 @@ HELP_TEXT = """파일 4종은 이렇게 맞물립니다.
 [템플릿] 메뉴에서 4종 예시를 내려받으면 각 파일의 '설명' 시트에 컬럼 의미와
 규칙이 정리돼 있습니다."""
 
+SHORTCUT_TEXT = """화면
+  Ctrl+1 / Ctrl+2     데이터 · 분석 화면
+  F1                  사용 설명서
+
+데이터 화면
+  F5                  추출하고 적재
+  Esc                 진행 중이면 중지
+
+분석 화면
+  F5                  적용 (고른 파일을 읽고 검증)
+  Ctrl+Enter          보고 있는 탭의 [그리기]·[표 만들기]·[미리보기]
+  Ctrl+Z              제외한 점 되돌리기"""
+
 
 class MainWindow(QMainWindow):
     def __init__(self, settings: Settings, catalog: Catalog,
@@ -61,8 +77,8 @@ class MainWindow(QMainWindow):
         bar = QWidget()
         bar.setObjectName("topbar")
         h = QHBoxLayout(bar)
-        h.setContentsMargins(18, 8, 18, 8)
-        h.setSpacing(10)
+        h.setContentsMargins(16, 7, 14, 7)
+        h.setSpacing(8)
         logo = QWidget()                      # 강조는 색이므로 색은 QSS가 갖는다
         lg = QHBoxLayout(logo)
         lg.setContentsMargins(0, 0, 0, 0)
@@ -72,20 +88,23 @@ class MainWindow(QMainWindow):
             lab.setObjectName(name)
             lg.addWidget(lab)
         h.addWidget(logo)
-        h.addSpacing(14)
+        h.addSpacing(12)
         self.ws_buttons: list[QPushButton] = []
-        for i, name in enumerate(("데이터", "분석")):
+        for i, (name, key) in enumerate((("데이터", "Ctrl+1"), ("분석", "Ctrl+2"))):
             b = QPushButton(name)
             b.setCheckable(True)
             b.setObjectName("wsButton")
             b.setCursor(Qt.PointingHandCursor)
+            b.setToolTip(f"{name} 화면 ({key})")
             b.clicked.connect(lambda _=False, k=i: self._switch(k))
             self.ws_buttons.append(b)
             h.addWidget(b)
+        h.addSpacing(6)
+        self.menu_host = QHBoxLayout()        # 메뉴는 _build_menus가 채운다
+        self.menu_host.setSpacing(2)
+        h.addLayout(self.menu_host)
         h.addStretch(1)
-        self.db_pill = QLabel()
-        self.db_pill.setObjectName("dbPill")
-        h.addWidget(self.db_pill)
+        h.addWidget(self._build_rail())
         v.addWidget(bar)
 
         # ── 스택 ─────────────────────────────────────────────
@@ -98,15 +117,68 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
 
         self.data_ws.loaded.connect(self._after_load)
-        self.bus.data_changed.connect(self._refresh_pill)
+        for sig in (self.bus.data_changed, self.bus.exclusion_changed,
+                    self.bus.status_changed):
+            sig.connect(self._refresh_rail)
 
         self._build_menus()
+        self._build_shortcuts()
         self._switch(1)          # 기본: 분석
-        self._refresh_pill()
+        self._refresh_rail()
+
+    # ── 상태 레일 ────────────────────────────────────────────
+    def _build_rail(self) -> QWidget:
+        """지금 무엇이 물려 있고 계산이 최신인지 한 줄로 — 이 앱의 유일한 전역 상태.
+
+        램프(●◐○)를 함께 두는 이유: 색만으로 알리면 색각 이상 사용자에게는
+        아무 정보도 아니다.
+        """
+        rail = QFrame()
+        rail.setObjectName("statusRail")
+        h = QHBoxLayout(rail)
+        h.setContentsMargins(10, 4, 12, 4)
+        h.setSpacing(7)
+        self.rail_lamp = QLabel("○")
+        self.rail_lamp.setObjectName("railLamp")
+        self.rail_text = QLabel()
+        self.rail_text.setObjectName("railText")
+        h.addWidget(self.rail_lamp)
+        h.addWidget(self.rail_text)
+        return rail
+
+    def _refresh_rail(self) -> None:
+        st = self.state
+        n = 0 if st.data is None else st.data.height
+        n_item = len(st.aliases()) or (
+            0 if st.data is None else
+            len([c for c in st.data.columns
+                 if c not in ("key", "lot", "wafer", "gid")]))
+        parts = [st.db_label, f"item {n_item}", f"포인트 {n:,}"]
+        if st.excluded:
+            parts.append(f"제외 {len(st.excluded)}")
+        if st.status_note:
+            parts.append(st.status_note)
+        self.rail_text.setText("   ·   ".join(parts))
+
+        state = "ok" if st.applied else "dirty" if st.data is not None else "off"
+        self.rail_lamp.setText({"ok": "●", "dirty": "◐", "off": "○"}[state])
+        self.rail_lamp.setProperty("state", state)
+        self.rail_lamp.setToolTip({
+            "ok": "설정이 반영돼 있습니다",
+            "dirty": "바뀐 설정이 아직 반영되지 않았습니다 — [적용] (F5)",
+            "off": "DB가 연결되지 않았습니다",
+        }[state])
+        self.rail_lamp.style().unpolish(self.rail_lamp)
+        self.rail_lamp.style().polish(self.rail_lamp)
 
     # ── 상단 메뉴 (§11.4) ────────────────────────────────────
     def _build_menus(self) -> None:
-        """[템플릿] 예시 내려받기 · [도움말] 네 파일 관계도."""
+        """[템플릿] 예시 내려받기 · [도움말] 네 파일 관계도.
+
+        메뉴는 `menuBar()`에 그대로 만들되 **네이티브 메뉴바는 감추고** 같은
+        QMenu를 상단바의 버튼에 건다. 시스템 메뉴 한 줄이 앱 상단바 위에 또
+        얹히는 모양을 없애면서, 액션 트리는 한 벌만 유지된다.
+        """
         from etreport.export import templates_sample as ts
 
         m = self.menuBar().addMenu("템플릿")
@@ -118,11 +190,35 @@ class MainWindow(QMainWindow):
             lambda: self._save_sample(None))
 
         h = self.menuBar().addMenu("도움말")
-        h.addAction("사용 설명서 (PDF)").triggered.connect(self._open_manual)
+        act = h.addAction("사용 설명서 (PDF)")
+        act.setShortcut(QKeySequence("F1"))
+        act.triggered.connect(self._open_manual)
         h.addAction("파일 4종 관계도").triggered.connect(self._show_help)
+        h.addAction("단축키").triggered.connect(self._show_shortcuts)
         h.addAction("버전").triggered.connect(
             lambda: QMessageBox.information(
                 self, APP_NAME, f"{APP_NAME}  v{__version__}"))
+
+        self.menuBar().setVisible(False)
+        for menu in (m, h):
+            b = QToolButton()
+            b.setObjectName("menuButton")
+            b.setText(menu.title())
+            b.setMenu(menu)
+            b.setPopupMode(QToolButton.InstantPopup)
+            b.setCursor(Qt.PointingHandCursor)
+            self.menu_host.addWidget(b)
+
+    def _build_shortcuts(self) -> None:
+        """창 전역 단축키. 화면 안 동작(그리기·적용)은 각 화면이 갖는다."""
+        for keys, fn in (
+                ("Ctrl+1", lambda: self._switch(0)),
+                ("Ctrl+2", lambda: self._switch(1)),
+                ("F1", self._open_manual)):
+            QShortcut(QKeySequence(keys), self, activated=fn)
+
+    def _show_shortcuts(self) -> None:
+        QMessageBox.information(self, "단축키", SHORTCUT_TEXT)
 
     def _save_sample(self, key: str | None) -> None:
         from etreport.export import templates_sample as ts
@@ -137,12 +233,12 @@ class MainWindow(QMainWindow):
         except Exception as e:                    # noqa: BLE001 — 안내로 끝낸다
             QMessageBox.warning(self, "예시 저장", f"저장하지 못했습니다: {e}")
             return
-        names = "\n".join(f"· {p.name}" for p in made)
-        note = ("" if made[0].suffix == ".csv" else
-                "\n\n같은 파일의 '… 설명' 시트에 컬럼 의미와 규칙이 정리돼 있습니다.")
-        if made[0].suffix == ".csv":
-            note = "\n\nExcel을 쓸 수 없어 CSV로 저장했습니다 (설명은 _설명.csv)."
-        QMessageBox.information(self, "예시 저장", f"{out}\n\n{names}{note}")
+        # 성공은 손을 멈추게 하지 않는다 — 알림 한 줄로 끝낸다.
+        from etreport.ui.widgets.toast import toast
+        note = ("Excel을 쓸 수 없어 CSV로 저장했습니다"
+                if made[0].suffix == ".csv" else
+                "각 파일의 '설명' 시트에 규칙이 정리돼 있습니다")
+        toast(self, f"예시 {len(made)}개를 {out} 에 저장했습니다 — {note}")
 
     def _open_manual(self) -> None:
         """함께 배포된 사용 설명서 PDF를 기본 뷰어로 연다.
@@ -187,13 +283,3 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(idx)
         for i, b in enumerate(self.ws_buttons):
             b.setChecked(i == idx)
-
-    def _refresh_pill(self) -> None:
-        st = self.state
-        n = 0 if st.data is None else st.data.height
-        n_item = len(st.aliases()) or (
-            0 if st.data is None else
-            len([c for c in st.data.columns
-                 if c not in ("key", "lot", "wafer", "gid")]))
-        self.db_pill.setText(
-            f"{st.db_label}   ·   item {n_item}   ·   포인트 {n:,}")

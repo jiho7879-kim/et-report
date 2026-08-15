@@ -91,8 +91,9 @@ class MetrologyDialog(QDialog):
         return sorted(set(st.data["lot"]))
 
     def _load(self) -> None:
+        """조회는 사내망 왕복이라 몇 초씩 걸린다 — 진행 창을 띄우고 워커에서."""
         from etreport.data import metrology as mt
-        st = self.state
+        from etreport.ui.widgets.worker import bdq_call, run_in_background
         lots = self.lots()
         if not lots:
             self.lbl.setText("먼저 [적용]으로 분석 DB를 여세요 — lot을 알 수 없습니다")
@@ -102,31 +103,42 @@ class MetrologyDialog(QDialog):
         items = sorted({i for _, i in pairs}) or None
         sql = mt.build_met_sql(lots, steps=steps, items=items,
                                item_regex=None if items else mt.ITEM_REGEX)
-        try:
-            self.met = mt.fetch(sql)
-        except ImportError:
-            self.lbl.setText("bigdataquery가 없는 환경입니다 — 사내 PC에서 실행하세요")
-            return
-        except Exception as e:                 # noqa: BLE001 — 창은 살린다
-            self.lbl.setText(f"계측 조회 실패: {e}")
-            return
+        self.lbl.setText("계측 조회 중…")
+        run_in_background(self, "inline 계측 조회",
+                          bdq_call(lambda: mt.fetch(sql)),
+                          done=lambda df: self._load_done(df, len(lots)))
+
+    def _load_done(self, met, n_lots: int) -> None:
+        """조회 결과를 프레임에 붙인다 — UI 갱신은 여기서만."""
+        from etreport.data import metrology as mt
+        st = self.state
+        self.met = met
         st.data, names = mt.attach(st.data, self.met, self.level())
         st.met_columns = sorted({*st.met_columns, *names})
         self.lbl.setText(
-            f"lot {len(lots)}개 · 계측 {len(names)}개 붙임 "
+            f"lot {n_lots}개 · 계측 {len(names)}개 붙임 "
             f"({self.level()} level) — 탐색 X축과 Summary에서 쓸 수 있습니다")
         self._show_preview(names)
 
     def _analyze(self) -> None:
         from etreport.data import metrology as mt
+        from etreport.ui.widgets.worker import run_in_background
         st = self.state
         if st.data is None or not st.met_columns:
             self.lbl.setText("먼저 [불러오기]로 계측값을 붙이세요")
             return
         et_items = [c for c in st.aliases() if c in st.data.columns] or [
             c for c in st.data.columns if c not in st.met_columns]
-        top = mt.top_factors(st.data, st.met_columns, et_items,
-                             excluded=st.excluded, k=self.spin_k.value())
+        # 계측 인자 × ET item 전수 훑기 — item이 많으면 수십 초가 걸린다
+        self.lbl.setText("유의 인자 분석 중…")
+        run_in_background(
+            self, "유의 인자 분석",
+            lambda: mt.top_factors(st.data, st.met_columns, et_items,
+                                   excluded=st.excluded, k=self.spin_k.value()),
+            done=self._analyze_done)
+
+    def _analyze_done(self, top) -> None:
+        st = self.state
         st.met_top = top
         if top.is_empty():
             self.lbl.setText("유의 인자를 찾지 못했습니다 (점이 3개 미만일 수 있습니다)")

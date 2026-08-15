@@ -39,6 +39,8 @@ class ExploreTab(StaleMixin, QWidget):
         super().__init__(parent)
         self.state, self.bus = state, bus
         lay = QHBoxLayout(self)
+        lay.setContentsMargins(16, 10, 16, 14)
+        lay.setSpacing(12)
 
         left = QVBoxLayout()
         bar = QHBoxLayout()
@@ -49,6 +51,7 @@ class ExploreTab(StaleMixin, QWidget):
         b.clicked.connect(self._add_to_report)
         bar.addWidget(b)
         self.btn_draw = QPushButton("그리기")
+        self.btn_draw.setToolTip("고른 축으로 다시 그립니다 (Ctrl+Enter)")
         self.btn_draw.clicked.connect(self.redraw)
         bar.addWidget(self.btn_draw)
         bar.addStretch(1)
@@ -303,7 +306,8 @@ class ExploreTab(StaleMixin, QWidget):
         self.mark_fresh()
         if st.data is None:
             self.lbl_info.setText(
-                "데이터 없음 — [데이터]에서 추출·적재하거나 도크에서 DB를 여세요")
+                "불러온 데이터가 없습니다 — 왼쪽에서 DB를 고르고 "
+                "[적용](F5)을 누르거나, [데이터] 화면에서 추출하세요")
             self.canvas.figure.clear()
             self.canvas.draw_idle()
             return

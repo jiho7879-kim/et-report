@@ -10,6 +10,8 @@ import os
 import polars as pl
 import pytest
 
+from etreport.model import wafers
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
@@ -168,8 +170,8 @@ def test_pasted_text_parses_like_a_file():
 
     assert sm.steps == ["M1", "M5"]
     assert sm.wide.height == 2
-    assert sm.assignment(["M1"])[("PA123", "02")] != \
-        sm.assignment(["M1"])[("PA123", "01")]
+    assert sm.assignment(["M1"])[wafers.key("PA123", "02")] != \
+        sm.assignment(["M1"])[wafers.key("PA123", "01")]
 
 
 def test_pasted_text_accepts_commas_and_short_rows():

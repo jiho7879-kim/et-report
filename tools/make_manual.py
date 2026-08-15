@@ -43,6 +43,10 @@ def capture(win, out_dir: Path) -> dict[str, Path]:
 
     def shot(name: str) -> None:
         settle(600)
+        # 레이아웃이 바뀐 뒤에는 offscreen 백킹스토어에 옛 픽셀이 남아 글자가
+        # 겹쳐 찍힌다 — 찍기 직전에 한 번 강제로 다시 그린다.
+        win.repaint()
+        settle(150)
         p = out_dir / f"{name}.png"
         win.grab().save(str(p))
         shots[name] = p

@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import sys
-from pathlib import Path
 
 from etreport import APP_NAME, __version__
 from etreport.paths import log_file
@@ -98,17 +97,10 @@ def _install_excepthook(log: logging.Logger) -> None:
 
 # ── ② 전역 리소스 ─────────────────────────────────────────────
 def _load_style(app) -> None:
-    from etreport import fonts
+    """폰트·스타일 — 실제 내용은 ui/theme.py가 갖는다(시각 단일 진실)."""
+    from etreport.ui import theme
 
-    fonts.setup_qt(app)                       # 한글 폰트 먼저 (OS별로 다르다)
-    qss = Path(__file__).with_name("ui") / "style.qss"
-    if not qss.exists():                      # 빌드 시 --add-data 누락 등
-        logging.getLogger("etreport").warning("style.qss를 찾지 못했습니다: %s", qss)
-        return
-    ui_font, mono_font = fonts.qss_stacks()
-    css = qss.read_text(encoding="utf-8")
-    app.setStyleSheet(css.replace("%UI_FONT%", ui_font)
-                         .replace("%MONO_FONT%", mono_font))
+    theme.apply(app)
 
 
 def _make_qapp(qt_args: list[str]):
