@@ -204,7 +204,31 @@ def to_tsv(td: TableData, opt: SummaryOptions | None = None) -> str:
     return "\n".join(lines)
 
 
-def _runs(keys: list[tuple]) -> list[tuple[int, int]]:
+def number_format(v: float | None) -> str | None:
+    """셀 하나의 표시 자릿수 — `model/specs.fmt_value`와 같은 경계(<1·≤10)."""
+    if v is None:
+        return None
+    a = abs(v)
+    return "0.000" if a < 1 else "0.00" if a <= 10 else "0.0"
+
+
+def format_runs(values: list[float | None]) -> list[tuple[int, int, str]]:
+    """값 목록 → `(시작, 끝, 서식)` 구간들. **빈 칸 구간은 빼고 돌려준다.**
+
+    xlsx 내보내기가 셀마다 COM을 왕복하지 않게 하려는 것이다 — 한 item의 값은
+    대개 자릿수가 같아 한 행이 구간 1~2개로 접힌다(wafer 43장이면 왕복 43회가
+    1~2회로 준다).
+    """
+    fmts = [number_format(v) for v in values]
+    return [(c0, c1, fmts[c0]) for c0, c1 in _runs(fmts) if fmts[c0] is not None]
+
+
+def flag_runs(flags: list[bool]) -> list[tuple[int, int]]:
+    """참인 구간만 `(시작, 끝)`으로 — 규격 이탈 셀 서식용."""
+    return [(c0, c1) for c0, c1 in _runs(list(flags)) if flags[c0]]
+
+
+def _runs(keys: list) -> list[tuple[int, int]]:
     """같은 값이 이어지는 구간의 (시작, 끝) 인덱스 — 세로 병합용.
 
     키에 상위 CAT을 포함해 넘기므로 **상위가 바뀌면 하위 병합도 끊긴다**(§3.3).
@@ -281,18 +305,20 @@ def export_xlsx(tables: list[TableData], path: str, opt: SummaryOptions) -> None
             body = [v + [None if x is None else round(x, 6) for x in r["values"]]
                     for v, r in zip(vals, td.rows)]
             sht["A4"].value = body
-            for ri, r in enumerate(td.rows, start=4):   # 자릿수 + 규격 이탈
-                for ci, (v, off) in enumerate(zip(r["values"], r["offspec"]),
-                                              start=n_lab + 1):
-                    cell = sht.range((ri, ci))
-                    if v is not None:
-                        a = abs(v)
-                        cell.number_format = ("0.000" if a < 1
-                                              else "0.00" if a <= 10 else "0.0")
-                    if off:
-                        cell.color = RED_BG
-                        cell.font.color = RED_TX
-                        cell.font.bold = True
+            # 자릿수 + 규격 이탈 — **셀 하나씩 만지지 않는다.**
+            # xlwings의 `sht.range(...)` 접근과 속성 대입은 각각 COM 왕복이라,
+            # wafer 43장 × item 60개면 5천 번을 넘고 멀티 lot(300열)이면 4만 번이
+            # 된다. 같은 서식이 이어지는 구간(run)으로 묶으면 왕복이 행 수준으로
+            # 줄어든다 — 한 item의 값은 대개 자릿수가 같아 행마다 1~2회다.
+            for ri, r in enumerate(td.rows, start=4):
+                for c0, c1, fmt in format_runs(r["values"]):
+                    sht.range((ri, n_lab + 1 + c0),
+                              (ri, n_lab + 1 + c1)).number_format = fmt
+                for c0, c1 in flag_runs(r["offspec"]):
+                    rng = sht.range((ri, n_lab + 1 + c0), (ri, n_lab + 1 + c1))
+                    rng.color = RED_BG
+                    rng.font.color = RED_TX
+                    rng.font.bold = True
             # CAT 세로 병합 — item 열은 빼고, 상위가 바뀌면 하위도 끊는다(§3.3)
             for col in range(1, n_lab):
                 for r0, r1 in _runs([tuple(v[:col]) for v in vals]):

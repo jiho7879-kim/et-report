@@ -521,8 +521,12 @@ class ReportTab(StaleMixin, QWidget):
         if not out:
             return
         from etreport.export.deckbuild import generate
-        # 페이지 × 실험 × plot 6개를 전부 렌더하므로 수 분이 걸릴 수 있다.
+        # 페이지 × 실험 × plot 6개를 전부 렌더하므로 수 분이 걸릴 수 있다 —
+        # 슬라이드마다 진행을 받아 확정 막대로 보여준다(도는 막대는 멈춘 것과
+        # 구별되지 않는다).
         run_in_background(
-            self, "PPT 생성", lambda: generate(st, out),
+            self, "PPT 생성", lambda report: generate(st, out,
+                                                     on_progress=report),
             done=lambda path: QMessageBox.information(
-                self, "완료", f"저장됨:\n{path}"))
+                self, "완료", f"저장됨:\n{path}"),
+            with_progress=True)

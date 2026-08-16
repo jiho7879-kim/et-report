@@ -53,13 +53,34 @@ class LoadReport:
         return "\n".join(out)
 
 
-def apply_config(state: AppState, cfg: AnalysisConfig) -> LoadReport:
-    """설정 하나를 상태에 적용. 예외를 던지지 않고 LoadReport로 돌려준다."""
+def apply_config(state: AppState, cfg: AnalysisConfig,
+                 on_progress=None) -> LoadReport:
+    """설정 하나를 상태에 적용. 예외를 던지지 않고 LoadReport로 돌려준다.
+
+    `on_progress(done, total, 라벨)`을 주면 단계마다 부른다. 네 단계는 각각
+    수 초~수십 초(Excel 실행·DuckDB 조회)라, 어디에서 기다리는지 보이지 않으면
+    창이 멈춘 것과 구별되지 않는다. 분모는 **실제로 돌 단계 수**로 미리 센다.
+    """
     rep = LoadReport()
     t0 = time.monotonic()
 
+    stages = [bool(cfg.reformatter_path),
+              bool(cfg.plot_template_path and cfg.table_template_path),
+              bool(cfg.split_path or getattr(cfg, "split_text", "")),
+              bool(cfg.db_path)]
+    total = sum(stages)
+    step = 0
+
+    def tick(label: str) -> None:
+        nonlocal step
+        step += 1
+        if on_progress:
+            on_progress(step, total, label)
+
     # 1) 리포메터 ---------------------------------------------
     if cfg.reformatter_path:
+        if on_progress:
+            on_progress(step, total, "리포메터 읽는 중")
         try:
             from etreport.data.reformatter import load as rf_load
             rf = rf_load(cfg.reformatter_path, cfg.reformatter_sheet or 0)
@@ -82,9 +103,12 @@ def apply_config(state: AppState, cfg: AnalysisConfig) -> LoadReport:
             f"리포메터  REAL {len(rf.reals())} · ADDP {len(rf.addps())}")
         rep.warnings += [f"[리포메터] {w.row}행 {w.alias}: {w.message}"
                          for w in rf.warnings]
+        tick("리포메터 완료")
 
     # 2) 템플릿 -----------------------------------------------
     if cfg.plot_template_path and cfg.table_template_path:
+        if on_progress:
+            on_progress(step, total, "템플릿 읽는 중")
         try:
             from etreport.model.templates import build_report
             from etreport.model.templates import load as tpl_load
@@ -113,9 +137,12 @@ def apply_config(state: AppState, cfg: AnalysisConfig) -> LoadReport:
                 f"템플릿  {report} · {len(state.report.pages)}페이지 · "
                 f"표 {len(state.report.table_names())}개")
         rep.warnings += [f"[{w.sheet}] {w.row}행: {w.message}" for w in t.warnings]
+        tick("템플릿 완료")
 
     # 3) 실험 조건 --------------------------------------------
     if cfg.split_path or getattr(cfg, "split_text", ""):
+        if on_progress:
+            on_progress(step, total, "실험 조건 읽는 중")
         try:
             from etreport.model.split import (
                 BASELINE_DEFAULT,
@@ -142,9 +169,12 @@ def apply_config(state: AppState, cfg: AnalysisConfig) -> LoadReport:
                     f"{cf[0].step}가 섞여 있습니다")
         except Exception as e:                       # noqa: BLE001
             rep.warnings.append(f"[실험] 조건 파일을 읽지 못했습니다: {e}")
+        tick("실험 조건 완료")
 
     # 4) DuckDB -----------------------------------------------
     if cfg.db_path:
+        if on_progress:
+            on_progress(step, total, "DB 읽는 중")
         try:
             from etreport.data.loader import load_state
             rep.lines.append("DB  " + load_state(state, cfg.db_path,
@@ -161,6 +191,7 @@ def apply_config(state: AppState, cfg: AnalysisConfig) -> LoadReport:
             rep.notes += cov_build(state).lines()
         except Exception as e:                       # noqa: BLE001 — 부가 정보일 뿐이다
             log.debug("커버리지 요약 실패(무시): %s", e)
+        tick("DB 완료")
 
     state.log_patterns = cfg.log_patterns or state.log_patterns
     state.lot_split_symbols = bool(getattr(cfg, "lot_split_symbols", False))

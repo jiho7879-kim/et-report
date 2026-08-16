@@ -333,13 +333,17 @@ def _render_trend(spec: PlotSpec,
         if not st.visible or st.gid not in data:
             continue
         df = data[st.gid]
+        # wafer 집계는 **item마다가 아니라 그룹마다 한 번**이다 — wafer_stats는
+        # alias 여러 개를 group_by 한 번으로 함께 계산한다. item마다 부르면
+        # 그 group_by가 item 수만큼 반복된다(alias 25개 기준 실측 19배).
+        ws = (None if spec.mode == "site"
+              else wafer_stats(df, excluded_keys, plotted, spec.mode))
         for it in plotted:
-            if spec.mode == "site":
+            if ws is None:
                 if it not in df.columns:
                     continue
                 ys = df[it].drop_nulls().to_list()
             else:
-                ws = wafer_stats(df, excluded_keys, [it], spec.mode)
                 ys = [v for vals in ws.values.values()
                       if (v := vals.get(it)) is not None]
             if not ys:

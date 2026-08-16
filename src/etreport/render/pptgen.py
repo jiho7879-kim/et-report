@@ -87,6 +87,32 @@ def table_mode_of(mode: str) -> str:
     return "split" if str(mode).lower() == "split" else "overflow"
 
 
+def set_grid(frame, col_widths: list[int], row_h: int) -> None:
+    """표의 열 폭·행 높이를 한 번에 — **python-pptx의 setter를 쓰지 않는다.**
+
+    `table.columns[i].width = …`는 setter마다 `notify_width_changed()`를 부르고,
+    그 안에서 `sum(col.width for col in self.columns)`가 전체 열을 다시 훑는다.
+    `columns[idx]`는 그때마다 `gridCol_lst`(lxml findall)를 새로 만들기 때문에,
+    열 N개를 정하는 데 XML 스캔이 N²번 일어난다. 행 높이도 같은 구조다.
+
+    wafer가 많아질수록 이 항이 표 한 장의 시간을 지배한다 — 측정으로 표 1장이
+    wafer 43장에서 3.6초, 344장에서 57.8초였고 그중 대부분이 여기였다. 아래처럼
+    XML에 직접 쓰면 43장 2.5초·344장 25.0초가 된다(덱 전체로는 6배).
+
+    setter를 건너뛰므로 그래픽 프레임 크기가 자동으로 따라오지 않는다. 그래서
+    **합을 여기서 직접 대입한다** — python-pptx가 계산하던 값(열 폭의 합, 행
+    높이의 합)과 같은 값이라 산출물은 동일하다.
+    """
+    tbl = frame.table._tbl
+    for gridCol, w in zip(tbl.tblGrid.gridCol_lst, col_widths):
+        gridCol.w = Emu(w)
+    rows = tbl.tr_lst
+    for tr in rows:
+        tr.h = Emu(row_h)
+    frame.width = Emu(sum(col_widths))
+    frame.height = Emu(row_h * len(rows))
+
+
 def build_deck(
     report: ReportSpec,
     experiments: list[str],                    # factor 이름들. 반복 없으면 [""]
@@ -102,12 +128,18 @@ def build_deck(
     meta: dict | None = None,                  # 표지에 넣을 메타데이터
     split_rows=None,                           # 실험 조건 매트릭스(wide)
     lot_split: bool = False,                   # lot마다 심볼을 달리할지(§9.2)
+    on_progress=None,                          # (done, total, 라벨) — 진행 표시용
 ) -> Presentation:
     """페이지 순서: **표지 → (실험 조건) → plot 전부 → 표 전부 →
     (그룹별 평균 표) → (유의 인자) → 제외 이력**.
 
     표지·실험 조건·그룹별 평균은 사용자 요청으로 붙었고, 그 사이 순서는 확정
     사양(§7.2) 그대로다 — 표는 실험과 무관하므로 한 벌씩만 만든다.
+
+    `on_progress(done, total, 라벨)`을 주면 슬라이드 한 장을 마칠 때마다 부른다.
+    덱은 수십 초~수 분이 걸리는데 진행이 보이지 않으면 멈춘 것과 구별되지 않는다.
+    분할(split)은 **미리 한 번만** 계산해 총 장수를 먼저 확정한다 — 진행률의
+    분모가 도중에 바뀌면 막대가 뒤로 가는 것처럼 보인다.
     """
     prs = Presentation()
     prs.slide_width = Inches(BASE_W_IN)         # 항상 16:9 (§7.1)
@@ -115,10 +147,30 @@ def build_deck(
     blank = prs.slide_layouts[6]
     mode = table_mode_of(table_mode)
 
+    def parts_of(tds: list[TableData]) -> list[TableData]:
+        return [p for td in tds
+                for p in (split_table(td) if mode == "split" else [td])]
+
+    table_parts = parts_of(tables)
+    group_parts = parts_of(group_tables or [])
+    n_plot = len(experiments) * len(report.pages)
+    total = (bool(meta) + (split_rows is not None) + n_plot
+             + len(table_parts) + len(group_parts)
+             + (factors is not None and not factors.is_empty()) + 1)
+    done = 0
+
+    def tick(label: str) -> None:
+        nonlocal done
+        done += 1
+        if on_progress:
+            on_progress(done, total, label)
+
     if meta:
         _title_slide(prs, blank, meta)
+        tick("표지")
     if split_rows is not None:
         _split_slide(prs, blank, split_rows)
+        tick("실험 조건")
 
     for exp in experiments:
         styles = group_styles_of(exp)
@@ -128,18 +180,21 @@ def build_deck(
             _add_title(slide, prs, page.title + suffix)
             _fill_slots(slide, prs, page, exp, styles,
                         plot_data_of, rf, log_patterns, lot_split)
+            tick(f"plot — {page.title}{suffix}")
 
-    for td in tables:
-        for part in (split_table(td) if mode == "split" else [td]):
-            _table_slide(prs, blank, part)
+    for part in table_parts:
+        _table_slide(prs, blank, part)
+        tick(f"표 — {part.name}")
 
-    for td in (group_tables or []):            # 그룹별 평균 — 표 뒤쪽에 차례로
-        for part in (split_table(td) if mode == "split" else [td]):
-            _table_slide(prs, blank, part)
+    for part in group_parts:                   # 그룹별 평균 — 표 뒤쪽에 차례로
+        _table_slide(prs, blank, part)
+        tick(f"표 — {part.name}")
 
     if factors is not None and not factors.is_empty():
         _factor_slide(prs, blank, factors)
+        tick("유의 인자")
     _exclusion_slide(prs, blank, exclusion_log)
+    tick("제외 이력")
     return prs
 
 
@@ -241,16 +296,15 @@ def _table_slide(prs, layout, td: TableData) -> None:
     n_rows, n_cols = 2 + len(td.rows), n_lab + len(wafers)
     top = Inches(0.18 + TITLE_H_IN + 0.2)
     height = Inches(min(BASE_H_IN - 1.5, n_rows * ROW_H_IN))
-    tbl = slide.shapes.add_table(n_rows, n_cols, Inches(MARGIN_IN), top,
-                                 Inches(total_w), height).table
+    frame = slide.shapes.add_table(n_rows, n_cols, Inches(MARGIN_IN), top,
+                                   Inches(total_w), height)
+    tbl = frame.table
     tbl.first_row = False          # 기본 파란 줄무늬 스타일 제거(§7.4)
     tbl.horz_banding = False
-    for i, w in enumerate(label_widths_in(n_lab)):
-        tbl.columns[i].width = Inches(w)
-    for i in range(n_lab, n_cols):
-        tbl.columns[i].width = Inches(wafer_w)
-    for r in range(n_rows):
-        tbl.rows[r].height = Inches(ROW_H_IN)
+    # 열 폭·행 높이는 set_grid로 — python-pptx의 setter는 열 수의 제곱으로 느리다
+    widths = [Inches(w) for w in label_widths_in(n_lab)]
+    widths += [Inches(wafer_w)] * (n_cols - n_lab)
+    set_grid(frame, widths, Inches(ROW_H_IN))
 
     # ── 병합 먼저 (§10.5) ────────────────────────────────────
     c = n_lab

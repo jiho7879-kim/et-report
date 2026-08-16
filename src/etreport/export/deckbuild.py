@@ -124,10 +124,17 @@ def deck_meta(state: AppState) -> dict:
     return meta
 
 
-def generate(state: AppState, out_path: str) -> str:
+def generate(state: AppState, out_path: str, on_progress=None) -> str:
+    """`on_progress(done, total, 라벨)`을 주면 슬라이드마다 진행을 알린다.
+
+    집계(표 만들기)와 저장은 슬라이드 수에 안 들어가므로 라벨로만 알린다 —
+    분모를 흔들지 않으면서 "무엇을 하는 중인지"는 보이게 하기 위해서다.
+    """
     experiments = state.factors if len(state.factors) > 1 else [""]
     from etreport.data.loader import exclusion_frame
     exlog = exclusion_frame(state)
+    if on_progress:
+        on_progress(0, 0, "표 집계 중")
     prs = pptgen.build_deck(
         report=state.report,
         experiments=experiments,
@@ -143,9 +150,12 @@ def generate(state: AppState, out_path: str) -> str:
         meta=deck_meta(state),                     # 표지
         split_rows=(state.split.wide if state.split is not None else None),
         lot_split=bool(getattr(state, "lot_split_symbols", False)),
+        on_progress=on_progress,
     )
     p = Path(out_path)
     if p.suffix.lower() != ".pptx":
         p = p.with_suffix(".pptx")
+    if on_progress:
+        on_progress(0, 0, "파일 저장 중")
     prs.save(str(p))
     return str(p)

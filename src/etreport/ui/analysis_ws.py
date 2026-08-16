@@ -564,8 +564,10 @@ class AnalysisWorkspace(QWidget):
         self.btn_apply.setText("읽는 중…")
         self.setEnabled(False)                 # 재진입·중복 적용 방지
         w = run_in_background(
-            self, "설정 적용", lambda: apply_config(self.state, c),
-            done=lambda rep: self._apply_done(c, rep), needs_com=True)
+            self, "설정 적용",
+            lambda report: apply_config(self.state, c, on_progress=report),
+            done=lambda rep: self._apply_done(c, rep), needs_com=True,
+            with_progress=True)
         # 실패해도 잠금은 풀려야 한다 — done은 성공했을 때만 불린다
         w.finished.connect(self._apply_unlock)
 

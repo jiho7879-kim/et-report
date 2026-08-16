@@ -36,15 +36,25 @@ def bdq_call(fn: Callable[[], object]) -> Callable[[], object]:
 
 
 class Worker(QThread):
-    """fn()을 스레드에서 실행하고 결과(또는 예외)를 그대로 넘긴다."""
+    """fn()을 스레드에서 실행하고 결과(또는 예외)를 그대로 넘긴다.
+
+    `wants_progress=True`면 fn에 **보고 함수 하나를 인자로 넘긴다** —
+    `fn(report)`이고 `report(done, total, 라벨)`이다. 보고는 시그널로 나가므로
+    워커 스레드에서 불러도 안전하다(위젯은 UI 스레드에서만 만진다).
+    """
 
     finished_with = Signal(object)
+    progressed = Signal(int, int, str)
 
-    def __init__(self, fn: Callable[[], object], needs_com: bool = False,
-                 parent=None) -> None:
+    def __init__(self, fn: Callable[..., object], needs_com: bool = False,
+                 parent=None, wants_progress: bool = False) -> None:
         super().__init__(parent)
         self._fn = fn
         self._needs_com = needs_com
+        self._wants_progress = wants_progress
+
+    def _report(self, done: int, total: int, label: str = "") -> None:
+        self.progressed.emit(int(done), int(total), str(label))
 
     def run(self) -> None:
         com = None
@@ -56,7 +66,8 @@ class Worker(QThread):
             except ImportError:
                 pass                           # 비 Windows — 어차피 xlwings도 없다
         try:
-            self.finished_with.emit(self._fn())
+            self.finished_with.emit(
+                self._fn(self._report) if self._wants_progress else self._fn())
         except Exception as e:
             log.exception("백그라운드 작업 실패")
             self.finished_with.emit(e)
@@ -65,12 +76,19 @@ class Worker(QThread):
                 com.CoUninitialize()
 
 
-def run_in_background(parent, title: str, fn: Callable[[], object],
+def run_in_background(parent, title: str, fn: Callable[..., object],
                       done: Callable[[object], None] | None = None,
-                      needs_com: bool = False) -> Worker:
+                      needs_com: bool = False,
+                      with_progress: bool = False) -> Worker:
     """진행 창을 띄우고 fn을 워커에서 실행. 실패는 메시지 박스로 보여준다.
 
     반환된 Worker는 parent에 붙잡아 두므로 호출측이 따로 보관할 필요는 없다.
+
+    `with_progress=True`면 fn은 인자 하나(보고 함수)를 받는다 —
+    `fn(report)` · `report(done, total, 라벨)`. 진행 창이 도는 막대에서
+    **확정 막대**로 바뀐다. PPT 생성처럼 수 분이 걸리는 작업에서 "멈춘 것 같다"는
+    인상을 없애는 것이 목적이다. `total`이 0 이하면 **라벨만 바꾸고 막대는
+    그대로 둔다** — 장수를 셀 수 없는 단계(집계·저장)를 알리는 데 쓴다.
     """
     dlg = QProgressDialog(f"{title} 중…", "", 0, 0, parent)
     dlg.setWindowTitle(title)
@@ -80,7 +98,19 @@ def run_in_background(parent, title: str, fn: Callable[[], object],
     dlg.setAutoClose(False)
     dlg.show()
 
-    worker = Worker(fn, needs_com, parent)
+    worker = Worker(fn, needs_com, parent, wants_progress=with_progress)
+
+    def _on_progress(done_n: int, total: int, label: str) -> None:
+        # 창이 이미 닫혔으면 조용히 무시한다(늦게 도착한 보고)
+        if not dlg.isVisible():
+            return
+        if total > 0:
+            if dlg.maximum() != total:
+                dlg.setRange(0, total)
+            dlg.setValue(done_n)
+        dlg.setLabelText(f"{title} — {label}" if label else f"{title} 중…")
+
+    worker.progressed.connect(_on_progress)
 
     def _on_done(result) -> None:
         dlg.close()
