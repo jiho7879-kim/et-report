@@ -143,8 +143,16 @@ def load(path: str, sheet: str | int = 0) -> Reformatter:
     """
     from etreport.data.xlio import read_sheet
 
+    return from_frame(read_sheet(path, sheet))
+
+
+def from_frame(raw: pl.DataFrame) -> Reformatter:
+    """리포메터 시트 표 하나 → **검증까지 마친** Reformatter.
+
+    파일을 거치지 않는 입구다(데모·테스트). 헤더 정규화·플래그 해석·검증이
+    load()와 같은 코드라서 "파일로 읽었을 때만 걸리는 오류"가 생기지 않는다.
+    """
     rf = Reformatter()
-    raw = read_sheet(path, sheet)
 
     # 유저가 헤더를 'ADDP FORM'/'ADDPFORM'/'ADDP_FORM' 등으로 조금씩 다르게
     # 적더라도 같은 컬럼으로 본다(공백·밑줄·대소문자 무시). 정확한 표준 헤더가

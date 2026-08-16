@@ -83,16 +83,27 @@ class Templates:
 def load(plot_path: str, table_path: str, rf: Reformatter,
          plot_sheet: str | int = 0, table_sheet: str | int = 0) -> Templates:
     from etreport.data.xlio import read_sheet, read_sheets
-    t = Templates()
     if Path(plot_path).resolve() == Path(table_path).resolve():
         a, b = read_sheets(plot_path, [plot_sheet, table_sheet])
     else:
         a = read_sheet(plot_path, plot_sheet)
         b = read_sheet(table_path, table_sheet)
-    t.plot_rows = _with_rowno(a)
-    t.table_rows = _with_rowno(b)
+    t = from_frames(a, b, rf)
     t.plot_source = (plot_path, plot_sheet)
     t.table_source = (table_path, table_sheet)
+    return t
+
+
+def from_frames(plot_df: pl.DataFrame, table_df: pl.DataFrame,
+                rf: Reformatter) -> Templates:
+    """이미 읽어 둔 표 두 장 → **검증까지 마친** Templates.
+
+    파일을 거치지 않는 입구다(데모·테스트). 검증은 load()와 같은 코드를
+    타므로 "파일로 읽었을 때만 걸리는 오류"가 생기지 않는다.
+    """
+    t = Templates()
+    t.plot_rows = _with_rowno(plot_df)
+    t.table_rows = _with_rowno(table_df)
     _validate(t, rf)
     return t
 

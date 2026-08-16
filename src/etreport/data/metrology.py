@@ -183,19 +183,27 @@ def top_factors(data: pl.DataFrame, met_names: list[str], et_items: list[str],
                 group_col: str = "gid") -> pl.DataFrame:
     """계측 인자 × ET item의 관계를 훑어 **유의미한 순으로 k개**.
 
-    두 가지를 함께 본다(확정 요구):
+    세 가지를 함께 본다(확정 요구):
       - 상관: wafer 집계값끼리의 피어슨 r (|r|이 클수록 위)
+      - **lot 내 상관 `r_within`**: lot마다 따로 구해 wafer 수로 가중 평균한 값
       - 그룹 간 유의차: REF/그 외 그룹으로 나눈 Welch t
+
+    lot을 여러 개 놓고 상관을 구하면 lot 사이의 평균 차이만으로도 r이 커진다
+    ("lot 효과"). 그러면 lot 안에서는 아무 관계가 없는 쌍이 상위로 올라온다.
+    그래서 **정렬은 둘 중 보수적인 쪽**(|r|과 |r_within| 중 작은 값)으로 한다 —
+    두 값이 갈리는 쌍은 화면에서 표식으로 알린다. lot이 하나면 두 값이 같아
+    지금까지의 순위 그대로다.
 
     wafer 집계는 `model/aggregate.wafer_stats`를 쓴다 — 화면·표·PPT와 같은
     숫자여야 한다.
     """
     from etreport.model.aggregate import wafer_stats
 
+    empty = {"met": pl.Utf8, "item": pl.Utf8, "r": pl.Float64,
+             "r_within": pl.Float64, "lots": pl.Int64, "n": pl.Int64,
+             "t": pl.Float64, "score": pl.Float64}
     if data is None or data.is_empty() or not met_names or not et_items:
-        return pl.DataFrame(schema={"met": pl.Utf8, "item": pl.Utf8,
-                                    "r": pl.Float64, "n": pl.Int64,
-                                    "t": pl.Float64, "score": pl.Float64})
+        return pl.DataFrame(schema=empty)
     aliases = [c for c in {*met_names, *et_items} if c in data.columns]
     st = wafer_stats(data, excluded or set(), aliases, "avg")
     keys = sorted(st.values)
@@ -217,6 +225,7 @@ def top_factors(data: pl.DataFrame, met_names: list[str], et_items: list[str],
             xs = [x for x, _ in pairs]
             ys = [y for _, y in pairs]
             r = _pearson(xs, ys)
+            r_within, n_lots = _within_lot_r(st.values, keys, met, item)
             t = None
             if groups:
                 by: dict[str, list[float]] = {}
@@ -228,14 +237,52 @@ def top_factors(data: pl.DataFrame, met_names: list[str], et_items: list[str],
                 if len(by) >= 2:
                     big = sorted(by.values(), key=len, reverse=True)[:2]
                     t = _welch_t(big[0], big[1])
-            score = max(abs(r or 0.0), min(abs(t or 0.0) / 3.0, 1.0))
-            rows.append({"met": met, "item": item, "r": r, "n": len(pairs),
-                         "t": t, "score": score})
+            # lot 효과로 부풀려진 상관이 위로 올라오지 않게 보수적인 쪽을 쓴다.
+            # lot이 하나뿐이면 r_within이 None이라 예전과 같은 값이 된다.
+            r_use = abs(r or 0.0) if r_within is None else min(
+                abs(r or 0.0), abs(r_within))
+            score = max(r_use, min(abs(t or 0.0) / 3.0, 1.0))
+            rows.append({"met": met, "item": item, "r": r,
+                         "r_within": r_within, "lots": n_lots,
+                         "n": len(pairs), "t": t, "score": score})
     if not rows:
-        return pl.DataFrame(schema={"met": pl.Utf8, "item": pl.Utf8,
-                                    "r": pl.Float64, "n": pl.Int64,
-                                    "t": pl.Float64, "score": pl.Float64})
-    return (pl.DataFrame(rows).sort("score", descending=True).head(k))
+        return pl.DataFrame(schema=empty)
+    return (pl.DataFrame(rows, schema=empty)
+            .sort("score", descending=True).head(k))
+
+
+def _within_lot_r(values: dict, keys: list, met: str,
+                  item: str) -> tuple[float | None, int]:
+    """lot 안에서만 구한 상관을 wafer 수로 가중 평균. (값, 쓴 lot 수).
+
+    lot이 하나뿐이면 **None**을 돌려준다 — 합친 상관과 같은 값이므로 따로
+    보여 줄 것이 없고, 호출부가 '비교할 수 없음'과 '같음'을 구분하게 된다.
+    wafer가 3장 미만인 lot은 뺀다(전체 상관의 기준과 같다).
+
+    함께 돌려주는 수는 **상관을 구할 수 있었던 lot 수**다 — 표의 `lots` 열이
+    "몇 개의 lot을 견줘 본 값인가"를 말해야 해석이 된다.
+    """
+    by_lot: dict[str, list[tuple[float, float]]] = {}
+    for k in keys:
+        lot = k[0] if isinstance(k, tuple) else k
+        x, y = values[k].get(met), values[k].get(item)
+        if x is not None and y is not None:
+            by_lot.setdefault(str(lot), []).append((x, y))
+    usable = {lot: pr for lot, pr in by_lot.items() if len(pr) >= 3}
+    if len(usable) < 2:
+        return None, len(usable)
+    num = den = 0.0
+    used = 0
+    for pr in usable.values():
+        r = _pearson([x for x, _ in pr], [y for _, y in pr])
+        if r is None:                     # 한쪽 값이 전부 같으면 상관이 없다
+            continue
+        num += r * len(pr)
+        den += len(pr)
+        used += 1
+    if not den or used < 2:
+        return None, used
+    return num / den, used
 
 
 def match_regex(items: list[str], pattern: str = ITEM_REGEX) -> list[str]:

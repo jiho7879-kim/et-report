@@ -42,7 +42,8 @@ def test_sections_mention_the_new_features():
         for line in [s.title, *s.body, *s.tail,
                      *(f"{k} {v}" for k, v in s.rows)])
     for word in ("그룹별 평균", "그룹별 wafer", "중앙값", "표지",
-                 "실험 조건", "S3", "inline 계측", "5의 배수"):
+                 "실험 조건", "S3", "inline 계측", "5의 배수",
+                 "규격 창", "타깃"):
         assert word in text, word
 
 

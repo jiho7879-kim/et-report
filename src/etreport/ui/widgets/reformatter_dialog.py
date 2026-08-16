@@ -92,8 +92,9 @@ class ReformatterDialog(QDialog):
 
     # ── 동작 ─────────────────────────────────────────────────
     def _pick_file(self) -> None:
-        p, _ = QFileDialog.getOpenFileName(self, "리포메터", "",
-                                           "Excel (*.xlsx *.xlsm)")
+        p, _ = QFileDialog.getOpenFileName(
+            self, "리포메터", "",
+            "리포메터 (*.xlsx *.xlsm *.csv *.tsv);;Excel (*.xlsx *.xlsm);;CSV (*.csv *.tsv)")
         if p:
             self.path = p
             self.lbl_file.setText(p)

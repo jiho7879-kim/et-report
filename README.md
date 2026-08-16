@@ -8,7 +8,7 @@
 ```
 pip install PySide6 polars pyarrow duckdb matplotlib python-pptx requests packaging
 python app.py            # 실사용 모드 (빈 상태로 시작)
-python app.py --demo     # 샘플 데이터로 UI 확인
+python app.py --demo     # 데모 — DB·Excel·bdq 없이 모든 기능 확인
 ```
 `bigdataquery`(추출)·`xlwings`(엑셀 읽기/쓰기)는 사내 PC에서만 필요합니다.
 
@@ -132,7 +132,10 @@ python build/build_release.py --publish  # 사내 GitHub 릴리스까지
 app.py                    ★ 개발 실행 진입점  (python app.py)
 src/etreport/
 ├─ app.py                 부팅: 설정·카탈로그 → 상태 → 창 → 업데이트 확인
-├─ demo.py                DB 없이도 화면이 돌도록 채우는 샘플 데이터
+├─ demo.py                데모 모드 진입 — 상태 채우기 + 번들·가짜 소스 준비
+├─ demo_data.py           데모 데이터 정의(리포메터·템플릿·실험 조건·raw 측정값)
+├─ demo_bundle.py         데모 번들 파일 생성(DuckDB·csv·xlsx·안내 문서)
+├─ demo_sources.py        데모용 가짜 사내 소스(추출·계측·tracking·S3)
 ├─ fonts.py               한글 폰트 해결(Qt·matplotlib 공용, WSL/리눅스 포함)
 ├─ paths.py               %APPDATA%\ETReport 하위 저장 위치
 ├─ config/

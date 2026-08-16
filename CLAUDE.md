@@ -8,7 +8,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 myenv/bin/python app.py            # 개발 실행 (빈 상태)
-myenv/bin/python app.py --demo     # 샘플 데이터로 UI 확인 (DB·Excel 없이, 업데이트 확인 생략)
+myenv/bin/python app.py --demo     # 데모 — DB·Excel·bdq 없이 모든 기능 확인
+myenv/bin/python app.py --demo --demo-rebuild --demo-dir /tmp/etdemo  # 번들 위치·재생성
+myenv/bin/python app.py --demo --demo-lite   # 화면만(번들 파일·가짜 소스 없이)
+myenv/bin/python tools/make_demo.py --out /tmp/etdemo  # 앱 없이 번들만 만들기
 myenv/bin/python app.py --no-update --log-level DEBUG   # 버전 확인 끄기 · 상세 로그
 myenv/bin/etreport                 # editable 설치된 콘솔 스크립트 (= etreport.app:main)
 
@@ -80,6 +83,9 @@ myenv/bin/ruff check --fix .                        # 안전한 것만 자동 �
 | `test_hover_states.py` | 버튼 상태 픽셀(기본·dirty·ghost)이 `theme.TOKENS`와 일치 |
 | `test_app_boot.py` | 부팅 — 콘솔 없는 exe에서의 로깅, excepthook, 카탈로그 폴백 |
 | `test_ui_smoke.py` | 데모 데이터로 창을 조립(headless) — 탭 구성·지연 계산·복사 일치 |
+| `test_demo.py` | **데모 계약** — 기능 덮개·번들 파일 == 화면 값·가짜 소스로 추출→적재 |
+| `test_xlio_csv.py` | csv·tsv 입력(열 타입 규칙·0으로 시작하는 코드·되쓰기) |
+| `test_multi_lot.py` | **§9.2** lot 선택 SQL(안 고르면 예전과 동일)·커버리지·lot 심볼·표 lot 경계·기준 lot |
 | `test_bigset.py` (slow) | 실측 규모 성능·정확성 회귀 (`-s`로 단계별 시간 출력) |
 
 `tools/make_testset.py`는 **사내 PC에서 실제 앱으로** 리포메터를 확인하기 위한
@@ -88,17 +94,42 @@ testset(리포메터 xlsx + long parquet + 정답표 CSV, `--load`면 DuckDB까�
 대조할 수 있다.
 
 UI는 스모크 수준만 있다(`test_ui_smoke.py`, offscreen). 화면을 바꿨으면
-`--demo` 실행으로도 눈으로 확인한다. **headless 테스트에서 모달 창
+`--demo` 실행으로도 눈으로 확인한다(데모는 아래 "데모" 절 참고 — 사내 PC가
+아닌 곳에서 기능을 끝까지 밟아 볼 수 있는 유일한 길이다). **headless 테스트에서 모달 창
 (`QMessageBox`, `QProgressDialog`)은 영원히 멈춘다** — 그 경로를 테스트하려면
 `no_modal_dialogs` 픽스처처럼 반드시 가로채야 한다.
 
 ## 리눅스/WSL에서 못 하는 것
-- **Excel 경로 전부** — `xlwings`는 COM(Windows Excel)이 필요하다. 리포메터·
-  템플릿·xlsx 내보내기는 `ImportError`로 떨어지고 UI가 "사내 PC에서 실행하세요"를
-  띄운다. 이 경로는 코드 리뷰로만 검증 가능.
-- **추출** — `bigdataquery`(bdq)는 사내 패키지. 없으면 카탈로그는 `app.py`의
-  `_seed_catalog()` 기본 컬럼 목록으로 폴백한다.
+- **xlsx 읽기·쓰기** — `xlwings`는 COM(Windows Excel)이 필요하다. xlsx 리포메터·
+  템플릿과 xlsx 내보내기는 `ImportError`로 떨어지고 UI가 "사내 PC에서 실행하세요"를
+  띄운다. **단 csv·tsv는 읽고 쓸 수 있다**(`xlio`) — 데모 번들이 그 길로 돈다.
+- **bdq 조회** — `bigdataquery`는 사내 패키지. 없으면 카탈로그는 `app.py`의
+  `_seed_catalog()` 기본 컬럼 목록으로 폴백한다. `--demo`는 조회 입구를 가짜로
+  갈아 끼워 추출·계측·fab tracking·S3를 전부 돌려볼 수 있게 한다.
 - `%APPDATA%`가 없으면 `paths.appdata_dir()`이 `~/ETReport`로 떨어진다.
+
+## 데모 — 모든 기능을 밟는 한 벌
+
+`--demo`는 "화면이 비지 않게" 채우는 장식이 아니라 **사내 PC 밖에서 기능을
+끝까지 확인하는 수단**이다. 네 층으로 나뉘고, 데이터의 출처는 하나다.
+
+| 모듈 | 하는 일 |
+|---|---|
+| `demo_data.py` | 무엇을 보여 줄지 — 리포메터·템플릿·실험 조건·raw long·계측/tracking |
+| `demo_bundle.py` | 그것을 진짜 파일로 — DuckDB·csv·xlsx·`데모_안내.md` |
+| `demo_sources.py` | 사내 조회의 **입구만** 가짜로 — `extractor._fetch`·`metrology.fetch`·`fabtracking.fetch`·`s3.client` |
+| `demo.py` | 상태에 올리기 — `load_demo()`(in-memory) · `prepare()`(번들+설정+가짜 소스) |
+
+- 데모 DuckDB는 손으로 만들지 않는다 — **리포메팅 → `pivot_and_load`** 실제
+  경로로 만든다. 그래서 §10.1 병합·retest·온도 보정·ABSOLUTE 재적용이 데모에서
+  진짜로 걸린다. `tests/test_demo.py`가 **DB로 돌아온 값 == 화면 값**을 지킨다.
+- 데모 데이터는 함정을 일부러 담는다: DC는 `step_seq=1`·누설은 `2`(병합 없으면
+  산점도가 빈다), 음수로 기록되는 PMOS·누설(ABSOLUTE), NULL·0 분모, 25장짜리
+  lot(표 넘침), 미배정 wafer, 혼입되는 factor, CAT 4단, 리포트 2종.
+- 데모 모드는 **설정을 저장하지 않는다**(`app.py`) — 사용자의 `settings.json`에
+  데모 경로가 남으면 다음 실사용에서 엉뚱한 파일을 가리킨다.
+- 화면을 바꿨으면 `--demo`로 띄워 보고, 데모 데이터를 바꿨으면
+  `tools/make_demo.py --force`로 번들을 다시 만든다.
 
 ## 아키텍처 — 큰 그림
 
@@ -126,7 +157,7 @@ UI는 스모크 수준만 있다(`test_ui_smoke.py`, offscreen). 화면을 바�
 |---|---|
 | 앱 전역 상태 + 변경 알림 | `model/state.py` (`AppState`, `StateBus` 시그널 6종) |
 | 색·모서리·글자 크기 | `ui/theme.py: TOKENS` — `style.qss`의 `%TOKEN%`으로만 들어간다 |
-| 축 범위·로그 판정 | `render/ranges.py` — SPEC∪데이터를 중심 기준 ×1.2 |
+| 축 범위·로그 판정 | `render/ranges.py` — SPEC∪데이터를 중심 기준 ×1.2 (로그 축이면 ×1.2도 로그 공간에서) |
 | 자릿수 포맷 | `model/specs.py: fmt_value` (<1→3자리, ≤10→2자리, >10→1자리) |
 | wafer 집계(평균/n-1 표준편차) | `model/aggregate.py` — 화면·xlsx·PPT 공용, group_by 1회 |
 | lot·wafer 표기 비교 | `model/wafers.py` — `W01`·`W1`·`01`·`1`을 한 키로 |
@@ -211,6 +242,11 @@ Ctrl+Enter는 보고 있는 탭의 `stale_button_attr` 버튼을 누른다 — �
 무효화한다. Excel을 읽는 새 코드는 반드시 이 모듈을 경유한다.
 `frame_from_rows()`의 열 타입 규칙(전부 숫자/None → Float64, 그 외 → Utf8)은
 ADDP FORM 열처럼 위가 비어 있는 열 때문에 필요하다 — 추론으로 바꾸지 말 것.
+**csv·tsv는 Excel 없이 같은 모양으로 읽는다**(`read_text_table`, 시트 인자는
+무시). 폴백이 아니라 정식 입력이다 — 예시 파일(§11.4)이 Excel 없는 PC에서
+CSV로 떨어지는데 그걸 다시 읽을 길이 없었고, 데모 번들도 이 길로 돈다.
+셀 해석은 `_text_cell` 하나에 있다: 빈 칸은 NULL, 숫자처럼 보이면 숫자, 단
+**앞이 0인 코드(`0012`)는 문자열로 둔다**(숫자로 보면 `12`가 되어 뭉갠다).
 
 **추출 청크** (`data/extractor.py`) — 조회는 `item_id IN (...)`으로 반드시 좁히고
 (리포메터 REAL의 ITEMID만), 청크는 **기간 × item 그룹의 곱**이다(`plan_units`).
@@ -272,6 +308,56 @@ different configuration`), `duckdb.connect(..., read_only=True)`를 직접 부�
   **작업 단위일 뿐 저장 내용과 무관**하므로 예전에 512개로 적재한 DB와 섞여도
   안전하다 — 이 불변식은 `test_db_buckets.py`가 지킨다.
 
+## 멀티 lot (§9.2)
+
+한 DB에 lot이 여럿 들어 있을 때의 규칙이다. 근거와 결정 과정은
+`design-plans/multi-lot-analysis.md`에 있다.
+
+- **읽을 lot은 SQL에서 좁힌다** — 도크 [lot] 절에서 체크한 lot이
+  `state.lots_selected`에 담기고 `compat.select_sql(prof, lots=…)`가
+  `WHERE lot IN (…)`을 건다. **`lots`가 비면 예전과 글자 하나까지 같은 SQL**이어야
+  한다(안 그러면 지금까지 정상 동작하던 DB의 동작이 조용히 바뀐다). WHERE는
+  retest QUALIFY보다 **앞**이다. 빈 리스트 = 전부.
+- lot 선택은 설정 프리셋이 아니라 **DB 경로별**로 `Settings.lot_selections`에
+  남는다. 체크를 바꾸면 [적용]이 dirty가 될 뿐 **즉시 다시 읽지 않는다**(지연 계산).
+- **전부 고른 상태는 빈 리스트로 둔다**(설정에도 기록하지 않는다). 그래야 SQL이
+  예전과 똑같고, 이 화면을 띄운 뒤 적재로 lot이 늘어도 그 lot이 조용히 빠지지
+  않는다 — 목록에 없던 lot을 IN에 적을 수는 없기 때문이다.
+- 커버리지 줄은 `LoadReport.warnings`가 아니라 **`notes`**로 간다. 버린 것이
+  없는데 "제외 N건"으로 세면 안 되고, 볼 때마다 모달이 뜨면 안 된다 — 알림은
+  토스트, 자세한 것은 [커버리지] 다이얼로그다.
+- 고른 lot은 그룹 편집·inline 계측·fab tracking 조회에 전파된다. **SQL 조회 창은
+  예외** — 사용자가 쓴 SQL을 그대로 돌려야 한다.
+- **커버리지 판정은 `model/coverage.py` 하나에만 있다** — 기준 lot은 item이 가장
+  많은 lot(동률이면 이름 순), 결손은 ①값이 전부 NULL ②측정 조건 조합 불일치
+  ③wafer당 포인트 **중앙값**이 기준의 ±20%(`POINT_TOLERANCE`) 밖. [적용] 로그 줄과
+  [커버리지] 다이얼로그가 같은 함수를 쓴다.
+- **lot 심볼 분화는 렌더러 안에서만** 한다(`mpl_renderer.lot_markers`·`_lot_parts`).
+  `{gid: DataFrame}`를 만드는 곳이 화면(`plot_canvas.render_args`)과
+  PPT(`deckbuild._plot_data`) 둘이라, 거기서 쪼개면 "화면 = PPT"가 깨진다.
+  marker는 `data` **전체**를 보고 한 번에 정한다 — 그래야 같은 lot이 모든 그룹·
+  모든 페이지에서 같은 모양이다. 토글이 켜진 동안 그룹의 `symbol`은 무시된다.
+- PPT 표는 **split 모드일 때만** lot 경계로 먼저 끊고, 한 lot이 12장을 넘으면 그
+  안에서 다시 끊는다(`pptgen.split_table`). overflow 모드와 화면·xlsx 표는 그대로다.
+  머리글 블록 경계로 끊는 것이므로 그룹 머리글(gwafer)에도 같은 규칙이 걸린다.
+  **장수는 늘어난다** — 데모(lot 4개·41열) 기준 표 슬라이드가 25 → 35장이다.
+  그 대신 lot 머리글이 슬라이드 경계에서 잘리지 않는다.
+- **`SplitMatrix.baseline`은 코드 하나가 아닐 수 있다.** 기준 lot을 고르면
+  step마다 그 lot의 다수 조건이 기준이 되어 `baseline_codes`(step→코드)에 담긴다.
+  REF 판정은 `code_of(step)`을 쓴다. 맵이 비어 있으면 예전처럼 `baseline` 하나를
+  전 step에 쓴다 — 예전 설정·파일 호환이 여기에 달려 있다.
+- 자동 그룹핑 `split factor별`은 실험 조건의 배정을 **`manual_groups`로 굽는다**.
+  도크 [factor 편집]은 gid를 직접 써서 [적용] 때 되돌아가는데, 구워 두면
+  `apply_manual_groups`가 실험 조건보다 뒤에 걸려 손으로 고친 쪽이 이긴다.
+- 자동 그룹핑에 lot을 주면(`auto_group(mode, lots)`) **그 lot의 배정만** 다시
+  만든다(`_clear_scope`) — 다른 lot에 짜 둔 그룹까지 날리면 lot을 갈아 가며
+  작업할 수 없다. 지울 때는 `manual_groups`와 **프레임의 `gid`를 함께** 비운다.
+  다시 배정받지 못한 wafer가 예전 gid를 달고 남으면 안 되기 때문이다.
+  lot을 주지 않으면(단일 lot 탭) 지금까지처럼 전부 다시 만든다.
+- 계측 `top_factors`는 합친 상관 `r`과 **lot 내 상관 `r_within`**을 함께 낸다.
+  정렬 점수는 둘 중 **보수적인 쪽** — lot 평균 차이만으로 생긴 상관("lot 효과")이
+  위로 올라오지 않게 한다. lot이 하나면 `r_within`은 None이라 순위가 예전과 같다.
+
 ## 사내 소스 3종 (ET 계측 외)
 
 **fab tracking** (`data/fabtracking.py`) — `fab.f_fab_tracking`에서 split 실험
@@ -306,6 +392,12 @@ level은 `RANGE/STD/MIN/VALUE/SLOTID/Q2/MAX`를 **뺀** 나머지, wafer level�
 폴백으로 떨어진다(로그에 남음). `Std(...)`는 표본표준편차(n-1, NULL 제외).
 검증 실패 행은 **버리고 나머지로 진행**하며 이유를 `warnings`에 남긴다 — 이게 이
 코드베이스 전반의 오류 처리 방식이다(중단하지 않고 건너뛰고 보고).
+
+**ADDP는 step_seq를 넘나들 수 없다.** 리포메팅은 추출 직후, 즉 §10.1 병합보다
+**앞에서** 돌기 때문에 seq가 갈려 기록되는 두 항목(예: DC는 seq 1, 누설은 2)을
+한 수식에 쓰면 한 행에 함께 있는 적이 없어 결과가 전부 NULL이고, `apply()`
+끝의 `drop_nulls`가 그 item을 통째로 지운다. 데모 리포메터의 수식이 seq 안에서만
+참조하는 이유다 — 이 제약을 모르고 수식을 짜면 "만든 ADDP가 사라진다".
 
 함수 목록은 확정 사양이다(`_BASE_FUNCS`): `ABS SQRT LN LOG LOG10 EXP MIN MAX AVG
 SUM STD`. **`LN`은 자연로그(밑 e), `LOG`·`LOG10`은 상용로그(밑 10)** — 엑셀 관례를

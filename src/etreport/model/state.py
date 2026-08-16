@@ -40,6 +40,12 @@ class AppState:
     templates: object | None = None    # model.templates.Templates
     db_path: str = ""
     table: str = ""                    # 실제 조회 테이블 (기본 et_data)
+    # 도크 lot 선택(§9.2) — lots_all은 DB에 있는 전부, lots_selected는 체크한 것.
+    # **빈 리스트 = 전부**로 읽는다. 설정 파일이 없던 예전 상태와 새 상태가 같은
+    # 뜻이 되어야 lot 선택을 모르는 DB에서도 지금까지처럼 동작한다.
+    lots_all: list[str] = field(default_factory=list)
+    lots_selected: list[str] = field(default_factory=list)
+    lot_split_symbols: bool = False    # plot에서 lot마다 심볼을 달리할지(§5.2)
     profile: object | None = None      # data.compat.TableProfile
     excl_points: dict = field(default_factory=dict)   # key → {reason, at}
     # 그룹 편집에서 손으로 배정한 것 — (lot, wafer, step, temp, site) → gid.

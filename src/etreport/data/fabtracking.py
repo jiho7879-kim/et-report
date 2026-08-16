@@ -124,12 +124,17 @@ def split_steps(df: pl.DataFrame, min_wafers: int = 2) -> list[str]:
 
 
 def to_split_matrix(df: pl.DataFrame, baseline: str | None = None,
-                    steps: list[str] | None = None):
+                    steps: list[str] | None = None,
+                    baseline_lot: str = ""):
     """fab tracking → `SplitMatrix` (기존 그룹핑·혼입 감지를 그대로 쓴다).
 
     `steps`를 주지 않으면 조건이 갈리는 step만 싣는다. baseline을 주지 않으면
     **각 step에서 가장 많은 wafer가 받은 조건**을 기준(REF)으로 삼는다 —
     split 실험은 보통 기준 조건 wafer가 가장 많다.
+
+    `baseline_lot`을 주면 **그 lot 안에서 step마다** 다수 조건을 뽑아 기준으로
+    삼는다(§9.2). lot마다 POR이 다를 수 있는 멀티 lot에서, 어느 lot을 기준
+    삼을지는 사람이 정해야 하는 판단이다.
     """
     from etreport.model.split import BASELINE_DEFAULT, SplitMatrix
 
@@ -146,14 +151,33 @@ def to_split_matrix(df: pl.DataFrame, baseline: str | None = None,
             .sort(["lot", "wafer"]))
     base = baseline or _majority_code(cond)
     steps_in = [c for c in wide.columns if c not in ("lot", "wafer")]
-    wide = wide.with_columns([pl.col(s).fill_null(base) for s in steps_in])
-    return SplitMatrix(steps=steps_in, wide=wide, baseline=base)
+    # step별 기준은 빈칸을 메우기 **전에** 뽑는다 — 메운 뒤에 세면 안 적힌 칸이
+    # 기준 쪽에 표를 던져 다수 조건이 뒤집힐 수 있다.
+    codes = (SplitMatrix.codes_from_lot(wide, steps_in, baseline_lot)
+             if baseline_lot else {})
+    wide = wide.with_columns([pl.col(s).fill_null(codes.get(s, base))
+                              for s in steps_in])
+    return SplitMatrix(steps=steps_in, wide=wide, baseline=base,
+                       baseline_codes=codes,
+                       baseline_lot=baseline_lot if codes else "")
 
 
-def _majority_code(cond: pl.DataFrame) -> str:
-    """가장 흔한 조건 코드 — 기준(REF)으로 삼는다."""
-    top = (cond.group_by("condition").len().sort("len", descending=True)
-           .filter(pl.col("condition").is_not_null()))
+def _majority_code(cond: pl.DataFrame, lot: str = "", step: str = "") -> str:
+    """가장 흔한 조건 코드 — 기준(REF)으로 삼는다.
+
+    `lot`·`step`을 주면 그 범위 안에서만 센다. 좁힌 결과가 비면 전체 다수
+    조건으로 물러난다 — 기준 lot이 그 step을 지나지 않았을 수 있다.
+    """
+    sub = cond
+    if lot:
+        sub = sub.filter(pl.col("root_lot_id").cast(pl.Utf8) == str(lot))
+    if step:
+        sub = sub.filter(pl.col("step_id").cast(pl.Utf8) == str(step))
+    if sub.is_empty() and (lot or step):
+        sub = cond
+    top = (sub.filter(pl.col("condition").is_not_null())
+           .group_by("condition").len()
+           .sort(["len", "condition"], descending=[True, False]))
     return str(top["condition"][0]) if not top.is_empty() else "Base"
 
 

@@ -11,6 +11,12 @@
 
 캐시는 조회 편의를 위한 것이고 원본이 진실이다. 강제로 다시 읽으려면
 force=True 또는 invalidate()를 쓴다.
+
+**csv/tsv도 같은 문으로 받는다.** 예시 파일 생성(§11.4)이 Excel 없는 PC에서
+CSV로 떨어지는데, 정작 그 CSV를 다시 읽을 방법이 없었다. 확장자가 csv·tsv·txt면
+Excel을 띄우지 않고 polars로 읽되, **열 타입 규칙은 엑셀 경로와 똑같이** 준다
+(전부 숫자/빈칸 → Float64, 그 외 → Utf8). 시트 개념이 없으므로 시트 인자는
+무시하고 한 장짜리로 다룬다 — 데모 번들과 리눅스 개발 PC가 이 경로로 돈다.
 """
 from __future__ import annotations
 
@@ -28,6 +34,10 @@ log = logging.getLogger(__name__)
 
 _MEM: dict[tuple[str, str, str], pl.DataFrame] = {}   # 프로세스 내 메모리 캐시
 _SHEETS: dict[tuple[str, str], list[str]] = {}
+
+#: Excel을 띄우지 않고 읽는 확장자 (구분자는 확장자로 정한다)
+TEXT_SUFFIXES = {".csv": ",", ".tsv": "\t", ".txt": "\t"}
+TEXT_SHEET = "(텍스트)"        # 시트가 없는 파일의 가짜 시트 이름
 
 
 # ── 캐시 위치 ────────────────────────────────────────────────
@@ -75,8 +85,15 @@ def cache_stats() -> tuple[int, int]:
 
 
 # ── 공개 API ─────────────────────────────────────────────────
+def is_text_table(path: str) -> bool:
+    """Excel 없이 읽는 파일인가 (csv·tsv·txt)."""
+    return Path(path).suffix.lower() in TEXT_SUFFIXES
+
+
 def sheet_names(path: str, force: bool = False) -> list[str]:
     """시트 목록. 같은 파일이면 Excel을 다시 띄우지 않는다."""
+    if is_text_table(path):
+        return [TEXT_SHEET]
     key = (str(Path(path).resolve()), _stamp(path))
     if not force and key in _SHEETS:
         return _SHEETS[key]
@@ -95,6 +112,8 @@ def read_sheet(path: str, sheet: str | int = 0,
 def read_sheets(path: str, sheets: list[str | int],
                 force: bool = False) -> list[pl.DataFrame]:
     """여러 시트를 **Excel 한 번만 띄워** 읽는다. 캐시된 것은 건너뛴다."""
+    if is_text_table(path):                    # csv·tsv — 시트 인자는 무시한다
+        return [read_text_table(path, force) for _ in sheets]
     stamp = _stamp(path)
     resolved = str(Path(path).resolve())
     out: dict[int, pl.DataFrame] = {}
@@ -159,6 +178,45 @@ class _book:
             self.app.quit()
 
 
+def read_text_table(path: str, force: bool = False) -> pl.DataFrame:
+    """csv·tsv를 **엑셀 경로와 같은 결과 모양으로** 읽는다.
+
+    폴백이 아니라 정식 입력이다 — 예시 파일(§11.4)과 데모 번들이 이 경로로
+    들어온다. 값은 셀 단위로 숫자/문자를 가려 `frame_from_rows`에 넘기므로
+    열 타입 규칙(전부 숫자 → Float64, 그 외 → Utf8)이 한 곳에만 남는다.
+    """
+    key = (str(Path(path).resolve()), _stamp(path), TEXT_SHEET)
+    if not force and key in _MEM:
+        return _MEM[key]
+    sep = TEXT_SUFFIXES[Path(path).suffix.lower()]
+    raw = pl.read_csv(path, separator=sep, has_header=False,
+                      infer_schema_length=0, truncate_ragged_lines=True,
+                      encoding="utf8-lossy")
+    df = frame_from_rows([[_text_cell(v) for v in row] for row in raw.rows()])
+    _MEM[key] = df
+    log.debug("텍스트 표 읽기: %s (%d행)", Path(path).name, df.height)
+    return df
+
+
+def _text_cell(v: str | None):
+    """빈 칸 → None · 숫자처럼 보이면 float · 나머지는 문자열.
+
+    앞이 0으로 채워진 코드(`01`·`0012`)는 **숫자로 보지 않는다** — float으로
+    바꾸면 `frame_from_rows`가 `1`·`12`로 되돌려 wafer·item 코드가 뭉개진다.
+    """
+    if v is None:
+        return None
+    s = v.strip().lstrip("﻿")             # 엑셀이 붙인 BOM 제거
+    if not s:
+        return None
+    if len(s) > 1 and s[0] == "0" and s[1] not in ".eE":
+        return s
+    try:
+        return float(s)
+    except ValueError:
+        return s
+
+
 def frame_from_rows(raw: list[list]) -> pl.DataFrame:
     """2차원 셀 값 → DataFrame. 열 타입은 추론 대신 규칙으로 결정한다.
 
@@ -208,19 +266,25 @@ def frame_from_rows(raw: list[list]) -> pl.DataFrame:
 # ── 쓰기 (템플릿 되쓰기용) ───────────────────────────────────
 def write_sheet(path: str, sheet: str | int, df: pl.DataFrame,
                 backup: bool = True) -> str:
-    """DataFrame으로 시트를 덮어쓴다. 쓰기도 xlwings만 사용.
+    """DataFrame으로 시트를 덮어쓴다. xlsx 쓰기도 xlwings만 사용.
 
     되돌릴 수 있도록 기본으로 .bak 사본을 남기고, 쓰기 후 캐시를 무효화한다.
+    csv·tsv면 Excel을 띄우지 않고 같은 구분자로 되쓴다(읽기와 대칭).
     """
     import shutil
-
-    import xlwings as xw
 
     src = Path(path)
     bak = ""
     if backup:
         bak = str(src.with_suffix(src.suffix + ".bak"))
         shutil.copy2(src, bak)
+
+    if is_text_table(path):
+        df.write_csv(src, separator=TEXT_SUFFIXES[src.suffix.lower()])
+        invalidate(str(src))
+        return bak
+
+    import xlwings as xw
 
     app = xw.App(visible=False, add_book=False)
     try:

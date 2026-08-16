@@ -5,12 +5,14 @@
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import polars as pl
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -43,6 +45,8 @@ from etreport.ui.widgets.sql_dialog import SqlExportDialog
 
 __all__ = ["AnalysisWorkspace", "ExploreTab", "ReportTab", "SummaryTab",
            "_pick_sheet"]
+
+log = logging.getLogger(__name__)
 
 
 class AnalysisWorkspace(QWidget):
@@ -124,6 +128,12 @@ class AnalysisWorkspace(QWidget):
             setattr(self, f"btn_{key}", b)
             v.addWidget(b)
 
+        # lot 선택 — 파일 바로 아래에 접이식으로(§9.2). 접혀 있어도 제목이
+        # 'LOT 3/12'로 상태를 말하므로 펼치지 않고도 무엇을 보고 있는지 안다.
+        self.lot_section = CollapsibleSection("lot", collapsed=True)
+        self._build_lot_body(self.lot_section.body)
+        v.addWidget(self.lot_section)
+
         # REPORT는 **콤보를 두지 않는다**(확정 사양 §5.1). 템플릿에 리포트가
         # 여럿이면 [적용] 뒤 안내 문구로만 알린다.
         self.lbl_report = QLabel()
@@ -176,6 +186,14 @@ class AnalysisWorkspace(QWidget):
         self.ed_log = QLineEdit(", ".join(self.state.log_patterns))
         self.ed_log.editingFinished.connect(self._log_changed)
         v.addWidget(self.ed_log)
+
+        # lot 구분 — 표시 옵션이므로 DB를 다시 읽지 않는다. [그리기]만 dirty로.
+        self.chk_lot_split = QCheckBox("lot마다 심볼 다르게")
+        self.chk_lot_split.setToolTip(
+            "여러 lot을 함께 볼 때 lot마다 점 모양을 달리하고 범례에 lot을 적습니다.\n"
+            "켜 두는 동안에는 그룹별로 지정한 심볼 대신 lot이 모양을 정합니다.")
+        self.chk_lot_split.toggled.connect(self._lot_split_toggled)
+        v.addWidget(self.chk_lot_split)
 
         # 실험 조건 --------------------------------------------
         v.addWidget(SectionLabel("실험 조건"))
@@ -259,6 +277,136 @@ class AnalysisWorkspace(QWidget):
     def _tools_toggled(self, collapsed: bool) -> None:
         self.settings.dock_tools_open = not collapsed
 
+    # ── lot 선택 (§9.2) ──────────────────────────────────────
+    def _build_lot_body(self, box) -> None:
+        row = QHBoxLayout()
+        for text, on in (("전체", True), ("해제", False)):
+            b = GhostButton(text)
+            b.clicked.connect(lambda _c=False, v=on: self._lot_check_all(v))
+            row.addWidget(b)
+        row.addStretch(1)
+        box.addLayout(row)
+
+        self.lot_list = QListWidget()
+        self.lot_list.setObjectName("lotList")
+        self.lot_list.setFixedHeight(132)
+        self.lot_list.itemChanged.connect(self._lot_toggled)
+        box.addWidget(self.lot_list)
+
+        self.btn_coverage = GhostButton("커버리지")
+        self.btn_coverage.setToolTip(
+            "lot마다 item·wafer·측정 조건이 어떻게 다른지 표로 봅니다.\n"
+            "기준은 item이 가장 많은 lot입니다.")
+        self.btn_coverage.clicked.connect(self._open_coverage)
+        box.addWidget(self.btn_coverage)
+
+    def _load_lots(self, db_path: str) -> None:
+        """DB의 lot 목록을 읽어 리스트를 채운다 — **[적용] 전에** 도는 조회다.
+
+        lot·wafer 두 컬럼만 세므로 그룹 편집의 wafer 색인보다 가볍다. 그래서
+        워커로 넘기지 않는다(진행 창이 뜨는 편이 오히려 거슬린다).
+        """
+        st = self.state
+        st.lots_all = []
+        if db_path and Path(db_path).exists():
+            try:
+                from etreport.data import loader
+                idx = loader.lot_index(db_path)
+                st.lots_all = [str(v) for v in idx["lot"].to_list()]
+                self._lot_wafers = dict(zip(st.lots_all,
+                                            idx["wafers"].to_list()))
+            except Exception as e:                   # noqa: BLE001
+                # DB가 잠겼거나 스키마가 낯설 수 있다. lot을 못 고를 뿐,
+                # [적용]은 예전처럼 전부 읽으면 되므로 막지 않는다.
+                self._lot_wafers = {}
+                log.info("lot 목록 조회 실패(전체 읽기로 진행): %s", e)
+        else:
+            self._lot_wafers = {}
+
+        # DB 경로로 못 읽었어도 이미 읽어 둔 프레임이 있으면 거기서 lot을 뽑는다
+        # — 데모처럼 파일 없이 상태만 채운 경우에도 리스트가 비지 않게.
+        if not st.lots_all and st.data is not None and "lot" in st.data.columns:
+            st.lots_all = sorted({str(v) for v in st.data["lot"].to_list()
+                                  if v is not None})
+
+        # 기억해 둔 선택을 되살린다. 지금 DB에 없는 lot은 버린다 — 다시 적재해
+        # lot 구성이 바뀌었을 수 있다.
+        saved = self.settings.lot_selections.get(db_path, [])
+        keep = [x for x in saved if x in st.lots_all]
+        # 저장된 것이 없거나 결국 전부면 **빈 리스트 = 전부**로 둔다
+        st.lots_selected = [] if len(keep) == len(st.lots_all) else keep
+        self._fill_lot_list()
+
+    def _fill_lot_list(self) -> None:
+        st = self.state
+        # 빈 선택 = 전부(§9.2) — 상태와 화면이 같은 규칙을 쓴다
+        sel = set(st.lots_selected) or set(st.lots_all)
+        self.lot_list.blockSignals(True)
+        self.lot_list.clear()
+        for lot in st.lots_all:
+            n = getattr(self, "_lot_wafers", {}).get(lot)
+            it = QListWidgetItem(f"  {lot}" + (f"   {n}장" if n else ""))
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked if lot in sel else Qt.Unchecked)
+            it.setData(Qt.UserRole, lot)
+            self.lot_list.addItem(it)
+        self.lot_list.blockSignals(False)
+        self._refresh_lot_title()
+
+    def _refresh_lot_title(self) -> None:
+        st = self.state
+        total = len(st.lots_all)
+        if not total:
+            self.lot_section.set_title("lot")
+        else:
+            self.lot_section.set_title(
+                f"lot  {len(st.lots_selected) or total}/{total}")
+        self.btn_coverage.setEnabled(bool(st.data is not None))
+
+    def _lot_toggled(self, _item: QListWidgetItem) -> None:
+        self._collect_lots()
+        self._mark_unapplied("lot 선택이 바뀌었습니다 — [적용] (F5)")
+
+    def _lot_check_all(self, on: bool) -> None:
+        self.lot_list.blockSignals(True)
+        for i in range(self.lot_list.count()):
+            self.lot_list.item(i).setCheckState(
+                Qt.Checked if on else Qt.Unchecked)
+        self.lot_list.blockSignals(False)
+        self._lot_toggled(None)
+
+    def _collect_lots(self) -> None:
+        """체크 상태 → state와 설정.
+
+        **전부 고른 상태는 빈 리스트로 둔다.** 그래야 ① 읽는 SQL이 예전과 똑같고
+        (WHERE가 아예 안 붙는다) ② 이 화면을 띄운 뒤 적재로 lot이 늘어도 그 lot이
+        조용히 빠지지 않는다 — 목록에 없던 lot을 IN에 적을 수는 없으니까.
+        같은 이유로 설정에도 기록하지 않는다.
+        """
+        st = self.state
+        picked = [self.lot_list.item(i).data(Qt.UserRole)
+                  for i in range(self.lot_list.count())
+                  if self.lot_list.item(i).checkState() == Qt.Checked]
+        st.lots_selected = [] if len(picked) == len(st.lots_all) else picked
+        path = self.cfg().db_path
+        if path:
+            if st.lots_selected:
+                self.settings.lot_selections[path] = list(st.lots_selected)
+            else:
+                self.settings.lot_selections.pop(path, None)
+        self._refresh_lot_title()
+
+    def _open_coverage(self) -> None:
+        from etreport.model.coverage import build as cov_build
+        from etreport.ui.widgets.coverage_dialog import CoverageDialog
+        CoverageDialog(cov_build(self.state), self).exec()
+
+    def _lot_split_toggled(self, on: bool) -> None:
+        """표시 옵션이라 DB를 다시 읽지 않는다 — 보고 있는 탭만 dirty로."""
+        self.state.lot_split_symbols = on
+        self.cfg().lot_split_symbols = on
+        self.bus.groups_changed.emit()
+
     # ── 설정 프리셋 ──────────────────────────────────────────
     def _fill_cfg_combo(self) -> None:
         self.cfg_combo.blockSignals(True)
@@ -281,6 +429,11 @@ class AnalysisWorkspace(QWidget):
         c = self.cfg()
         self.settings.last_analysis_config = c.name
         self.ed_log.setText(", ".join(c.log_patterns))
+        self.chk_lot_split.blockSignals(True)
+        self.chk_lot_split.setChecked(bool(getattr(c, "lot_split_symbols", False)))
+        self.chk_lot_split.blockSignals(False)
+        self.state.lot_split_symbols = self.chk_lot_split.isChecked()
+        self._load_lots(c.db_path)          # DB가 바뀌면 lot 목록도 바뀐다
         self._show_report(c.report)
         self._mark_unapplied("설정을 불러왔습니다 — [적용]을 누르세요")
         self._refresh_dock()
@@ -321,6 +474,10 @@ class AnalysisWorkspace(QWidget):
                           if t.strip()]
         # report는 [적용]이 템플릿에서 정한 값을 그대로 쓴다(콤보 없음)
         c.table_slide_mode = self.state.table_slide_mode
+        c.lot_split_symbols = self.chk_lot_split.isChecked()
+        # lot 선택은 프리셋이 아니라 DB 경로별로 남긴다 — 프리셋을 바꿔도 같은
+        # DB면 같은 lot을 보고 싶기 때문이다(§9.2).
+        self._collect_lots()
 
     # ── 파일 고르기 (읽지 않는다) ────────────────────────────
     def _pick_db(self) -> None:
@@ -328,11 +485,13 @@ class AnalysisWorkspace(QWidget):
                                            "DuckDB (*.duckdb)")
         if p:
             self.cfg().db_path = p
+            self._load_lots(p)             # 고르는 즉시 lot을 보여 준다
             self._mark_unapplied()
 
     def _pick_tpl(self, kind: str) -> None:
         p, _ = QFileDialog.getOpenFileName(
-            self, f"{kind} 템플릿", "", "Excel (*.xlsx *.xlsm)")
+            self, f"{kind} 템플릿", "",
+            "템플릿 (*.xlsx *.xlsm *.csv *.tsv);;Excel (*.xlsx *.xlsm);;CSV (*.csv *.tsv)")
         if not p:
             return
         sheet = _pick_sheet(self, p, f"{kind} 템플릿")
@@ -368,10 +527,13 @@ class AnalysisWorkspace(QWidget):
         c = self.cfg()
         dlg = SplitSourceDialog(self, path=c.split_path,
                                 text=getattr(c, "split_text", ""),
-                                baseline=getattr(c, "split_baseline", ""))
+                                baseline=getattr(c, "split_baseline", ""),
+                                baseline_lot=getattr(c, "split_baseline_lot", ""),
+                                lots=list(self.state.lots_selected))
         if dlg.exec() and dlg.matrix is not None:
             c.split_path, c.split_text = dlg.path, dlg.text
             c.split_baseline = dlg.baseline
+            c.split_baseline_lot = dlg.baseline_lot
             sm = dlg.matrix
             self._mark_unapplied(
                 f"실험 조건 {len(sm.steps)}개 step · wafer {sm.wide.height}행을 "
@@ -429,7 +591,9 @@ class AnalysisWorkspace(QWidget):
         set_dirty(self.btn_apply, False)
         self.lbl_apply.setText(
             f"적용됨 · {rep.elapsed:.1f}초"
-            + (f" · 제외 {len(rep.warnings)}건" if rep.warnings else ""))
+            + (f" · 제외 {len(rep.warnings)}건" if rep.warnings else "")
+            + (f" · 확인 {len(rep.notes)}건" if getattr(rep, "notes", None)
+               else ""))
         self.bus.status_changed.emit()
 
         self._show_report(c.report)
@@ -444,6 +608,11 @@ class AnalysisWorkspace(QWidget):
 
         if rep.warnings:
             QMessageBox.information(self, "적용 완료 — 일부 제외", rep.text())
+        elif getattr(rep, "notes", None):
+            # 버린 것이 없으니 모달로 막지 않는다 — 알리고 [커버리지]로 보낸다
+            from etreport.ui.widgets.toast import toast
+            toast(self, f"lot 커버리지 확인 {len(rep.notes)}건 — "
+                        f"도크 [커버리지]에서 보세요")
 
     def _show_report(self, name: str) -> None:
         """적용된 리포트 이름을 문구로만 보여 준다 — 고르는 콤보는 없다(§5.1).
@@ -514,6 +683,12 @@ class AnalysisWorkspace(QWidget):
         except Exception:                            # noqa: BLE001
             self.btn_cache.setText("Excel 캐시")
 
+        # 데이터가 들어온 뒤에야 lot을 알 수 있는 경로(적재 직후·데모)를 위해
+        # 목록이 비어 있으면 여기서 한 번 더 채운다. 조회는 하지 않는다.
+        # lot 컬럼이 있을 때만 — 그래야 채우고 나면 다시 돌지 않는다(무한 조회 방지)
+        if not st.lots_all and st.data is not None and "lot" in st.data.columns:
+            self._load_lots(c.db_path)
+        self._refresh_lot_title()
         self.lbl_excl.setText(str(len(st.excluded)))
         self.lbl_excl.setProperty("zero", "true" if not st.excluded else "false")
         self.lbl_excl.style().unpolish(self.lbl_excl)
@@ -622,4 +797,7 @@ class AnalysisWorkspace(QWidget):
     def connect_db(self, path: str, table: str | None = None) -> None:
         """데이터 워크스페이스 적재 직후 호출 — 그 DB로 갈아끼운다."""
         self.cfg().db_path = path
+        # 방금 적재한 DB다. lot 목록을 먼저 읽어야 [적용]이 무엇을 볼지 정해진다 —
+        # 기억해 둔 선택이 있으면 그대로, 없으면 전부.
+        self._load_lots(path)
         self.apply_config()

@@ -123,7 +123,7 @@ def test_status_rail_shows_counts_and_note(qapp, win):
     win._refresh_rail()
     text = win.rail_text.text()
     assert "item" in text and "포인트" in text
-    assert "제외 1" in text
+    assert f"제외 {len(st.excluded)}" in text     # 데모가 미리 찍어 둔 것 포함
     assert "추출 중" in text
 
 

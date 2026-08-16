@@ -162,7 +162,13 @@ def _build_parser():
     ap = argparse.ArgumentParser(
         prog="etreport", description=f"{APP_NAME} — ET 데이터 리포트 자동화")
     ap.add_argument("--demo", action="store_true",
-                    help="샘플 데이터로 실행 (UI 개발·시연용, DB·Excel 없이)")
+                    help="데모 데이터로 실행 (DB·Excel·bdq 없이 모든 기능 확인)")
+    ap.add_argument("--demo-dir", default="",
+                    help="데모 번들 위치 (기본 %%APPDATA%%\\ETReport\\demo)")
+    ap.add_argument("--demo-rebuild", action="store_true",
+                    help="데모 번들(DuckDB·템플릿)을 다시 만든다")
+    ap.add_argument("--demo-lite", action="store_true",
+                    help="데모를 화면에만 올린다 — 번들 파일·가짜 소스 없이")
     ap.add_argument("--no-update", action="store_true",
                     help="시작 시 새 버전 확인을 건너뛴다")
     ap.add_argument("--log-level", default="INFO",
@@ -195,11 +201,18 @@ def main(argv: list[str] | None = None) -> int:
 
     state = AppState()
     if args.demo:
-        demo.load_demo(state)
-        log.info("데모 모드 — %d 포인트 · item %d",
-                 state.data.height, len(state.aliases()))
+        if args.demo_lite:
+            demo.load_demo(state)              # 화면만 — 파일도 가짜 소스도 없이
+        else:
+            demo.prepare(state, settings, root=args.demo_dir or None,
+                         rebuild=args.demo_rebuild)
+        log.info("데모 모드 — %d 포인트 · item %d · lot %d",
+                 state.data.height, len(state.aliases()),
+                 state.data["lot"].n_unique())
 
     win = MainWindow(settings, catalog, state)
+    if args.demo and not args.demo_lite:
+        demo.stage_window(win)
     win.show()
 
     # 업데이트 확인은 창이 뜬 뒤 백그라운드로. 실패는 조용히 무시한다(§11.5).
@@ -214,7 +227,12 @@ def main(argv: list[str] | None = None) -> int:
 
     code = app.exec()
     try:
-        settings.save()
+        # 데모는 설정을 저장하지 않는다 — 사용자의 settings.json에 데모 파일
+        # 경로가 남으면 다음 실사용에서 엉뚱한 파일을 가리킨다.
+        if args.demo:
+            log.info("데모 모드 — 설정을 저장하지 않습니다")
+        else:
+            settings.save()
     except Exception as e:                   # noqa: BLE001 — 종료는 막지 않는다
         log.error("설정 저장 실패: %s", e)
     log.info("종료 (code=%d)", code)

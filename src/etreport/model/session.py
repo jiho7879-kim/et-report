@@ -27,11 +27,20 @@ class LoadReport:
     ok: bool = True
     lines: list[str] = field(default_factory=list)     # 사용자에게 보여줄 요약
     warnings: list[str] = field(default_factory=list)  # 제외된 항목들
+    #: 버린 것은 없지만 알아 둬야 하는 것(lot 커버리지 등). warnings와 섞으면
+    #: "제외 N건"으로 잘못 세어지고 볼 때마다 모달이 뜬다 — 성격이 다르다.
+    notes: list[str] = field(default_factory=list)
     error: str = ""
     elapsed: float = 0.0
 
     def text(self, max_warn: int = 12) -> str:
         out = list(self.lines)
+        if self.notes:
+            out.append("")
+            out.append(f"확인 {len(self.notes)}건:")
+            out += [f"  {n}" for n in self.notes[:max_warn]]
+            if len(self.notes) > max_warn:
+                out.append(f"  … 외 {len(self.notes) - max_warn}건")
         if self.warnings:
             out.append("")
             out.append(f"제외 {len(self.warnings)}건:")
@@ -114,9 +123,13 @@ def apply_config(state: AppState, cfg: AnalysisConfig) -> LoadReport:
                 parse_split_text,
             )
             base = getattr(cfg, "split_baseline", "") or BASELINE_DEFAULT
-            state.split = (load_split_file(cfg.split_path, base)
+            # 기준 lot을 정해 뒀으면 step별 기준을 그 lot에서 다시 뽑는다 —
+            # 코드 하나로는 step마다 다른 기준을 적을 수 없다(§9.2).
+            base_lot = getattr(cfg, "split_baseline_lot", "")
+            state.split = (load_split_file(cfg.split_path, base,
+                                           baseline_lot=base_lot)
                            if cfg.split_path
-                           else parse_split_text(cfg.split_text, base))
+                           else parse_split_text(cfg.split_text, base, base_lot))
             if not state.factors:
                 state.factors = state.split.steps[:1]
             rep.lines.append(
@@ -134,13 +147,23 @@ def apply_config(state: AppState, cfg: AnalysisConfig) -> LoadReport:
     if cfg.db_path:
         try:
             from etreport.data.loader import load_state
-            rep.lines.append("DB  " + load_state(state, cfg.db_path))
+            rep.lines.append("DB  " + load_state(state, cfg.db_path,
+                                                 lots=state.lots_selected))
         except Exception as e:                       # noqa: BLE001
             rep.ok = False
             rep.error = f"DB 열기 실패: {e}"
             return rep
+        # lot마다 item·wafer·측정 조건이 갈리면 표와 plot이 조용히 어긋난다.
+        # 자세한 내역은 [커버리지] 다이얼로그가 보여 주고, 여기서는 놓치지 않게
+        # 요약 몇 줄만 남긴다(§9.2). **제외가 아니므로 notes로 간다.**
+        try:
+            from etreport.model.coverage import build as cov_build
+            rep.notes += cov_build(state).lines()
+        except Exception as e:                       # noqa: BLE001 — 부가 정보일 뿐이다
+            log.debug("커버리지 요약 실패(무시): %s", e)
 
     state.log_patterns = cfg.log_patterns or state.log_patterns
+    state.lot_split_symbols = bool(getattr(cfg, "lot_split_symbols", False))
     from etreport.render.pptgen import table_mode_of  # 예전 값 'wide' 흡수
     state.table_slide_mode = table_mode_of(cfg.table_slide_mode)
     rep.elapsed = time.monotonic() - t0

@@ -35,7 +35,8 @@ class Confound:
 
 
 def parse_split_text(text: str,
-                     baseline: str = BASELINE_DEFAULT) -> SplitMatrix:
+                     baseline: str = BASELINE_DEFAULT,
+                     baseline_lot: str = "") -> SplitMatrix:
     """붙여넣은 표(탭·쉼표 구분) → SplitMatrix.
 
     엑셀에서 복사하면 탭 구분으로 붙는다. 엑셀이 없는 PC도 있고 붙여넣기가 더
@@ -55,11 +56,12 @@ def parse_split_text(text: str,
         cells += [None] * (len(head) - len(cells))      # 짧은 줄도 같은 취급
         rows.append(dict(zip(head, cells[:len(head)])))
     df = pl.DataFrame(rows, schema=dict.fromkeys(head, pl.Utf8))
-    return SplitMatrix.from_dataframe(df, baseline)
+    return SplitMatrix.from_dataframe(df, baseline, baseline_lot)
 
 
 def load_split_file(path: str, baseline: str = BASELINE_DEFAULT,
-                    sheet: str | int = 0) -> SplitMatrix:
+                    sheet: str | int = 0,
+                    baseline_lot: str = "") -> SplitMatrix:
     """csv/tsv는 polars로, xlsx는 xlwings로 읽는다 (Excel은 xlwings만 — 제약)."""
     low = path.lower()
     if low.endswith((".csv", ".tsv", ".txt")):
@@ -68,7 +70,7 @@ def load_split_file(path: str, baseline: str = BASELINE_DEFAULT,
     else:
         from etreport.data.xlio import read_sheet
         df = read_sheet(path, sheet).cast(pl.Utf8, strict=False)
-    return SplitMatrix.from_dataframe(df, baseline)
+    return SplitMatrix.from_dataframe(df, baseline, baseline_lot)
 
 
 @dataclass
@@ -76,11 +78,54 @@ class SplitMatrix:
     steps: list[str] = field(default_factory=list)
     wide: pl.DataFrame | None = None      # lot, wafer, <steps...>
     baseline: str = BASELINE_DEFAULT
+    #: step → 기준(REF) 코드. **비어 있으면 모든 step이 `baseline` 하나를 쓴다.**
+    #: 기준 lot을 고르면(§9.2) step마다 그 lot의 다수 조건이 기준이 되는데,
+    #: 코드 하나로는 그걸 적을 수 없어서 맵을 따로 둔다. 예전 설정·파일은
+    #: 문자열 하나만 갖고 있으므로 비워 두면 지금까지와 똑같이 동작한다.
+    baseline_codes: dict[str, str] = field(default_factory=dict)
+    baseline_lot: str = ""                # 기준 코드를 뽑아 온 lot (있으면)
+
+    def code_of(self, step: str) -> str:
+        """그 step의 기준 코드."""
+        return self.baseline_codes.get(step, self.baseline)
+
+    def baseline_label(self) -> str:
+        """화면에 적을 기준 표기 — step마다 다르면 그렇다고 말한다."""
+        vals = set(self.baseline_codes.values()) or {self.baseline}
+        if len(vals) == 1:
+            return next(iter(vals))
+        return f"(step별 {len(vals)}종)" + (f" · 기준 lot {self.baseline_lot}"
+                                            if self.baseline_lot else "")
 
     # ── 로딩 ──────────────────────────────────────────────────
+    @staticmethod
+    def codes_from_lot(wide: pl.DataFrame, steps: list[str],
+                       lot: str) -> dict[str, str]:
+        """기준 lot 안에서 **step마다 다수 조건**을 뽑는다(§9.2).
+
+        split 실험 lot은 lot 안에서도 wafer마다 조건이 갈린다. 그래서 "그 lot의
+        조건"은 하나가 아니고, step별 다수결로 정한다 — 기준(POR) 조건 wafer가
+        가장 많다는 split 실험의 통상적인 모양을 따른다.
+        동수면 코드 오름차순으로 정해 결과가 실행마다 흔들리지 않게 한다.
+        """
+        out: dict[str, str] = {}
+        if wide is None or wide.is_empty():
+            return out
+        sub = wide.filter(pl.col("lot").cast(pl.Utf8) == str(lot))
+        for s in steps:
+            if s not in sub.columns or sub.is_empty():
+                continue
+            vc = (sub.select(pl.col(s).cast(pl.Utf8)).drop_nulls()
+                  .group_by(s).len()
+                  .sort(["len", s], descending=[True, False]))
+            if not vc.is_empty():
+                out[s] = str(vc[s][0])
+        return out
+
     @classmethod
     def from_dataframe(cls, df: pl.DataFrame,
-                       baseline: str = BASELINE_DEFAULT) -> SplitMatrix:
+                       baseline: str = BASELINE_DEFAULT,
+                       baseline_lot: str = "") -> SplitMatrix:
         cols = {c.lower(): c for c in df.columns}
         lot = cols.get("lot") or cols.get("root_lot_id")
         waf = cols.get("wafer") or cols.get("wafer_id")
@@ -97,8 +142,14 @@ class SplitMatrix:
             wide = df
 
         steps = [c for c in wide.columns if c not in ("lot", "wafer")]
-        wide = wide.with_columns([pl.col(s).fill_null(baseline) for s in steps])
-        return cls(steps=steps, wide=wide, baseline=baseline)
+        # 기준 lot은 빈칸을 채우기 **전에** 뽑는다 — 빈칸을 baseline으로 메운
+        # 뒤에 다수결을 하면 안 적힌 칸이 기준 쪽에 표를 던진다.
+        codes = (cls.codes_from_lot(wide, steps, baseline_lot)
+                 if baseline_lot else {})
+        wide = wide.with_columns([
+            pl.col(s).fill_null(codes.get(s, baseline)) for s in steps])
+        return cls(steps=steps, wide=wide, baseline=baseline,
+                   baseline_codes=codes, baseline_lot=baseline_lot if codes else "")
 
     # ── 그룹핑 ────────────────────────────────────────────────
     def combo_label(self, row: dict, factors: list[str]) -> str:
@@ -128,7 +179,9 @@ class SplitMatrix:
         styles: list[GroupStyle] = []
         pal, sym = cycle(PALETTE_OKABE), cycle(SYMBOLS)
         for i, (codes, members) in enumerate(self.combos_for(factors).items()):
-            is_ref = all(c == self.baseline for c in codes)   # 라벨을 되쪼개지 않는다
+            # 기준 코드는 step마다 다를 수 있다 — factor와 코드를 짝지어 본다.
+            # (라벨을 되쪼개지 않는다: 코드에 구분자가 들어가면 어긋난다)
+            is_ref = all(c == self.code_of(f) for f, c in zip(factors, codes))
             label = self.label_of(codes)
             styles.append(GroupStyle(
                 gid=f"x{i}", name=f"{label} ({len(members)})",

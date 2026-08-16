@@ -131,6 +131,11 @@ class CollapsibleSection(QWidget):
         self.toggle.setText(f"{'▸' if on else '▾'}  {self._title}")
         self._host.setVisible(not on)
 
+    def set_title(self, title: str) -> None:
+        """제목을 바꾼다 — 접힌 채로도 상태를 알리고 싶을 때(예: `LOT 3/12`)."""
+        self._title = title.upper()
+        self.set_collapsed(self.toggle.isChecked())
+
 
 class GhostButton(QPushButton):
     """투명 배경 보조 버튼. hover 시 미세 리프트(그림자+상승) 효과."""

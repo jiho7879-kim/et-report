@@ -1,6 +1,18 @@
-"""데모 데이터 — 사내 DB·bdq 없이도 모든 화면이 그려지도록 채워 넣는다.
+"""데모 모드 — 사내 DB·bdq·Excel 없이 **모든 기능**을 눌러 볼 수 있게 한다.
 
-실제 연결 시에는 load_demo() 대신
+세 층으로 나뉜다.
+
+  `demo_data`    무엇을 보여 줄지 (리포메터·템플릿·실험 조건·raw 측정값)
+  `demo_bundle`  그것을 진짜 파일로 (DuckDB·리포메터·템플릿·실험 조건 csv/xlsx)
+  `demo_sources` 사내 조회의 입구만 가짜로 (추출·계측·tracking·S3)
+
+여기(`demo.py`)는 그 셋을 상태에 올리는 얇은 층이다.
+
+  · `load_demo(state)`  — 파일 없이 즉시 화면이 그려지는 in-memory 한 벌
+  · `prepare(...)`      — 번들을 만들고 [분석] 설정·[데이터] 프리셋에 꽂아,
+                          [적용]·[추출]을 실제 코드로 돌려볼 수 있게 한다
+
+실제 연결 시에는 `load_demo()` 대신
   state.rf     = reformatter.load(경로)
   state.report = templates.build_report(...)
   state.data   = loader.load_state(state, db_path)  (읽기 전용)
@@ -8,124 +20,72 @@
 """
 from __future__ import annotations
 
-import hashlib
-import random
+import logging
+from datetime import datetime
 
 import polars as pl
 
-from etreport.data.reformatter import Reformatter, Rule
-from etreport.model.specs import GroupStyle, PageSpec, PlotSpec, ReportSpec, TableRowSpec
+from etreport import demo_data
+from etreport.data.reformatter import Reformatter
+from etreport.model.specs import GroupStyle, PlotSpec, ReportSpec
 from etreport.model.split import SplitMatrix
 from etreport.model.state import AppState
 
-# ── 리포메터 (실제 컬럼 스키마) ───────────────────────────────
-_RULES = [
-    # category itemid            alias           abs  scale form unit  low   high  target  w      l
-    ("REAL", "ET_IDSAT_N_SVT", "Idsat N SVT", False, 1e6, "", "uA", 0.34, 0.86, 0.60, 0.20, 0.03),
-    ("REAL", "ET_IDSAT_N_LVT", "Idsat N LVT", False, 1e6, "", "uA", None, None, None, 0.18, 0.03),
-    ("REAL", "ET_VTLIN_N_SVT", "Vtlin N SVT", False, 1.0, "", "V",  0.30, 0.62, 0.46, 0.22, 0.03),
-    ("REAL", "ET_VTSAT_N_SVT", "Vtsat N SVT", False, 1.0, "", "V",  0.36, 0.70, 0.53, 0.20, 0.035),
-    ("REAL", "ET_IOFF_N_SVT",  "Ioff N SVT",  True,  1e9, "", "nA", None, 0.90, None, 0.15, 0.03),
-    ("REAL", "ET_IDSAT_P_SVT", "Idsat P SVT", True,  1e6, "", "uA", 0.32, None, 0.50, 0.25, 0.04),
-    ("REAL", "ET_VTLIN_P_SVT", "Vtlin P SVT", True,  1.0, "", "V",  0.28, 0.66, 0.47, 0.25, 0.04),
-    ("REAL", "ET_CAP_MIM",     "Cap MIM unit", False, 1e15,"", "fF", None, None, None, None, None),
-    ("ADDP", "CALC_RATIO_NP",  "Idsat N/P",   False, 1.0,
-     "{Idsat N SVT}/{Idsat P SVT}", "", 1.8, 2.6, 2.2, None, None),
-    ("ADDP", "CALC_VT_SPREAD", "Vt spread N", False, 1.0,
-     "Std({Vtlin N SVT},{Vtsat N SVT})", "V", None, 0.06, None, None, None),
-]
+log = logging.getLogger(__name__)
 
-_SPLIT = [
-    ("PA123", "W01", "Split_A", "Base"), ("PA123", "W02", "Split_A", "Hi"),
-    ("PA123", "W03", "Split_B", "Base"), ("PA123", "W04", "Split_B", "Base"),
-    ("PA124", "W01", "Split_B", "Hi"),   ("PA124", "W02", "Base", "Base"),
-    ("PA124", "W03", "Base", "Hi"),
-]
+DEMO_CONFIG = "데모"           # 분석 설정·추출 프리셋 이름
+_DATA: pl.DataFrame | None = None      # 합성 프레임은 프로세스당 한 번만
 
 
+# ── in-memory 한 벌 ─────────────────────────────────────────
 def _reformatter() -> Reformatter:
-    rf = Reformatter()
-    for i, (cat, iid, alias, ab, sc, form, unit, lo, hi, tg, w, length) in enumerate(_RULES, 2):
-        rf.rules.append(Rule(cat, iid, alias, ab, sc, form, unit, lo, hi, tg, i,
-                             w=w, l=length))
-    return rf
+    return demo_data.reformatter()
 
 
-def _report() -> ReportSpec:
-    r = ReportSpec(report="M2_ET")
-    p1 = PageSpec(1, "NMOS 특성 비교")
-    p1.slots[0] = PlotSpec("Idsat vs Vtlin", "Vtlin N SVT", "Idsat N SVT")
-    p1.slots[1] = PlotSpec("SVT+LVT 중첩", "Vtlin N SVT, Vtsat N SVT",
-                           "Idsat N SVT, Idsat N LVT", x_name="Vt [V]")
-    p1.slots[2] = PlotSpec("요약 — NMOS", type="table")
-    p1.slots[3] = PlotSpec("Ioff (자동 log)", "Vtlin N SVT", "Ioff N SVT")
-    p2 = PageSpec(2, "PMOS · 상관")
-    p2.slots[0] = PlotSpec("Idsat vs Vtlin (P)", "Vtlin P SVT", "Idsat P SVT")
-    p2.slots[1] = PlotSpec("N/P ratio", "Vtlin N SVT", "Idsat N/P")
-    p2.slots[2] = PlotSpec("요약 — PMOS", type="table")
-    p3 = PageSpec(3, "기하(W/L) trend")
-    p3.slots[0] = PlotSpec("Idsat vs W", type="trend", x="W",
-                           y="Idsat N SVT, Vtlin N SVT, Ioff N SVT, Idsat P SVT")
-    p3.slots[1] = PlotSpec("Vt vs L", type="trend", x="L",
-                           y="Vtlin N SVT, Vtsat N SVT, Vtlin P SVT")
-    p3.slots[2] = PlotSpec("요약 — 기하", type="table")
-    r.pages = [p1, p2, p3]
-    r.table_rows = [
-        TableRowSpec("Idsat N SVT", ["NMOS", "Idsat", "SVT"]),
-        TableRowSpec("Idsat N LVT", ["NMOS", "Idsat", "LVT"]),
-        TableRowSpec("Vtlin N SVT", ["NMOS", "Vt", "lin"]),
-        TableRowSpec("Vtsat N SVT", ["NMOS", "Vt", "sat"]),
-        TableRowSpec("Idsat P SVT", ["PMOS", "Idsat", "SVT"]),
-        TableRowSpec("Vtlin P SVT", ["PMOS", "Vt", "lin"]),
-        TableRowSpec("Ioff N SVT", ["Leakage", "Ioff", "N"]),
-        TableRowSpec("Idsat N/P", ["Ratio", "N/P", "Idsat"]),
-        TableRowSpec("Vt spread N", ["Ratio", "Spread", "Vt"]),
-    ]
-    return r
+def _templates(rf: Reformatter):
+    from etreport.model.templates import from_frames
+    return from_frames(demo_data.plot_frame(), demo_data.table_frame(), rf)
 
 
-def _points(rf: Reformatter, per_wafer: int = 24) -> pl.DataFrame:
-    """wafer별 die 포인트. 조건 코드에 따라 평균을 살짝 밀어 실험 효과를 만든다."""
-    rng = random.Random(20260811)
-    rows: list[dict] = []
-    for lot, waf, m1, m5 in _SPLIT:
-        bias = {"Split_A": 0.05, "Split_B": -0.04, "Base": 0.0}[m1]
-        bias += {"Hi": 0.02, "Base": 0.0}[m5]
-        for i in range(per_wafer):
-            vt = 0.46 + bias * 0.6 + rng.gauss(0, 0.022)
-            vts = vt + 0.07 + rng.gauss(0, 0.010)
-            ids = 0.60 + bias + rng.gauss(0, 0.045) - (vt - 0.46) * 1.4
-            idl = ids * 1.24 + rng.gauss(0, 0.03)
-            ioff = max(1e-3, 0.16 * (10 ** (-(vt - 0.46) * 6)) + rng.gauss(0, 0.02))
-            vtp = 0.47 - bias * 0.4 + rng.gauss(0, 0.020)
-            idp = 0.50 - bias * 0.5 + rng.gauss(0, 0.035)
-            cap = 1.84 + rng.gauss(0, 0.02)
-            key = hashlib.blake2b(
-                f"{lot}|{waf}|{i}".encode(), digest_size=8).hexdigest()
-            rec = {
-                "key": key, "lot": lot, "wafer": waf, "gid": "",
-                "Idsat N SVT": ids, "Idsat N LVT": idl, "Vtlin N SVT": vt,
-                "Vtsat N SVT": vts, "Ioff N SVT": ioff, "Idsat P SVT": idp,
-                "Vtlin P SVT": vtp, "Cap MIM unit": cap,
-            }
-            rec["Idsat N/P"] = ids / idp if idp else None
-            mu = (vt + vts) / 2
-            rec["Vt spread N"] = ((vt - mu) ** 2 + (vts - mu) ** 2) ** 0.5
-            rows.append(rec)
-    return pl.DataFrame(rows)
+def _report(rf: Reformatter, name: str = "M2_ET") -> ReportSpec:
+    from etreport.model.templates import build_report
+    return build_report(_templates(rf), name)
+
+
+def _points() -> pl.DataFrame:
+    """분석 프레임. 만드는 데 드는 시간이 아까워 프로세스당 한 번만 만든다."""
+    global _DATA
+    if _DATA is None:
+        _DATA = demo_data.wide_frame()
+    return _DATA.clone()
 
 
 def load_demo(state: AppState) -> None:
-    state.rf = _reformatter()
-    state.report = _report()
-    state.reports = ["M2_ET", "DEV_EVAL"]
-    state.split = SplitMatrix.from_dataframe(pl.DataFrame(
-        {"lot": [r[0] for r in _SPLIT], "wafer": [r[1] for r in _SPLIT],
-         "M1": [r[2] for r in _SPLIT], "M5": [r[3] for r in _SPLIT]}))
+    """상태 한 벌을 채운다 — 파일도 DB도 건드리지 않는다(테스트·시연 공용)."""
+    rf = _reformatter()
+    state.rf = rf
+    state.templates = _templates(rf)
+    state.reports = list(demo_data.REPORTS)
+    state.report = _report(rf)
+    state.split = SplitMatrix.from_dataframe(demo_data.split_frame())
     state.factors = ["M1"]
-    state.data = _points(state.rf)
+    state.data = _points()
     apply_split(state)
     state.explore = PlotSpec(x="Vtlin N SVT", y="Idsat N SVT")
+    _seed_exclusions(state)
+    state.db_label = "(데모 데이터)"
+    state.applied = True
+    state.status_note = ""
+
+
+def _seed_exclusions(state: AppState) -> None:
+    """제외 포인트 두 개를 미리 찍어 둔다 — 제외 이력 장표·복원(Ctrl+Z)용."""
+    if state.data is None or state.data.height < 20:
+        return
+    at = datetime.now().isoformat(timespec="seconds")
+    for key, why in zip(state.data["key"][:2], ("프로브 접촉 불량", "웨이퍼 가장자리")):
+        state.excl_points[key] = {"reason": f"(데모) {why}", "at": at}
+    state.excluded = set(state.excl_points)
 
 
 def apply_split(state: AppState) -> None:
@@ -141,3 +101,91 @@ def apply_split(state: AppState) -> None:
 
 def unassigned_groups(state: AppState) -> list[GroupStyle]:
     return [g for g in state.groups if g.visible]
+
+
+# ── 번들까지 얹은 한 벌 (앱 부팅용) ─────────────────────────
+def prepare(state: AppState, settings=None, root: str | None = None,
+            rebuild: bool = False, sources: bool = True):
+    """데모 모드 전체 준비 — 상태 + 번들 파일 + 설정 + 가짜 소스.
+
+    화면은 `load_demo()`가 채운 in-memory 데이터로 **즉시** 뜨고, 도크의 파일
+    칸에는 번들 경로가 꽂혀 있다. [적용](F5)을 누르면 그 파일들을 실제로 읽어
+    같은 화면이 다시 그려진다 — 데모와 실사용의 경로가 갈리지 않는다.
+
+    반환: 만들어진 `DemoBundle`(실패하면 None).
+    """
+    from etreport import demo_bundle
+
+    load_demo(state)
+    bundle = None
+    try:
+        bundle = demo_bundle.build(root, force=rebuild)
+        if bundle.made:
+            log.info("데모 번들 생성: %s (%s)", bundle.root, ", ".join(bundle.made))
+        else:
+            log.info("데모 번들 재사용: %s", bundle.root)
+    except Exception as e:                       # noqa: BLE001 — 데모는 계속 뜬다
+        log.warning("데모 번들을 만들지 못했습니다(%s) — in-memory 데이터만 씁니다", e)
+
+    if sources:
+        from etreport import demo_sources
+        demo_sources.install(str(bundle.root / "_s3") if bundle else None)
+
+    if settings is not None and bundle is not None:
+        stage_settings(settings, bundle)
+    return bundle
+
+
+def stage_window(win) -> None:
+    """창이 만들어진 뒤 데모용으로 손봐 주는 것 두 가지.
+
+    ① [데이터] 화면의 기간을 **데모 데이터가 있는 날짜**로 맞춘다 — 기본값
+       (최근 7일)으로 두면 합성 데이터가 없는 구간이라 추출이 0행으로 끝난다.
+    ② 도크는 방금 꽂은 데모 설정을 '미적용'으로 표시한다. 화면에는 이미 데모
+       데이터가 올라와 있으므로 무엇을 누르면 되는지 한 줄로 알려 준다.
+    """
+    from PySide6.QtCore import QDate
+
+    data_ws = getattr(win, "data_ws", None)
+    if data_ws is not None:
+        data_ws.d_from.setDate(QDate(demo_data.D_FROM.year, demo_data.D_FROM.month,
+                                     demo_data.D_FROM.day))
+        data_ws.d_to.setDate(QDate(demo_data.D_TO.year, demo_data.D_TO.month,
+                                   demo_data.D_TO.day))
+    anal = getattr(win, "anal_ws", None)
+    if anal is not None:
+        anal.lbl_apply.setText("데모 데이터가 올라와 있습니다 — [적용](F5)을 누르면 "
+                               "데모 번들 파일로 다시 읽습니다")
+
+
+def stage_settings(settings, bundle) -> None:
+    """[분석] 설정 · [데이터] 프리셋에 번들 경로를 꽂는다(맨 앞·기본 선택).
+
+    데모 설정은 **저장하지 않는다** — 사용자의 settings.json에 데모 경로가
+    남으면 다음 실사용에서 엉뚱한 파일을 가리킨다(app.py가 데모 모드에서
+    설정 저장을 건너뛴다).
+    """
+    from etreport.config.settings import AnalysisConfig, Condition, ExtractPreset
+
+    rf_path, rf_sheet = bundle.stage_reformatter()
+    plot_p, plot_s, tbl_p, tbl_s = bundle.stage_templates()
+
+    cfg = AnalysisConfig(
+        name=DEMO_CONFIG, db_path=str(bundle.db),
+        plot_template_path=plot_p, plot_sheet=plot_s,
+        table_template_path=tbl_p, table_sheet=tbl_s,
+        reformatter_path=rf_path, reformatter_sheet=rf_sheet,
+        report="M2_ET", split_path=str(bundle.split_csv))
+    settings.analysis_configs = [
+        cfg, *[c for c in settings.analysis_configs if c.name != DEMO_CONFIG]]
+    settings.last_analysis_config = DEMO_CONFIG
+
+    preset = ExtractPreset(
+        name=DEMO_CONFIG, db_path=str(bundle.root / "데모_추출.duckdb"),
+        reformatter_path=rf_path, reformatter_sheet=rf_sheet,
+        out_dir=str(bundle.root),
+        conditions=[Condition("line_id", demo_data.LINE_ID, required=True),
+                    Condition("step_id", "M2ET")])
+    settings.extract_presets = [
+        preset, *[p for p in settings.extract_presets if p.name != DEMO_CONFIG]]
+    settings.last_extract_preset = DEMO_CONFIG

@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 # pyqtgraph 심볼 ↔ matplotlib 마커 (한 곳에서만 정의)
 MARKER = {"o": "o", "s": "s", "t": "^", "d": "D", "+": "+"}
 SPEC_COLOR = "#d70015"      # 규격 — 빨간 실선
-TARGET_COLOR = "#0071e3"    # 타깃 — 파란 X
+TARGET_COLOR = "#0000FF"    # 타깃 — 파란 X
 REF_COLOR = "#8e8e93"       # REF 그룹 라인 — 회색
 FONT_MIN_PT = 8            # 8pt 하한 — PPT에서 읽히는 최소 크기
 FONT_MAX_PT = 13.0         # 축 이름·제목 상한
@@ -53,6 +53,42 @@ def _font_size(figsize: tuple[float, float], compact: bool) -> float:
 fonts.setup_matplotlib()
 
 
+def lot_markers(data: dict[str, pl.DataFrame]) -> dict[str, str]:
+    """lot → matplotlib marker. **data 전체**를 한 번에 보고 정한다(§9.2).
+
+    그룹마다 따로 매기면 같은 lot이 그룹에 따라 다른 모양이 되고, plot마다 따로
+    매기면 같은 lot이 페이지마다 달라진다. 정렬한 lot 순서로 한 번만 정해
+    화면·PPT·모든 페이지에서 같은 lot이 늘 같은 모양이 되게 한다.
+
+    lot이 marker 종류보다 많으면 순환한다 — 실무는 한 번에 2~3 lot이다.
+    """
+    lots = sorted({str(v) for df in data.values() if "lot" in df.columns
+                   for v in df["lot"].unique().to_list() if v is not None})
+    marks = list(MARKER.values())
+    return {lot: marks[i % len(marks)] for i, lot in enumerate(lots)}
+
+
+def _lot_parts(df: pl.DataFrame, lot_split: bool, markers: dict[str, str],
+               st: GroupStyle) -> list[tuple[pl.DataFrame, str, str]]:
+    """(하위 프레임, marker, 범례 라벨) 목록.
+
+    lot 구분이 꺼져 있으면 한 덩이 그대로 — 지금까지의 그림과 완전히 같다.
+    켜져 있으면 lot마다 나누고 **그룹의 symbol 대신 lot이 모양을 정한다**.
+    프레임을 만드는 쪽(화면·PPT)이 아니라 여기서 나누는 이유는, 만드는 곳이
+    두 군데라 거기서 쪼개면 "화면 = PPT"가 깨지기 때문이다.
+    """
+    base = MARKER.get(st.symbol, "o")
+    if not lot_split or "lot" not in df.columns or df.is_empty():
+        return [(df, base, st.name)]
+    parts = []
+    for lot in sorted({str(v) for v in df["lot"].unique().to_list()
+                       if v is not None}):
+        sub = df.filter(pl.col("lot").cast(pl.Utf8) == lot)
+        if not sub.is_empty():
+            parts.append((sub, markers.get(lot, base), f"{st.name} ({lot})"))
+    return parts or [(df, base, st.name)]
+
+
 def render(spec: PlotSpec,
            data: dict[str, pl.DataFrame],      # gid → (x, y, alias별 값 wide)
            styles: list[GroupStyle],
@@ -61,7 +97,8 @@ def render(spec: PlotSpec,
            figsize: tuple[float, float],
            excluded: pl.DataFrame | None = None,
            compact: bool = False,
-           fig: Figure | None = None) -> Figure:
+           fig: Figure | None = None,
+           lot_split: bool = False) -> Figure:
     """compact=True면 슬롯/미니용 — 라벨을 줄이고 여백을 좁힌다.
 
     fig를 주면 그 Figure에 그린다(화면 캔버스용). 안 주면 새로 만든다(PPT용).
@@ -69,10 +106,14 @@ def render(spec: PlotSpec,
     새로 만들 때 pyplot을 쓰지 않는다 — pyplot은 만든 Figure를
     전역 매니저에 등록해 두기 때문에, 명시적으로 닫지 않으면 덱 하나를 만들 때
     생긴 수백 개의 Figure가 프로세스가 끝날 때까지 메모리에 남는다.
+
+    `lot_split=True`면 lot마다 심볼을 달리하고 범례에 lot을 병기한다 — 여러 lot을
+    한 그림에 놓고 볼 때 어느 점이 어느 lot인지 구별하기 위해서다.
     """
     if spec.type == "trend":
         return _render_trend(spec, data, styles, rf, log_patterns, figsize,
-                             excluded=excluded, compact=compact, fig=fig)
+                             excluded=excluded, compact=compact, fig=fig,
+                             lot_split=lot_split)
     if fig is None:
         fig = Figure(figsize=figsize, dpi=140 if compact else 180)
         ax = fig.add_subplot(111)
@@ -98,21 +139,23 @@ def render(spec: PlotSpec,
     # 포인트 — 모든 xy쌍이 그룹 스타일을 공유(확정 사양)
     excluded_keys = (set(excluded["key"]) if excluded is not None
                      and not excluded.is_empty() else set())
+    markers = lot_markers(data) if lot_split else {}
     for st in styles:
         if not st.visible or st.gid not in data:
             continue
         df = data[st.gid]
-        if spec.mode != "site":
-            _scatter_aggregate(ax, df, pairs, st, spec.mode, excluded_keys)
-            continue
-        for ax_x, ax_y in pairs:
-            if ax_x not in df.columns or ax_y not in df.columns:
+        for sub, mark, label in _lot_parts(df, lot_split, markers, st):
+            if spec.mode != "site":
+                _scatter_aggregate(ax, sub, pairs, st, spec.mode, excluded_keys,
+                                   marker=mark, label=label)
                 continue
-            ax.scatter(df[ax_x], df[ax_y],
-                       s=st.size ** 2, c=st.color,
-                       marker=MARKER.get(st.symbol, "o"),
-                       linewidths=0, alpha=0.9, zorder=3,
-                       label=st.name if (ax_x, ax_y) == pairs[0] else None)
+            for ax_x, ax_y in pairs:
+                if ax_x not in sub.columns or ax_y not in sub.columns:
+                    continue
+                ax.scatter(sub[ax_x], sub[ax_y],
+                           s=st.size ** 2, c=st.color, marker=mark,
+                           linewidths=0, alpha=0.9, zorder=3,
+                           label=label if (ax_x, ax_y) == pairs[0] else None)
 
     # 제외된 포인트 — 회색 빈 심볼로 남긴다(사라지지 않게)
     if excluded is not None and not excluded.is_empty():
@@ -124,31 +167,45 @@ def render(spec: PlotSpec,
 
     # 규격 — 십자로 삐져나온 선 대신 **규격 창(박스)**을 빨간 실선으로.
     # 한쪽 규격이 없으면 그 변은 축 끝까지 열어 둔다(합집합, 확정 사양).
-    def _bounds(aliases: set[str]) -> tuple[float | None, float | None]:
-        lo = [rf.by_alias[a].speclow for a in aliases
-              if a in rf.by_alias and rf.by_alias[a].speclow is not None]
-        hi = [rf.by_alias[a].spechigh for a in aliases
-              if a in rf.by_alias and rf.by_alias[a].spechigh is not None]
-        return (min(lo) if lo else None, max(hi) if hi else None)
+    # xy쌍이 여럿이면 **쌍마다 한 개씩** 그린다 — 쌍끼리 규격이 다른데 하나로
+    # 합치면 어느 쪽에도 맞지 않는 창이 나온다. 색은 쌍을 구분하지 않고 그대로
+    # 규격 빨강 하나다(사용자 요청).
+    def _bounds(alias: str) -> tuple[float | None, float | None]:
+        rule = rf.by_alias.get(alias)
+        if rule is None:
+            return (None, None)
+        return (rule.speclow, rule.spechigh)
 
-    x_lo, x_hi = _bounds({p[0] for p in pairs})
-    y_lo, y_hi = _bounds({p[1] for p in pairs})
-    _spec_box(ax, x_lo, x_hi, y_lo, y_hi)
+    seen_box: set[tuple] = set()
+    for ax_x, ax_y in pairs:
+        x_lo, x_hi = _bounds(ax_x)
+        y_lo, y_hi = _bounds(ax_y)
+        box = (x_lo, x_hi, y_lo, y_hi)
+        if box in seen_box:
+            continue
+        seen_box.add(box)
+        _spec_box(ax, x_lo, x_hi, y_lo, y_hi)
 
     # 타깃 — 파란 X. 양축 모두 있으면 교점 하나, 한쪽만 있으면 그 축의 선.
-    def _target(aliases: set[str]) -> float | None:
-        ts = [rf.by_alias[a].target for a in aliases
-              if a in rf.by_alias and rf.by_alias[a].target is not None]
-        return sum(ts) / len(ts) if ts else None
+    # 규격과 마찬가지로 쌍마다 하나씩(같은 위치면 한 번만).
+    def _target(alias: str) -> float | None:
+        rule = rf.by_alias.get(alias)
+        return rule.target if rule is not None else None
 
-    tx, ty = _target({p[0] for p in pairs}), _target({p[1] for p in pairs})
-    if tx is not None and ty is not None:
-        ax.plot([tx], [ty], marker="x", color=TARGET_COLOR, markersize=11,
-                markeredgewidth=2.0, zorder=6, linestyle="none", label="_target")
-    elif tx is not None:
-        ax.axvline(tx, color=TARGET_COLOR, lw=1.1, zorder=2.2)
-    elif ty is not None:
-        ax.axhline(ty, color=TARGET_COLOR, lw=1.1, zorder=2.2)
+    seen_tgt: set[tuple] = set()
+    for ax_x, ax_y in pairs:
+        tx, ty = _target(ax_x), _target(ax_y)
+        if (tx, ty) in seen_tgt or (tx is None and ty is None):
+            continue
+        seen_tgt.add((tx, ty))
+        if tx is not None and ty is not None:
+            ax.plot([tx], [ty], marker="x", color=TARGET_COLOR, markersize=11,
+                    markeredgewidth=2.0, zorder=6, linestyle="none",
+                    label="_target")
+        elif tx is not None:
+            ax.axvline(tx, color=TARGET_COLOR, lw=1.1, zorder=2.2)
+        else:
+            ax.axhline(ty, color=TARGET_COLOR, lw=1.1, zorder=2.2)
 
     if lgx:
         ax.set_xscale("log")
@@ -190,9 +247,16 @@ def render(spec: PlotSpec,
 
 
 def _scatter_aggregate(ax, df: pl.DataFrame, pairs, st: GroupStyle,
-                       agg: str, excluded_keys: set[str]) -> None:
-    """mode=avg/med/std scatter — (lot,wafer) 집계 점 하나씩."""
+                       agg: str, excluded_keys: set[str],
+                       marker: str | None = None,
+                       label: str | None = None) -> None:
+    """mode=avg/med/std scatter — (lot,wafer) 집계 점 하나씩.
+
+    marker·label을 주면 그것을 쓴다(lot 구분). 안 주면 그룹 스타일 그대로다.
+    """
     aliases = [a for pr in pairs for a in pr]
+    mark = marker or MARKER.get(st.symbol, "o")
+    name = st.name if label is None else label
     ws = wafer_stats(df, excluded_keys, aliases, agg)
     for ax_x, ax_y in pairs:
         xs, ys = [], []
@@ -203,10 +267,9 @@ def _scatter_aggregate(ax, df: pl.DataFrame, pairs, st: GroupStyle,
                 ys.append(y)
         if not xs:
             continue
-        ax.scatter(xs, ys, s=st.size ** 2, c=st.color,
-                   marker=MARKER.get(st.symbol, "o"),
+        ax.scatter(xs, ys, s=st.size ** 2, c=st.color, marker=mark,
                    linewidths=0, alpha=0.9, zorder=3,
-                   label=st.name if (ax_x, ax_y) == pairs[0] else None)
+                   label=name if (ax_x, ax_y) == pairs[0] else None)
 
 
 def _render_trend(spec: PlotSpec,
@@ -217,7 +280,8 @@ def _render_trend(spec: PlotSpec,
                   figsize: tuple[float, float],
                   excluded: pl.DataFrame | None = None,
                   compact: bool = False,
-                  fig: Figure | None = None) -> Figure:
+                  fig: Figure | None = None,
+                  lot_split: bool = False) -> Figure:
     """기하(W/L) trend — x=규격 기하값, y=item 값, 대표값 라인 + 점 스트립.
 
     scatter와 달리 X축이 데이터 컬럼이 아니라 리포메터의 기하값(W/L)이므로
@@ -262,6 +326,9 @@ def _render_trend(spec: PlotSpec,
     lgy = resolve_log(spec.logy_mode, plotted, log_patterns)
     ylo, yhi = compute_range(plotted, y_min, y_max, rf, lgy)
 
+    markers = lot_markers(data) if lot_split else {}
+    # 점 스트립은 lot으로 나누지 않는다 — 작은 점이라 모양을 구분하지 않고,
+    # wafer 집계는 어차피 (lot, wafer)별이라 나눠도 같은 점이 나온다.
     for st in styles:
         if not st.visible or st.gid not in data:
             continue
@@ -284,19 +351,23 @@ def _render_trend(spec: PlotSpec,
     for st in styles:
         if not st.visible or st.gid not in data:
             continue
-        reps = group_representatives(data[st.gid], excluded_keys,
-                                     plotted, line_agg)
-        pts = sorted((xpos[it], reps[it]) for it in plotted
-                     if reps.get(it) is not None)
-        if not pts:
-            continue
-        xs, ys = zip(*pts)
-        if st.ref:
-            ax.plot(xs, ys, color=REF_COLOR, marker="d", markersize=4,
-                    linewidth=1.2, zorder=4, label=st.name)
-        else:
-            ax.plot(xs, ys, color=st.color, marker=MARKER.get(st.symbol, "o"),
-                    markersize=3.5, linewidth=1.2, zorder=4, label=st.name)
+        # lot 구분이 켜져 있으면 lot마다 선을 따로 긋는다 — 한 선으로 합치면
+        # lot 사이의 차이가 대표값 하나에 섞여 보이지 않는다.
+        for sub, mark, label in _lot_parts(data[st.gid], lot_split,
+                                           markers, st):
+            reps = group_representatives(sub, excluded_keys, plotted, line_agg)
+            pts = sorted((xpos[it], reps[it]) for it in plotted
+                         if reps.get(it) is not None)
+            if not pts:
+                continue
+            xs, ys = zip(*pts)
+            if st.ref and not lot_split:
+                ax.plot(xs, ys, color=REF_COLOR, marker="d", markersize=4,
+                        linewidth=1.2, zorder=4, label=label)
+            else:
+                ax.plot(xs, ys, color=REF_COLOR if st.ref else st.color,
+                        marker=mark, markersize=3.5, linewidth=1.2,
+                        zorder=4, label=label)
 
     # X축(WIDTH·LENGTH) 위치에 세로 점선은 그리지 않는다 — 규격은 y값의 한계라
     # x 위치에 그으면 의미 없는 격자만 늘어난다(사용자 요청).
@@ -347,22 +418,23 @@ def _render_trend(spec: PlotSpec,
 
 
 def _spec_box(ax, x_lo, x_hi, y_lo, y_hi) -> None:
-    """축 범위가 확정된 뒤 그리도록 정보만 얹어 둔다."""
-    ax._spec_bounds = (x_lo, x_hi, y_lo, y_hi)
+    """축 범위가 확정된 뒤 그리도록 정보만 얹어 둔다(xy쌍마다 하나씩 쌓인다)."""
+    ax._spec_bounds = [*getattr(ax, "_spec_bounds", []),
+                       (x_lo, x_hi, y_lo, y_hi)]
 
 
 def _flush_spec_box(ax) -> None:
-    b = getattr(ax, "_spec_bounds", None)
-    if not b or all(v is None for v in b):
-        return
-    x_lo, x_hi, y_lo, y_hi = b
-    ax0, ax1 = ax.get_xlim()
-    ay0, ay1 = ax.get_ylim()
-    left = x_lo if x_lo is not None else ax0
-    right = x_hi if x_hi is not None else ax1
-    bottom = y_lo if y_lo is not None else ay0
-    top = y_hi if y_hi is not None else ay1
-    ax.add_patch(Rectangle(
-        (left, bottom), right - left, top - bottom,
-        fill=False, edgecolor=SPEC_COLOR, linewidth=1.2,
-        linestyle="-", zorder=2.2, clip_on=True))
+    for b in getattr(ax, "_spec_bounds", []):
+        if all(v is None for v in b):
+            continue
+        x_lo, x_hi, y_lo, y_hi = b
+        ax0, ax1 = ax.get_xlim()
+        ay0, ay1 = ax.get_ylim()
+        left = x_lo if x_lo is not None else ax0
+        right = x_hi if x_hi is not None else ax1
+        bottom = y_lo if y_lo is not None else ay0
+        top = y_hi if y_hi is not None else ay1
+        ax.add_patch(Rectangle(
+            (left, bottom), right - left, top - bottom,
+            fill=False, edgecolor=SPEC_COLOR, linewidth=1.2,
+            linestyle="-", zorder=2.2, clip_on=True))

@@ -16,8 +16,10 @@ lot 찾기는 정확히 일치 → 대소문자 무시 → 부분 일치로 넓�
 from __future__ import annotations
 
 import polars as pl
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -42,6 +44,10 @@ from etreport.model.state import AppState
 
 ALL = "전체"                       # 필터 콤보의 '좁히지 않음'
 FILTERS = (("step_id", "step"), ("site", "site"), ("temp", "temp"))
+
+#: 자동 그룹핑 콤보의 라벨 → 모드. 멀티 lot 탭은 여기에 'split factor별'이 더 붙는다
+#: (단일 lot 탭에서는 lot 경계를 넘는 묶음이 의미가 없다).
+AUTO_MODES = {"wafer별": "wafer", "lot별": "lot", "split factor별": "factor"}
 
 #: 머리글로 인정하는 단어 — 있으면 첫 줄을 건너뛰고, 없으면 첫 줄도 자료로 본다
 _HEAD_WORDS = {"lot", "lot_id", "root_lot_id", "랏", "로트",
@@ -237,13 +243,19 @@ class GroupDialog(QDialog):
             self._lookup()
         return w
 
-    # ── 자동 그룹핑 (wafer별 / lot별) ────────────────────────
-    def auto_group(self, mode: str | None = None) -> int:
-        """조회 범위를 wafer별 또는 lot별로 자동 배정. 만든 그룹 수를 반환.
+    # ── 자동 그룹핑 (wafer별 / lot별 / split factor별) ───────
+    def auto_group(self, mode: str | None = None,
+                   lots: list[str] | None = None) -> int:
+        """조회 범위를 자동 배정. 만든 그룹 수를 반환.
 
         재실행해도 결과가 같도록(멱등) 기존 손배정을 먼저 지운다. 그룹 이름은
         wafer ID(또는 lot ID)를 그대로 쓰고, 첫 그룹은 기존 `_add_group` 규칙대로
         REF가 된다. [적용] 전에도 색인(wafer_index)만으로 동작한다.
+
+        `lots`를 주면 **그 lot만** 대상으로 하고, 다른 lot에 짜 둔 배정과 그룹은
+        건드리지 않는다(멀티 lot 탭) — lot을 갈아 가며 작업할 수 있어야 한다.
+        `lots`를 주지 않으면 색인 전체를 처음부터 다시 만든다(단일 lot 탭의
+        지금까지 동작 그대로).
         """
         from etreport.model.specs import GroupStyle
 
@@ -251,26 +263,34 @@ class GroupDialog(QDialog):
         mode = mode or self.auto_mode()
         if self.index.is_empty():
             return 0
+        if mode == "factor":
+            return self._auto_group_factor(lots)
+        idx = (self.index if lots is None
+               else self.index.filter(pl.col("lot").is_in(lots)))
+        if idx.is_empty():
+            return 0
         keys = (["lot"] if mode == "lot" else ["lot", "wafer"])
         # DB 조회 순서는 보장되지 않는다 — lot·wafer 순으로 정렬해 그룹 번호와
         # 색이 실행할 때마다 달라지지 않게 한다
-        rows = (self.index.select(keys).unique().sort(keys)
-                .iter_rows(named=True))
-        st.manual_groups.clear()               # 멱등 — 다시 돌리면 처음부터
-        st.groups = []
+        rows = idx.select(keys).unique().sort(keys).iter_rows(named=True)
+        kept = self._clear_scope(lots)         # 멱등 — 이 범위는 처음부터
         made = 0
         for i, rec in enumerate(rows):
             lot = rec["lot"]
-            name = lot if mode == "lot" else rec["wafer"]
-            gid = f"a{i}"
+            # 멀티 lot 탭에서는 wafer ID만으로 어느 lot인지 알 수 없어 lot을
+            # 앞에 붙인다. 단일 lot 탭(lots=None)은 지금까지의 이름 그대로 둔다.
+            name = lot if mode == "lot" else (
+                f"{lot}·{rec['wafer']}" if lots is not None else rec["wafer"])
+            n = kept + i                       # 남아 있는 그룹 뒤에 이어 붙인다
+            gid = self._free_gid("a")
             st.groups.append(GroupStyle(
                 gid=gid, name=name,
-                color=REF_COLOR if i == 0 else PALETTE_OKABE[i % len(PALETTE_OKABE)],
-                symbol="d" if i == 0 else SYMBOLS[i % len(SYMBOLS)],
-                ref=i == 0))
-            members = (self.index.filter(pl.col("lot") == lot) if mode == "lot"
-                       else self.index.filter((pl.col("lot") == lot)
-                                              & (pl.col("wafer") == rec["wafer"])))
+                color=REF_COLOR if n == 0 else PALETTE_OKABE[n % len(PALETTE_OKABE)],
+                symbol="d" if n == 0 else SYMBOLS[n % len(SYMBOLS)],
+                ref=n == 0))
+            members = (idx.filter(pl.col("lot") == lot) if mode == "lot"
+                       else idx.filter((pl.col("lot") == lot)
+                                       & (pl.col("wafer") == rec["wafer"])))
             for w in dict.fromkeys(members["wafer"].to_list()):
                 st.manual_groups[(lot, w, None, None, None)] = gid
             made += 1
@@ -279,8 +299,95 @@ class GroupDialog(QDialog):
         self._fill_groups()
         return made
 
+    def _clear_scope(self, lots: list[str] | None) -> int:
+        """자동 그룹핑을 다시 돌리기 전에 **그 범위만** 비운다. 남은 그룹 수 반환.
+
+        `lots`가 None이면 전부 — 단일 lot 탭은 늘 색인 전체를 대상으로 하므로
+        지금까지처럼 처음부터 다시 만든다. `lots`가 주어지면 그 lot의 배정만
+        지우고, **그 lot들만 쓰던 그룹**을 함께 정리한다(아무도 안 쓰는 빈
+        그룹이 목록에 남지 않게). 다른 lot의 그룹·배정은 그대로 둔다.
+
+        프레임의 `gid`도 함께 비운다 — `manual_groups`만 지우면 다시 배정받지
+        못한 wafer(예: 실험 조건표에 없는 wafer)가 예전 gid를 그대로 달고 있어,
+        지운 그룹에 속한 것처럼 화면에 남는다.
+        """
+        st = self.state
+        if lots is None:
+            st.manual_groups.clear()
+            st.groups = []
+            self._clear_frame_gid(None)
+            return 0
+        scope = set(lots)
+        for k in [k for k in st.manual_groups if k[0] in scope]:
+            del st.manual_groups[k]
+        still_used = set(st.manual_groups.values())
+        st.groups = [g for g in st.groups if g.gid in still_used]
+        self._clear_frame_gid(scope)
+        return len(st.groups)
+
+    def _clear_frame_gid(self, scope: set[str] | None) -> None:
+        """프레임의 gid를 비운다. scope가 None이면 전부, 아니면 그 lot만."""
+        st = self.state
+        if st.data is None or "gid" not in st.data.columns:
+            return
+        blank = pl.lit("")
+        expr = (blank if scope is None else
+                pl.when(pl.col("lot").is_in(list(scope))).then(blank)
+                .otherwise(pl.col("gid")))
+        st.data = st.data.with_columns(expr.alias("gid"))
+
+    def _free_gid(self, prefix: str) -> str:
+        """쓰이지 않은 gid — 남겨 둔 그룹과 번호가 겹치면 배정이 뒤섞인다."""
+        taken = {g.gid for g in self.state.groups}
+        i = 0
+        while f"{prefix}{i}" in taken:
+            i += 1
+        return f"{prefix}{i}"
+
+    def _auto_group_factor(self, lots: list[str] | None = None) -> int:
+        """실험 조건(split)의 배정을 **manual_groups로 굽는다**(§9.2).
+
+        도크 [factor 편집]은 프레임의 gid를 직접 쓴다. 그래서 그 배정을 출발점
+        삼아 몇 장 옮겨 두면 [적용]할 때 통째로 되돌아간다. 여기서 구워 두면
+        loader가 실험 조건보다 **뒤에** manual_groups를 걸기 때문에 손으로 고친
+        쪽이 이긴다 — "자동으로 짜 놓고 손보기"가 그제야 성립한다.
+
+        조건 무관(전체 범위)으로 굽는다. factor는 wafer의 성질이지 측정 조건별로
+        갈리는 것이 아니다.
+
+        `lots`를 주면 그 lot의 배정만 다시 만든다 — 다른 lot을 이미 factor로
+        묶어 뒀다면 gid가 같으므로(`styles_for`가 조합마다 같은 gid를 준다)
+        두 번에 나눠 돌려도 한 그룹으로 합쳐진다.
+        """
+        st = self.state
+        if st.split is None or not st.factors:
+            return 0
+        assign = st.split.assignment(st.factors)     # 정규화 키 → gid
+        styles = st.split.styles_for(st.factors)
+        rows = self._rows_for(lots if lots is not None
+                              else sorted(set(self.index["lot"].to_list())))
+        if rows.is_empty():
+            return 0
+        self._clear_scope(lots)                      # 멱등 — 이 범위만
+        pairs = rows.select(["lot", "wafer"]).unique().sort(["lot", "wafer"])
+        for lot, wf in pairs.iter_rows():
+            gid = assign.get(wnorm.key(lot, wf))
+            if gid is None:                          # 실험 조건표에 없는 wafer
+                continue
+            st.manual_groups[(lot, wf, None, None, None)] = gid
+        # 남아 있던 그룹과 합쳐 **split이 정한 순서**로 다시 세운다. 자동 배정한
+        # 그룹은 스타일도 split의 것을 쓴다(색·심볼 규칙을 두 곳에 두지 않는다).
+        used = set(st.manual_groups.values())
+        keep = [g for g in st.groups if g.gid in used
+                and g.gid not in {s.gid for s in styles}]
+        st.groups = [*keep, *[g for g in styles if g.gid in used]]
+        if st.data is not None:
+            st.data = loader.apply_manual_groups(st.data, st.manual_groups)
+        self._fill_groups()
+        return len([g for g in styles if g.gid in used])
+
     def auto_mode(self) -> str:
-        return "lot" if self.cmb_auto.currentIndex() == 1 else "wafer"
+        return AUTO_MODES.get(self.cmb_auto.currentText(), "wafer")
 
     def _auto_clicked(self) -> None:
         n = self.auto_group()
@@ -301,7 +408,10 @@ class GroupDialog(QDialog):
                 self.index = loader.wafer_index_from_frame(st.data)
                 self.lbl_db.setText(f"{self.db_path or st.db_label} · 불러옴")
             elif self.db_path:
-                self.index = loader.wafer_index_from_db(self.db_path)
+                # 도크에서 고른 lot이 있으면 그 범위만 읽는다 — 그룹 편집이
+                # 분석 대상과 다른 lot을 보여 주면 배정한 것이 화면에 안 나온다.
+                self.index = loader.wafer_index_from_db(
+                    self.db_path, list(getattr(st, "lots_selected", []) or []))
                 self.lbl_db.setText(f"{self.db_path} · 읽기 전용으로 조회")
             else:
                 self.index = loader.wafer_index_empty()
@@ -329,69 +439,112 @@ class GroupDialog(QDialog):
             n = self.auto_group()
             self.lbl_auto.setText(f"새 DB 기준 {n}개 그룹" if n else "")
         self._lookup()
+        if hasattr(self, "m_lots"):            # 멀티 lot 탭의 lot 목록도 새 DB로
+            self._m_fill_lots()
 
-    # ── 필터 ─────────────────────────────────────────────────
-    def _selected(self, upto: str | None = None) -> dict[str, str]:
-        """현재 필터 선택값. upto를 주면 **그 앞 단계까지만** 돌려준다.
+    # ── 필터 (단일 lot·멀티 lot 공용) ────────────────────────
+    def _selected_from(self, filters: dict[str, QComboBox],
+                       upto: str | None = None) -> dict[str, str]:
+        """콤보 묶음 → 조건. upto를 주면 **그 앞 단계까지만**.
 
         연쇄 필터의 핵심 — 뒤 콤보의 목록은 앞 단계로 좁힌 결과에서 뽑는다.
+        값은 itemData에서 읽는다. 멀티 lot에서는 라벨에 `(2/3 lot)`이 붙어
+        보이는 글자와 실제 값이 다르기 때문이다.
         """
         out: dict[str, str] = {}
         for _label, name in FILTERS:
             if name == upto:
                 break
-            cmb = self.filters.get(name)
-            if cmb is not None and cmb.currentText() not in ("", ALL):
-                out[name] = cmb.currentText()
+            cmb = filters.get(name)
+            if cmb is not None and cmb.currentData() is not None:
+                out[name] = cmb.currentData()
         return out
 
-    def _rows(self, conds: dict[str, str] | None = None) -> pl.DataFrame:
-        """lot + 조건으로 좁힌 색인."""
-        if self._lot is None or self.index.is_empty():
+    def _selected(self, upto: str | None = None) -> dict[str, str]:
+        return self._selected_from(self.filters, upto)
+
+    def _rows_for(self, lots: list[str],
+                  conds: dict[str, str] | None = None) -> pl.DataFrame:
+        """lot 목록 + 조건으로 좁힌 색인. lot이 없으면 빈 결과."""
+        if not lots or self.index.is_empty():
             return loader.wafer_index_empty()
-        sub = self.index.filter(pl.col("lot") == self._lot)
-        for name, val in (self._selected() if conds is None else conds).items():
+        sub = self.index.filter(pl.col("lot").is_in(lots))
+        for name, val in (conds or {}).items():
             sub = sub.filter(pl.col(name) == val)
         return sub
 
-    def _refresh_filters(self) -> None:
-        """앞 단계로 좁힌 결과에서 각 콤보의 목록을 다시 만든다."""
+    def _rows(self, conds: dict[str, str] | None = None) -> pl.DataFrame:
+        """단일 lot 탭의 조회 범위."""
+        if self._lot is None:
+            return loader.wafer_index_empty()
+        return self._rows_for([self._lot],
+                              self._selected() if conds is None else conds)
+
+    def _refill_filters(self, filters: dict[str, QComboBox],
+                        lots: list[str]) -> None:
+        """앞 단계로 좁힌 결과에서 각 콤보의 목록을 다시 만든다.
+
+        멀티 lot이면 **합집합**을 보여 주되 일부 lot에만 있는 값에는
+        `(2/3 lot)`을 붙인다(§9.2). 교집합만 보여 주면 한 lot에만 걸린 조건을
+        고를 길이 없어지고, 표시 없이 합집합만 보여 주면 조회가 비는 조합을
+        만들게 된다. lot이 하나면 라벨은 값 그대로다.
+        """
         for _label, name in FILTERS:
-            cmb = self.filters[name]
-            keep = cmb.currentText()
-            vals = sorted({v for v in self._rows(self._selected(upto=name))[name]
-                           if v is not None})
+            cmb = filters[name]
+            keep = cmb.currentData()
+            sub = self._rows_for(lots, self._selected_from(filters, upto=name))
+            seen: dict[str, set[str]] = {}
+            for lot, val in zip(sub["lot"], sub[name]):
+                if val is not None:
+                    seen.setdefault(str(val), set()).add(lot)
+            n_lots = len(set(sub["lot"].to_list())) or len(lots)
             cmb.blockSignals(True)               # 갱신 중 재귀 방지
             cmb.clear()
-            cmb.addItems([ALL, *vals])
-            cmb.setCurrentIndex(cmb.findText(keep) if keep in vals else 0)
-            cmb.setEnabled(bool(vals))
+            cmb.addItem(ALL, None)
+            for val in sorted(seen):
+                k = len(seen[val])
+                cmb.addItem(val if k >= n_lots else f"{val}  ({k}/{n_lots} lot)",
+                            val)
+            i = cmb.findData(keep)
+            cmb.setCurrentIndex(i if i >= 0 else 0)
+            cmb.setEnabled(bool(seen))
             cmb.blockSignals(False)
+
+    def _refresh_filters(self) -> None:
+        self._refill_filters(self.filters,
+                             [self._lot] if self._lot else [])
 
     def _filter_changed(self, name: str) -> None:
         self._refresh_filters()
         self._update_counts()
         self._refresh_lists()
 
+    def _count_text(self, sub: pl.DataFrame, lots: list[str]) -> str:
+        pts = int(sub["n"].sum() or 0)
+        n_waf = sub.select(["lot", "wafer"]).unique().height
+        head = f"lot {len(lots)}개 · " if len(lots) > 1 else ""
+        return f"{head}유효 {n_waf}장 · {pts:,}포인트"
+
     def _update_counts(self) -> None:
-        sub = self._rows()
         if self._lot is None:
             return
-        wafers = sorted(set(sub["wafer"]))
-        pts = int(sub["n"].sum() or 0)
-        self.lbl_valid.setText(f"유효 {len(wafers)}장 · {pts:,}포인트")
+        self.lbl_valid.setText(self._count_text(self._rows(), [self._lot]))
 
     # ── 그룹 목록 ────────────────────────────────────────────
     def _fill_groups(self) -> None:
-        self.cmb_group.blockSignals(True)
-        cur = self.cmb_group.currentIndex()
-        self.cmb_group.clear()
-        self.cmb_group.addItems([g.name for g in self.state.groups])
-        if self.state.groups:
-            self.cmb_group.setCurrentIndex(
-                min(max(cur, 0), len(self.state.groups) - 1))
-        self.cmb_group.blockSignals(False)
+        """두 탭의 그룹 콤보를 함께 채운다 — 그룹은 탭이 아니라 상태의 것이다."""
+        for cmb in (self.cmb_group, getattr(self, "m_cmb_group", None)):
+            if cmb is None:
+                continue
+            cmb.blockSignals(True)
+            cur = cmb.currentIndex()
+            cmb.clear()
+            cmb.addItems([g.name for g in self.state.groups])
+            if self.state.groups:
+                cmb.setCurrentIndex(min(max(cur, 0), len(self.state.groups) - 1))
+            cmb.blockSignals(False)
         self._refresh_lists()
+        self._m_refresh_lists()
 
     def _current_group(self):
         """선택된 그룹 — 없으면 None. 인덱스를 직접 쓰지 말 것."""
@@ -493,25 +646,43 @@ class GroupDialog(QDialog):
         self.list_pool.clear()
         self.list_grp.clear()
 
-    # ── 배정 ─────────────────────────────────────────────────
-    def _key(self, wafer: str) -> tuple:
-        """배정 키 — 고른 필터까지 포함한다(§9.1 '배정도 필터 범위에만')."""
-        sel = self._selected()
-        return (self._lot, wafer, sel.get("step"), sel.get("temp"),
-                sel.get("site"))
+    # ── 배정 (단일 lot·멀티 lot 공용) ────────────────────────
+    def _key_for(self, lot: str, wafer: str, conds: dict[str, str]) -> tuple:
+        """배정 키 — 준 조건까지 포함한다(§9.1 '배정도 필터 범위에만').
 
-    def _gid_of(self, wafer: str) -> str:
-        """현재 필터 범위에서 이 wafer가 어느 그룹인지."""
+        `conds`가 비어 있으면 `(lot, wafer, None, None, None)` = 조건 무관이다.
+        멀티 lot 탭의 [현재 필터 범위에만 배정]이 꺼져 있을 때가 이 경우다.
+        """
+        return (lot, wafer, conds.get("step"), conds.get("temp"),
+                conds.get("site"))
+
+    def _key(self, wafer: str) -> tuple:
+        return self._key_for(self._lot, wafer, self._selected())
+
+    def _gid_for(self, lot: str, wafer: str, conds: dict[str, str]) -> str:
+        """그 조건 범위에서 이 wafer가 어느 그룹인지."""
         st = self.state
         if st.data is not None and "gid" in st.data.columns:
-            sub = st.data.filter((pl.col("lot") == self._lot)
+            sub = st.data.filter((pl.col("lot") == lot)
                                  & (pl.col("wafer") == wafer))
-            for name, val in self._selected().items():
+            for name, val in conds.items():
                 if name in sub.columns:
                     sub = sub.filter(pl.col(name).cast(pl.Utf8) == val)
             if not sub.is_empty():
                 return sub["gid"][0]
-        return st.manual_groups.get(self._key(wafer), "")
+        return st.manual_groups.get(self._key_for(lot, wafer, conds), "")
+
+    def _gid_of(self, wafer: str) -> str:
+        return self._gid_for(self._lot, wafer, self._selected())
+
+    def _assign_pairs(self, pairs: list[tuple[str, str]], gid: str,
+                      conds: dict[str, str]) -> None:
+        """(lot, wafer) 쌍들을 그룹에 배정. [적용] 전에도 기록해 둔다."""
+        st = self.state
+        for lot, wf in pairs:
+            st.manual_groups[self._key_for(lot, wf, conds)] = gid
+        if st.data is not None:
+            st.data = loader.apply_manual_groups(st.data, st.manual_groups)
 
     def _refresh_lists(self) -> None:
         if not hasattr(self, "list_grp"):        # 초기화 중 호출 방어
@@ -536,14 +707,11 @@ class GroupDialog(QDialog):
             self.list_grp.addItem(it)
 
     def _assign(self, wafers: list[str], gid: str) -> None:
-        """배정은 **고른 필터 범위에만** 걸린다. [적용] 전에도 기록해 둔다."""
-        st = self.state
+        """단일 lot 탭의 배정 — **고른 필터 범위에만** 걸린다."""
         if self._lot is None:
             return
-        for wf in wafers:
-            st.manual_groups[self._key(wf)] = gid
-        if st.data is not None:
-            st.data = loader.apply_manual_groups(st.data, st.manual_groups)
+        self._assign_pairs([(self._lot, w) for w in wafers], gid,
+                           self._selected())
         self._refresh_lists()
 
     def _move(self, to_group: bool) -> None:
@@ -568,19 +736,236 @@ class GroupDialog(QDialog):
 
     # ── 멀티 lot ─────────────────────────────────────────────
     def _multi_tab(self) -> QWidget:
+        """조회 UI(위) + 접이식 붙여넣기(아래).
+
+        단일 lot 탭과 **같은 헬퍼**를 쓴다 — 필터 연쇄·배정 키·자동 그룹핑의
+        규칙이 두 벌이 되면 한쪽만 고쳐지는 버그가 반드시 생긴다. 다른 것은
+        '몇 개의 lot을 보느냐'와 wafer를 `lot·wafer`로 가리킨다는 점뿐이다.
+        """
+        from etreport.ui.widgets.cards import CollapsibleSection
+
         w = QWidget()
         v = QVBoxLayout(w)
-        v.addWidget(QLabel(
-            "엑셀에서 lot · wafer · group 표를 복사해 붙여넣으세요.\n"
-            "wafer 열이 없으면 해당 lot 전체가 그 그룹이 됩니다."))
+
+        top = QHBoxLayout()
+        top.addWidget(QLabel("lot"))
+        self.m_lots = QListWidget()
+        self.m_lots.setSelectionMode(QListWidget.NoSelection)
+        self.m_lots.setFixedHeight(74)
+        self.m_lots.itemChanged.connect(self._m_lots_changed)
+        top.addWidget(self.m_lots, 1)
+        side = QVBoxLayout()
+        for text, on in (("전체", True), ("해제", False)):
+            b = QPushButton(text)
+            b.setProperty("ghost", True)
+            b.setFixedWidth(52)
+            b.clicked.connect(lambda _c=False, o=on: self._m_check_all(o))
+            side.addWidget(b)
+        side.addStretch(1)
+        top.addLayout(side)
+        v.addLayout(top)
+
+        fl = QHBoxLayout()
+        self.m_filters: dict[str, QComboBox] = {}
+        for label, name in FILTERS:
+            fl.addWidget(QLabel(label))
+            cmb = QComboBox()
+            cmb.setMinimumWidth(110)
+            cmb.currentIndexChanged.connect(lambda _i: self._m_filter_changed())
+            self.m_filters[name] = cmb
+            fl.addWidget(cmb)
+        fl.addStretch(1)
+        fl.addWidget(QLabel("자동 그룹핑"))
+        self.m_cmb_auto = QComboBox()
+        self.m_cmb_auto.addItems(["lot별", "wafer별", "split factor별"])
+        fl.addWidget(self.m_cmb_auto)
+        b = QPushButton("실행")
+        b.setToolTip("고른 lot을 자동으로 그룹에 배정합니다.\n"
+                     "'split factor별'은 실험 조건이 만든 배정을 그대로 굽습니다 —\n"
+                     "그 뒤에 손으로 옮긴 것은 [적용]해도 살아남습니다.")
+        b.clicked.connect(self._m_auto_clicked)
+        fl.addWidget(b)
+        v.addLayout(fl)
+
+        info = QHBoxLayout()
+        self.m_lbl_valid = QLabel()
+        self.m_lbl_valid.setObjectName("hint")
+        info.addWidget(self.m_lbl_valid, 1)
+        self.m_chk_range = QCheckBox("현재 필터 범위에만 배정")
+        self.m_chk_range.setToolTip(
+            "켜면 고른 step·site·온도에서만 그룹이 걸립니다.\n"
+            "끄면 그 wafer의 모든 측정 조건에 걸립니다(붙여넣기와 같은 규칙).")
+        info.addWidget(self.m_chk_range)
+        v.addLayout(info)
+
+        mid = QHBoxLayout()
+        left = QVBoxLayout()
+        left.addWidget(QLabel("미배정 wafer"))
+        self.m_list_pool = QListWidget()
+        self.m_list_pool.setSelectionMode(QListWidget.ExtendedSelection)
+        left.addWidget(self.m_list_pool)
+        mid.addLayout(left, 1)
+
+        arrows = QVBoxLayout()
+        arrows.addStretch(1)
+        for text, fn in (("→", lambda: self._m_move(True)),
+                         ("←", lambda: self._m_move(False)),
+                         ("≫", lambda: self._m_move_all(True)),
+                         ("≪", lambda: self._m_move_all(False))):
+            btn = QPushButton(text)
+            btn.setProperty("ghost", True)
+            btn.setFixedWidth(46)
+            btn.clicked.connect(fn)
+            arrows.addWidget(btn)
+        arrows.addStretch(1)
+        mid.addLayout(arrows)
+
+        right = QVBoxLayout()
+        self.m_cmb_group = QComboBox()
+        self.m_cmb_group.currentIndexChanged.connect(
+            lambda _i: self._m_refresh_lists())
+        right.addWidget(self.m_cmb_group)
+        self.m_list_grp = QListWidget()
+        self.m_list_grp.setSelectionMode(QListWidget.ExtendedSelection)
+        right.addWidget(self.m_list_grp)
+        mid.addLayout(right, 1)
+        v.addLayout(mid, 1)
+
+        # 붙여넣기 — 정식 입력 경로지만 기본은 접어 둔다(§9.2)
+        paste_box = CollapsibleSection("엑셀에서 붙여넣기", collapsed=True)
+        paste_box.body.addWidget(QLabel(
+            "lot · wafer · group 표를 복사해 붙여넣으세요. 머리글은 있어도 없어도\n"
+            "됩니다. wafer 열이 없으면 그 lot 전체가 한 그룹이 됩니다.\n"
+            "붙여넣기는 **조건을 따지지 않습니다**(항상 전체 범위)."))
         self.paste = QPlainTextEdit()
+        self.paste.setFixedHeight(96)
         self.paste.setPlaceholderText(
             "lot\twafer\tgroup\nPA123\tW01\tSplit_A\nPA123\tW02\tSplit_A")
-        v.addWidget(self.paste, 1)
+        paste_box.body.addWidget(self.paste)
         b = QPushButton("붙여넣은 내용 적용")
         b.clicked.connect(self._apply_paste)
-        v.addWidget(b)
+        paste_box.body.addWidget(b)
+        v.addWidget(paste_box)
+
+        self._fill_groups()          # 그룹 콤보는 두 탭이 함께 쓴다
+        self._m_fill_lots()
         return w
+
+    # ── 멀티 lot: lot 목록 ───────────────────────────────────
+    def _m_fill_lots(self) -> None:
+        """색인의 lot을 체크 리스트로. 도크에서 고른 lot이 있으면 그것만 켠다."""
+        lots = sorted(set(self.index["lot"].to_list())) \
+            if not self.index.is_empty() else []
+        picked = set(getattr(self.state, "lots_selected", []) or []) or set(lots)
+        self.m_lots.blockSignals(True)
+        self.m_lots.clear()
+        for lot in lots:
+            it = QListWidgetItem(lot)
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked if lot in picked else Qt.Unchecked)
+            self.m_lots.addItem(it)
+        self.m_lots.blockSignals(False)
+        self._m_filter_changed()
+
+    def _m_selected_lots(self) -> list[str]:
+        return [self.m_lots.item(i).text()
+                for i in range(self.m_lots.count())
+                if self.m_lots.item(i).checkState() == Qt.Checked]
+
+    def _m_check_all(self, on: bool) -> None:
+        self.m_lots.blockSignals(True)
+        for i in range(self.m_lots.count()):
+            self.m_lots.item(i).setCheckState(
+                Qt.Checked if on else Qt.Unchecked)
+        self.m_lots.blockSignals(False)
+        self._m_filter_changed()
+
+    def _m_lots_changed(self, _item) -> None:
+        self._m_filter_changed()
+
+    # ── 멀티 lot: 필터·리스트·배정 ───────────────────────────
+    def _m_conds(self) -> dict[str, str]:
+        """배정에 쓸 조건 — 체크박스가 꺼져 있으면 조건 무관(전체 범위)."""
+        if not self.m_chk_range.isChecked():
+            return {}
+        return self._selected_from(self.m_filters)
+
+    def _m_filter_changed(self) -> None:
+        lots = self._m_selected_lots()
+        self._refill_filters(self.m_filters, lots)
+        self.m_lbl_valid.setText(self._count_text(
+            self._rows_for(lots, self._selected_from(self.m_filters)), lots))
+        self._m_refresh_lists()
+
+    def _m_current_group(self):
+        i = self.m_cmb_group.currentIndex()
+        if 0 <= i < len(self.state.groups):
+            return self.state.groups[i]
+        return None
+
+    def _m_refresh_lists(self) -> None:
+        if not hasattr(self, "m_list_grp"):        # 초기화 중 호출 방어
+            return
+        self.m_list_pool.clear()
+        self.m_list_grp.clear()
+        group = self._m_current_group()
+        gid = group.gid if group else ""
+        conds = self._m_conds()
+        rows = self._rows_for(self._m_selected_lots(),
+                              self._selected_from(self.m_filters))
+        if rows.is_empty():
+            return
+        pairs = rows.select(["lot", "wafer"]).unique().sort(["lot", "wafer"])
+        for lot, wf in pairs.iter_rows():
+            g = self._gid_for(lot, wf, conds)
+            # lot이 여럿이므로 wafer ID만으로는 어느 wafer인지 가리킬 수 없다.
+            # 보이는 글자와 별개로 (lot, wafer)를 데이터로 들고 다닌다.
+            it = QListWidgetItem(f"{lot} · {wf}")
+            it.setData(Qt.UserRole, (lot, wf))
+            if group is not None and g == gid:
+                it.setForeground(QColor(group.color))
+                self.m_list_grp.addItem(it)
+            elif not g:
+                self.m_list_pool.addItem(it)
+
+    def _m_assign(self, pairs: list[tuple[str, str]], gid: str) -> None:
+        if pairs:
+            self._assign_pairs(pairs, gid, self._m_conds())
+            self._m_refresh_lists()
+
+    def _m_move(self, to_group: bool) -> None:
+        g = self._m_current_group()
+        if to_group and g is None:
+            QMessageBox.information(self, "그룹", "먼저 단일 lot 탭에서 ＋로 "
+                                                "그룹을 만들거나 자동 그룹핑을 "
+                                                "실행하세요")
+            return
+        src = self.m_list_pool if to_group else self.m_list_grp
+        picked = [i.data(Qt.UserRole) for i in src.selectedItems()]
+        self._m_assign(picked, g.gid if to_group else "")
+
+    def _m_move_all(self, to_group: bool) -> None:
+        g = self._m_current_group()
+        if to_group and g is None:
+            QMessageBox.information(self, "그룹", "먼저 그룹을 만드세요")
+            return
+        src = self.m_list_pool if to_group else self.m_list_grp
+        allp = [src.item(i).data(Qt.UserRole) for i in range(src.count())]
+        self._m_assign(allp, g.gid if to_group else "")
+
+    def _m_auto_clicked(self) -> None:
+        mode = AUTO_MODES.get(self.m_cmb_auto.currentText(), "lot")
+        lots = self._m_selected_lots()
+        if mode == "factor" and (self.state.split is None
+                                 or not self.state.factors):
+            QMessageBox.information(
+                self, "자동 그룹핑",
+                "실험 조건이 없습니다 — 도크에서 [실험 조건] 파일을 먼저 고르세요")
+            return
+        n = self.auto_group(mode, lots)
+        self.m_lbl_valid.setText(f"{n}개 그룹 생성" if n
+                                 else "배정할 wafer가 없습니다")
+        self._m_refresh_lists()
 
     def _lot_wafers(self, lot: str) -> list[str]:
         """그 lot에 실제로 있는 wafer 표기 목록 (색인 → 없으면 프레임)."""
@@ -644,6 +1029,7 @@ class GroupDialog(QDialog):
                        + ", ".join(miss_wf[:5]))
         QMessageBox.information(self, "적용됨", "\n".join(msg))
         self._refresh_lists()
+        self._m_refresh_lists()
 
     # ── 스타일 일괄 ──────────────────────────────────────────
     def _bulk_box(self) -> QWidget:

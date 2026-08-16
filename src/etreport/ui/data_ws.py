@@ -609,8 +609,9 @@ class DataWorkspace(QWidget):
             self.lbl_db.setText(p)
 
     def _pick_rfm(self) -> None:
-        p, _ = QFileDialog.getOpenFileName(self, "리포메터", "",
-                                           "Excel (*.xlsx *.xlsm)")
+        p, _ = QFileDialog.getOpenFileName(
+            self, "리포메터", "",
+            "리포메터 (*.xlsx *.xlsm *.csv *.tsv);;Excel (*.xlsx *.xlsm);;CSV (*.csv *.tsv)")
         if not p:
             return
         from etreport.ui.analysis_ws import _pick_sheet

@@ -21,6 +21,11 @@ def _fields(cls, raw: dict) -> dict:
     return {k: v for k, v in raw.items() if k in known}
 
 
+def _as_dict(v: object) -> dict:
+    """설정 파일의 값이 dict일 때만 받는다 — 아니면 빈 dict."""
+    return v if isinstance(v, dict) else {}
+
+
 def _only(cls, raw: dict):
     return cls(**_fields(cls, raw))
 
@@ -67,6 +72,11 @@ class AnalysisConfig:
     # fab tracking에서 뽑은 조건은 기준(REF) 코드가 'Base'가 아니다 —
     # 그대로 두면 [적용] 때 REF가 바뀌므로 함께 저장한다.
     split_baseline: str = ""
+    # 기준(REF)으로 삼을 lot. 있으면 그 lot의 step별 다수 조건이 baseline이 된다
+    # (§6.1) — split 실험은 lot 안에서도 조건이 갈리므로 코드 하나로는 못 적는다.
+    split_baseline_lot: str = ""
+    # plot에서 lot마다 심볼을 달리할지. 표시 옵션이라 DB를 다시 읽지 않는다.
+    lot_split_symbols: bool = False
 
 
 @dataclass
@@ -78,6 +88,10 @@ class Settings:
     last_extract_preset: str = ""
     last_analysis_config: str = ""
     dock_tools_open: bool = False               # 도크 [도구] 묶음 펼침 여부
+    # DB 경로 → 그 DB에서 마지막으로 체크한 lot 목록(§9.2). 설정 프리셋이 아니라
+    # 여기에 두는 이유는, 프리셋을 바꿔도 **같은 DB면 같은 lot을 보고 싶기** 때문이다.
+    # 빈 목록은 '전부'와 같은 뜻이라 기록하지 않는다.
+    lot_selections: dict[str, list[str]] = field(default_factory=dict)
 
     # ── 영속화 ────────────────────────────────────────────────
     def save(self) -> None:
@@ -100,6 +114,12 @@ class Settings:
             last_extract_preset=raw.get("last_extract_preset", ""),
             last_analysis_config=raw.get("last_analysis_config", ""),
             dock_tools_open=bool(raw.get("dock_tools_open", False)),
+            # 손으로 고친 설정 파일이 들어와도 앱이 죽지 않게 모양을 확인해 받는다
+            # — dict가 아닌 값이 들어와도 통째로 버리고 넘어간다
+            lot_selections={
+                str(k): [str(x) for x in v]
+                for k, v in _as_dict(raw.get("lot_selections")).items()
+                if isinstance(v, list)},
         )
         # 버전 간 필드가 늘거나 줄어도 설정 파일 때문에 앱이 죽지 않도록,
         # 현재 dataclass가 아는 키만 남기고 나머지는 버린다.

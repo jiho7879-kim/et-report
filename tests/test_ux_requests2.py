@@ -137,8 +137,11 @@ def test_deck_appends_group_average_tables(demo_state, tmp_path):
                     if sh.has_text_frame and sh.text_frame.text), "")
               for s in prs.slides]
 
-    plain = [i for i, t in enumerate(titles) if t == "NMOS"]
-    grouped = [i for i, t in enumerate(titles) if t.startswith("NMOS — 그룹별")]
+    cat1 = demo_state.report.table_names()[0]
+    # wafer가 많으면 표 제목 뒤에 넘침 안내가 붙는다 — 제목 앞부분으로 본다
+    plain = [i for i, t in enumerate(titles)
+             if t.startswith(cat1) and "그룹별" not in t]
+    grouped = [i for i, t in enumerate(titles) if t.startswith(f"{cat1} — 그룹별")]
     assert plain and grouped and grouped[0] > plain[0]
     assert sum(t.endswith("그룹별 평균") for t in titles) == \
         len(demo_state.report.table_names())
@@ -237,7 +240,9 @@ def test_summary_tab_offers_four_modes(qapp, demo_state):
     tbl = next(w for w in tab.findChildren(QTableWidget)
                if w.objectName() == "sumTable")
     heads = [tbl.horizontalHeaderItem(i).text() for i in range(tbl.columnCount())]
-    assert all("\n" in h and "·" in h for h in heads[3:])   # 그룹\nlot·wafer
+    # 라벨 열 수는 CAT 개수를 따라간다(§3.3) — 그 뒤가 wafer 열이다
+    n_label = len(demo_state.report.cat_names) + 1
+    assert all("\n" in h and "·" in h for h in heads[n_label:])  # 그룹\nlot·wafer
     tab.deleteLater()
 
 

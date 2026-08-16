@@ -142,6 +142,7 @@ def generate(state: AppState, out_path: str) -> str:
         factors=getattr(state, "met_top", None),   # inline 계측 top-k(기능 B)
         meta=deck_meta(state),                     # 표지
         split_rows=(state.split.wide if state.split is not None else None),
+        lot_split=bool(getattr(state, "lot_split_symbols", False)),
     )
     p = Path(out_path)
     if p.suffix.lower() != ".pptx":

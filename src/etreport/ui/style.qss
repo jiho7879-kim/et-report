@@ -75,10 +75,12 @@ QToolTip { background:%INK%; color:%INK_TEXT%; border:1px solid %INK_LINE%;
 #fileValue { color:%INK_TEXT%; font-family:%MONO_FONT%; font-size:%FS_SM%; }
 #fileValue[empty="true"] { color:%INK_MUTED%; }
 
-#groupList { background:%INK_2%; color:%INK_TEXT%;
+#groupList, #lotList { background:%INK_2%; color:%INK_TEXT%;
              border:1px solid %INK_LINE%; border-radius:%RADIUS%; }
-#groupList::item { padding:5px 6px; }
-#groupList::item:selected { background:%INK_3%; color:%INK_TEXT%; }
+#groupList::item, #lotList::item { padding:5px 6px; }
+#groupList::item:selected, #lotList::item:selected {
+             background:%INK_3%; color:%INK_TEXT%; }
+#lotList { font-family:%MONO_FONT%; font-size:%FS_SM%; }
 #dock #bigNum { color:%ERR_INK%; }
 #dock #bigNum[zero="true"] { color:%INK_MUTED%; }
 #dock #warn { color:%WARN_INK%; }

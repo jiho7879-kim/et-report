@@ -10,6 +10,7 @@ myenv/
 build/*.spec
 dist/
 *.zip
+*.pptx
 
 # 로컬 에이전트 설정 / 캐시
 .claude/

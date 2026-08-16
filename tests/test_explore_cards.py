@@ -53,11 +53,16 @@ def tab(qapp, appdata):
     t.deleteLater()
 
 
-def _settle(qapp=None):
+def _settle(qapp=None, until=None):
     """콤보 핸들러는 팝업이 닫히도록 한 박자 미뤄 실행된다(common.defer).
 
-    테스트에서는 이벤트 루프를 한 번 돌려 그 실행을 기다린다.
+    테스트에서는 이벤트 루프를 돌려 그 실행을 기다린다. **조건을 주면 그때까지**
+    기다린다 — 지연 실행 앞에 그리기가 줄 서 있으면 고정 시간(400ms)으로는
+    데이터 양에 따라 들쭉날쭉해진다(데모 데이터가 커지자 실제로 어긋났다).
     """
+    if until is not None:
+        assert qt_until(until), "지연 처리가 제때 돌지 않았습니다"
+        return
     from PySide6.QtCore import QCoreApplication, QEventLoop
     _wait(QCoreApplication, QEventLoop)
 
@@ -146,7 +151,8 @@ def test_style_card_edits_the_group(tab):
 
 def test_ref_is_exclusive(tab):
     tab.cmb_group.setCurrentIndex(1)
-    _settle()
+    # 선택이 컨트롤에 반영될 때까지 — REF 체크는 지금 고른 그룹을 가리켜야 한다
+    _settle(until=lambda: tab.chk_ref.isChecked() == tab.state.groups[1].ref)
     tab.chk_ref.setChecked(True)
 
     assert tab.state.groups[1].ref
@@ -160,7 +166,7 @@ def test_color_picker_writes_back(tab, monkeypatch):
     monkeypatch.setattr(QColorDialog, "getColor",
                         staticmethod(lambda *a, **k: QColor("#123456")))
     tab.cmb_group.setCurrentIndex(0)
-    _settle()
+    _settle(until=lambda: tab.chk_ref.isChecked() == tab.state.groups[0].ref)
     tab._pick_color()
 
     assert tab.state.groups[0].color == "#123456"

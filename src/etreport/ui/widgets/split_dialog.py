@@ -51,7 +51,8 @@ class SplitSourceDialog(QDialog):
     """
 
     def __init__(self, parent=None, path: str = "", text: str = "",
-                 baseline: str = "") -> None:
+                 baseline: str = "", baseline_lot: str = "",
+                 lots: list[str] | None = None) -> None:
         super().__init__(parent)
         from etreport.model.split import BASELINE_DEFAULT
         self.setWindowTitle("실험 조건 불러오기")
@@ -59,6 +60,10 @@ class SplitSourceDialog(QDialog):
         self.matrix = None
         self.path, self.text = path, text
         self.baseline = baseline or BASELINE_DEFAULT
+        # 기준(REF)으로 삼을 lot — 정해 두면 step마다 그 lot의 다수 조건이
+        # 기준이 된다(§9.2). 도크에서 고른 lot이 조회의 기본값이 된다.
+        self.baseline_lot = baseline_lot
+        self.lots = list(lots or [])
         self.tracking = None                   # fab tracking 원본(기능 A)
 
         v = QVBoxLayout(self)
@@ -126,7 +131,8 @@ class SplitSourceDialog(QDialog):
         from etreport.data import fabtracking as ft
         from etreport.ui.widgets.worker import bdq_call, run_in_background
         lots, ok = QInputDialog.getText(
-            self, "fab tracking", "lot ID (쉼표로 여러 개, 비우면 전체)")
+            self, "fab tracking", "lot ID (쉼표로 여러 개, 비우면 전체)",
+            text=", ".join(self.lots))     # 도크에서 고른 lot을 기본값으로
         if not ok:
             return
         wanted = [x.strip() for x in lots.replace(",", " ").split() if x.strip()]
@@ -137,16 +143,34 @@ class SplitSourceDialog(QDialog):
                           done=self._tracking_done)
 
     def _tracking_done(self, df) -> None:
+        """조회 결과로 매트릭스를 만들고, lot이 여럿이면 기준 lot을 물어본다.
+
+        lot마다 POR이 다를 수 있어 "어느 lot을 기준으로 볼지"는 사람이 정해야
+        하는 판단이다(§9.2). lot이 하나면 물을 것이 없으므로 건너뛴다.
+        """
         from etreport.data import fabtracking as ft
-        sm = ft.to_split_matrix(df)
         self.tracking = df
+        sm = ft.to_split_matrix(df)
         if sm.wide is None or not sm.steps:
             self.lbl_src.setText(
                 ft.summarize(df) + " — 조건이 갈리는 step이 없습니다")
             return
+        lots = sorted(set(sm.wide["lot"].to_list()))
+        if len(lots) > 1:
+            from PySide6.QtWidgets import QInputDialog
+            AUTO = "(자동 — 전체에서 가장 흔한 조건)"
+            pick, ok = QInputDialog.getItem(
+                self, "기준(REF) lot",
+                "어느 lot을 기준으로 볼까요?\n"
+                "고르면 step마다 그 lot의 다수 조건이 기준이 됩니다.",
+                [AUTO, *lots], 0, False)
+            if ok and pick != AUTO:
+                self.baseline_lot = pick
+                sm = ft.to_split_matrix(df, baseline_lot=pick)
         self.baseline = sm.baseline
         self.path = ""
-        self.lbl_src.setText(ft.summarize(df) + f" · 기준(REF) {sm.baseline}")
+        self.lbl_src.setText(
+            ft.summarize(df) + f" · 기준(REF) {sm.baseline_label()}")
         # 표로 채워 넣으면 나머지는 붙여넣기 경로와 완전히 같아진다
         self.paste.setPlainText(matrix_to_tsv(sm))
 
@@ -178,7 +202,8 @@ class SplitSourceDialog(QDialog):
             self._show()
             return
         try:
-            self.matrix = parse_split_text(raw, self.baseline)
+            self.matrix = parse_split_text(raw, self.baseline,
+                                           self.baseline_lot)
             self.path, self.text = "", raw
             self.lbl_src.setText("붙여넣은 내용")
         except Exception as e:                 # noqa: BLE001 — 타이핑 중일 뿐이다
@@ -208,7 +233,7 @@ class SplitSourceDialog(QDialog):
         self.lbl_info.setText(
             f"lot {df['lot'].n_unique()} · wafer {df.height}행 · "
             f"step {len(sm.steps)}개: {', '.join(sm.steps)} · "
-            f"기준(REF) {sm.baseline}"
+            f"기준(REF) {sm.baseline_label()}"
             + ("  (미리보기 50행)" if df.height > 50 else ""))
         self._sync_ok()
 

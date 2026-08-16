@@ -101,6 +101,7 @@ def build_deck(
     factors: pl.DataFrame | None = None,       # inline 계측 top-k (기능 B)
     meta: dict | None = None,                  # 표지에 넣을 메타데이터
     split_rows=None,                           # 실험 조건 매트릭스(wide)
+    lot_split: bool = False,                   # lot마다 심볼을 달리할지(§9.2)
 ) -> Presentation:
     """페이지 순서: **표지 → (실험 조건) → plot 전부 → 표 전부 →
     (그룹별 평균 표) → (유의 인자) → 제외 이력**.
@@ -126,7 +127,7 @@ def build_deck(
             suffix = f" — {exp}" if exp else ""
             _add_title(slide, prs, page.title + suffix)
             _fill_slots(slide, prs, page, exp, styles,
-                        plot_data_of, rf, log_patterns)
+                        plot_data_of, rf, log_patterns, lot_split)
 
     for td in tables:
         for part in (split_table(td) if mode == "split" else [td]):
@@ -181,7 +182,8 @@ def _slot_rect(prs, idx: int):
 
 
 def _fill_slots(slide, prs, page: PageSpec, exp, styles,
-                plot_data_of, rf, log_patterns) -> None:
+                plot_data_of, rf, log_patterns,
+                lot_split: bool = False) -> None:
     for i, spec in enumerate(page.slots):
         if spec is None:
             continue
@@ -192,7 +194,8 @@ def _fill_slots(slide, prs, page: PageSpec, exp, styles,
             continue
         figsize = (w / 914400, h / 914400)        # EMU → inch
         fig = mpl_renderer.render(spec, plot_data_of(exp, spec),
-                                  styles, rf, log_patterns, figsize)
+                                  styles, rf, log_patterns, figsize,
+                                  lot_split=lot_split)
         buf = io.BytesIO()
         try:
             fig.savefig(buf, format="png", dpi=PLOT_DPI)
@@ -347,16 +350,35 @@ def _bottom_line(cell, width_pt: float, color: str) -> None:
 
 
 def split_table(td: TableData, per: int = WAFERS_PER_SLIDE) -> list[TableData]:
-    """split 모드: wafer per장씩 끊어 TableData 여러 개로 (제목에 1/N)."""
-    flat = [(lot, wf) for lot, ws in td.header_lots for wf in ws]
-    if len(flat) <= per:
+    """split 모드: **lot 경계로 먼저** 끊고, 한 lot이 per장을 넘으면 그 안에서
+    다시 끊는다 (제목에 1/N).
+
+    lot 경계를 무시하고 12장씩 자르면 한 장에 두 lot이 걸치고 lot 머리글이
+    슬라이드 경계에서 잘린다(§9.2). lot이 하나면 예전과 결과가 같다 —
+    25장이면 12/12/1 그대로다. lot이 둘이면 각각 5장이어도 두 장으로 나뉜다.
+    """
+    groups = [(lot, list(ws)) for lot, ws in td.header_lots if ws]
+    if not groups:
         return [td]
+
+    # 조각마다 원래 열 위치를 들고 다닌다 — 같은 (lot, wafer)가 두 번 나와도
+    # 위치로 자르면 값이 어긋나지 않는다.
+    segments: list[list[int]] = []
+    pos = 0
+    for _lot, ws in groups:
+        idx = list(range(pos, pos + len(ws)))
+        pos += len(ws)
+        for i in range(0, len(idx), per):
+            segments.append(idx[i:i + per])
+    if len(segments) <= 1:
+        return [td]
+
+    flat = [(lot, wf) for lot, ws in groups for wf in ws]
     parts: list[TableData] = []
-    n = (len(flat) + per - 1) // per
-    for k in range(n):
-        idx = list(range(k * per, min((k + 1) * per, len(flat))))
-        seg = [flat[i] for i in idx]     # 위치로 자른다 — 같은 (lot, wafer)가
-        lots: list[tuple[str, list[str]]] = []   # 두 번 나와도 안전
+    n = len(segments)
+    for k, idx in enumerate(segments):
+        seg = [flat[i] for i in idx]
+        lots: list[tuple[str, list[str]]] = []
         for lot, wf in seg:
             if lots and lots[-1][0] == lot:
                 lots[-1][1].append(wf)
@@ -365,7 +387,8 @@ def split_table(td: TableData, per: int = WAFERS_PER_SLIDE) -> list[TableData]:
         rows = [{**r,
                  "values": [r["values"][i] for i in idx],
                  "offspec": [r["offspec"][i] for i in idx]} for r in td.rows]
-        parts.append(TableData(f"{td.name}  ({k + 1}/{n})", lots, rows))
+        parts.append(TableData(f"{td.name}  ({k + 1}/{n})", lots, rows,
+                               cat_names=list(td.cat_names)))
     return parts
 
 
@@ -425,17 +448,36 @@ def _factor_slide(prs, layout, top: pl.DataFrame) -> None:
     훑은 결과다. 숫자는 표 렌더러가 아니라 여기서 직접 쓰되 자릿수 규칙
     (`fmt_value`)은 같은 것을 쓴다.
     """
-    rows = []
+    rows, suspect = [], 0
     for rec in top.iter_rows(named=True):
+        r, rw = rec.get("r"), rec.get("r_within")
+        if _lot_effect(r, rw):
+            suspect += 1
         rows.append({
             "cats": [rec["met"]],
             "item": rec["item"],
-            "values": [rec.get("r"), rec.get("t"), float(rec.get("n") or 0)],
-            "offspec": [False, False, False]})
-    td = TableData("유의 인자 top-k (inline 계측)",
-                   [("통계", ["상관 r", "그룹차 t", "n"])], rows,
+            "values": [r, rw, rec.get("t"), float(rec.get("n") or 0)],
+            "offspec": [False, False, False, False]})
+    name = "유의 인자 top-k (inline 계측)"
+    if suspect:
+        name += f"  — lot 효과 의심 {suspect}건"
+    td = TableData(name,
+                   [("통계", ["상관 r", "lot 내 r", "그룹차 t", "n"])], rows,
                    cat_names=["계측 인자"])
     _table_slide(prs, layout, td)
+
+
+def _lot_effect(r, r_within) -> bool:
+    """합친 상관과 lot 내 상관이 크게 갈리면 lot 효과를 의심한다.
+
+    부호가 뒤집히거나 크기가 두 배 넘게 차이 나면, 그 상관은 계측값과 ET값의
+    관계가 아니라 **lot 사이의 평균 차이**를 보고 있을 가능성이 크다.
+    """
+    if r is None or r_within is None:
+        return False
+    if (r > 0) != (r_within > 0) and abs(r) > 0.2 and abs(r_within) > 0.2:
+        return True
+    return abs(r) > 2 * abs(r_within) + 0.2
 
 
 def _exclusion_slide(prs, layout, log: pl.DataFrame) -> None:

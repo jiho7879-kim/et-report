@@ -55,6 +55,64 @@ def test_range_degenerate_data():
     assert lo < 5.0 < hi
 
 
+def test_flat_range_margin_scales_with_value():
+    """값이 하나뿐일 때 여백은 값 크기에 비례한다.
+
+    ±0.5 고정이던 시절 1e-9짜리 누설은 축이 -0.6~0.6이 되어 점이 0에
+    눌러붙었고, 1e6짜리 값은 여백이 없는 것이나 마찬가지였다.
+    """
+    rf = rf_of(rule("REAL", "ET_A", "A"))
+    for v in (1e-9, 2.5, 1e6):
+        lo, hi = compute_range(["A"], v, v, rf)
+        assert lo < v < hi
+        assert (hi - lo) == pytest.approx(v * 0.05 * 2 * 1.2)   # 값에 비례
+    lo, hi = compute_range(["A"], 0.0, 0.0, rf)                 # 0 근처는 절대값
+    assert (lo, hi) == pytest.approx((-0.6, 0.6))
+
+
+# ── 로그 축 범위 — 여백을 decade로 준다 ──────────────────────
+def test_log_range_gives_margin_in_decades():
+    """선형 10% 여백은 decade가 여럿인 축에서 사실상 0이었다.
+
+    예전에는 1e-12~1e-6이 (1e-12, 1.1e-6)이 되어 최솟값 점이 축선에 붙어
+    반쯤 잘렸다. 이제 위아래로 같은 폭(0.6 decade)이 열린다.
+    """
+    rf = rf_of(rule("REAL", "ET_A", "A"))
+    lo, hi = compute_range(["A"], 1e-12, 1e-6, rf, log_scale=True)
+    assert lo < 1e-12 and hi > 1e-6
+    below = math.log10(1e-12) - math.log10(lo)
+    above = math.log10(hi) - math.log10(1e-6)
+    assert below == pytest.approx(above)                  # 위아래 대칭
+    assert below == pytest.approx(6 / 2 * 0.2)            # 폭 ×1.2 (로그 공간)
+
+
+def test_log_range_does_not_waste_decades():
+    """데이터가 좁으면 축도 좁게 — 예전엔 하한이 1e-4로 못박혀 있었다."""
+    rf = rf_of(rule("REAL", "ET_A", "A"))
+    lo, hi = compute_range(["A"], 1e-3, 1e-2, rf, log_scale=True)
+    assert lo == pytest.approx(10 ** -3.1)
+    assert hi == pytest.approx(10 ** -1.9)
+
+
+def test_log_range_skips_nonpositive_bounds():
+    """규격 하한 0(로그에 못 그린다)이어도 데이터가 보이는 범위가 나온다."""
+    rf = rf_of(rule("REAL", "ET_A", "A"))
+    rf.rules[0].speclow, rf.rules[0].spechigh = 0.0, 1e-5
+    lo, hi = compute_range(["A"], 1e-9, 1e-6, rf, log_scale=True)
+    assert 0 < lo < 1e-9 and hi > 1e-5
+
+    # 음수가 섞여도(ABSOLUTE 안 건 누설 등) 축이 뒤집히지 않는다
+    lo, hi = compute_range(["A"], -1e-6, 1e-3, rf, log_scale=True)
+    assert 0 < lo < hi
+
+
+def test_log_range_flat_data():
+    rf = rf_of(rule("REAL", "ET_A", "A"))
+    lo, hi = compute_range(["A"], 3e-9, 3e-9, rf, log_scale=True)
+    assert lo < 3e-9 < hi
+    assert math.log10(hi) - math.log10(lo) == pytest.approx(1.2)  # 1 decade ×1.2
+
+
 def test_multi_alias_range_is_union_of_specs():
     rf = rf_of(rule("REAL", "ET_A", "A"), rule("REAL", "ET_B", "B"))
     rf.rules[0].speclow, rf.rules[0].spechigh = 0.0, 1.0

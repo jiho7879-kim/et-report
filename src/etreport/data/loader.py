@@ -149,10 +149,12 @@ def wafer_index_from_frame(df: pl.DataFrame) -> pl.DataFrame:
     return idx.select(["lot", "wafer", *compat.CTX_ROLES, "n"])
 
 
-def wafer_index_from_db(db_path: str) -> pl.DataFrame:
+def wafer_index_from_db(db_path: str,
+                        lots: list[str] | None = None) -> pl.DataFrame:
     """DB를 읽기 전용으로 열어 조회 — **[적용] 없이도 동작해야 한다**(§9.1).
 
-    item 컬럼을 만지지 않으므로 큰 DB에서도 가볍다.
+    item 컬럼을 만지지 않으므로 큰 DB에서도 가볍다. `lots`를 주면 도크에서 고른
+    lot으로 좁힌다 — 그룹 편집이 분석 대상과 같은 범위를 보게 하기 위해서다.
     """
     con = open_readonly(db_path)
     try:
@@ -160,10 +162,34 @@ def wafer_index_from_db(db_path: str) -> pl.DataFrame:
         if tbl is None:
             return wafer_index_empty()
         prof = compat.profile(con, tbl)
-        idx = con.execute(compat.wafer_index_sql(prof)).pl()
+        idx = con.execute(compat.wafer_index_sql(prof, lots)).pl()
     finally:
         con.close()
     return idx.with_columns([pl.col(c).cast(pl.Utf8) for c in compat.CTX_ROLES])
+
+
+def lot_index(db_path: str) -> pl.DataFrame:
+    """DB에 들어 있는 lot 목록 — `(lot, wafers)`. 도크 lot 리스트가 쓴다.
+
+    DB를 **고르는 즉시**(=[적용] 전에) 도는 조회다. 그래서 item도 die 좌표도 보지
+    않고 lot·wafer만 센다. 읽기 전용 연결은 반드시 `open_readonly()`를 거친다 —
+    설정이 다른 연결을 같은 파일에 하나라도 더 열면 그 순간 DuckDB가 막는다.
+    """
+    empty = pl.DataFrame(schema={"lot": pl.Utf8, "wafers": pl.Int64})
+    if not Path(db_path).exists():
+        return empty
+    con = open_readonly(db_path)
+    try:
+        tbl = compat.pick_table(con)
+        if tbl is None:
+            return empty
+        sql = compat.lot_index_sql(compat.profile(con, tbl))
+        if not sql:                      # lot 컬럼을 못 찾은 스키마
+            return empty
+        idx = con.execute(sql).pl()
+    finally:
+        con.close()
+    return idx.with_columns(pl.col("lot").cast(pl.Utf8))
 
 
 def wafer_index_empty() -> pl.DataFrame:
@@ -188,8 +214,13 @@ def close_store(state: AppState) -> None:
     state.store = None
 
 
-def load_state(state: AppState, db_path: str, table: str | None = None) -> str:
-    """DB를 열어 state.data를 채우고 상태 요약을 반환."""
+def load_state(state: AppState, db_path: str, table: str | None = None,
+               lots: list[str] | None = None) -> str:
+    """DB를 열어 state.data를 채우고 상태 요약을 반환.
+
+    `lots`가 있으면 그 lot만 읽는다(§9.2). 읽는 양 자체가 줄어드는 것이 요점이라
+    프레임을 다 만든 뒤 거르지 않고 **SQL에서** 좁힌다. 빈 리스트·None은 '전부'다.
+    """
     if not Path(db_path).exists():
         raise FileNotFoundError(f"파일이 없습니다: {db_path}")
 
@@ -203,7 +234,7 @@ def load_state(state: AppState, db_path: str, table: str | None = None) -> str:
 
     prof = compat.profile(con, tbl)
     log.info("조회 테이블 %s", prof.describe())
-    df = con.execute(compat.select_sql(prof)).pl()
+    df = con.execute(compat.select_sql(prof, lots=lots)).pl()
     if prof.is_long:
         df = _normalize_pivoted(df, prof)
     df, n_abs = apply_absolute(df, state.rf)     # 음수로 적재된 기존 DB도 교정
@@ -229,7 +260,11 @@ def load_state(state: AppState, db_path: str, table: str | None = None) -> str:
 
     items = item_columns(state.data)
     n_lot = state.data["lot"].n_unique() if "lot" in state.data.columns else 0
-    return (f"{tbl} · {state.data.height:,} 포인트 · lot {n_lot} "
+    # lot을 골라 읽었으면 '3/12'로 적는다 — 화면에 없는 lot이 DB에는 있다는 사실을
+    # 요약 한 줄이 말해 주지 않으면, 빠진 lot을 데이터가 없는 것으로 오해한다.
+    total = len(state.lots_all)
+    lot_txt = f"{n_lot}/{total}" if lots and total > n_lot else str(n_lot)
+    return (f"{tbl} · {state.data.height:,} 포인트 · lot {lot_txt} "
             f"· item {len(items)} · 제외 {len(state.excluded)}"
             + (f" · 절대값 {n_abs}" if n_abs else ""))
 

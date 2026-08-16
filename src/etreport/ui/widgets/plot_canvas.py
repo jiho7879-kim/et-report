@@ -61,7 +61,8 @@ class PlotCanvas(FigureCanvasQTAgg):
                 for g in styles}
         w, h = self.figure.get_size_inches()
         return (spec, data, styles, st.rf, st.log_patterns, (w, h),
-                self._excluded_frame(), self.mini)
+                self._excluded_frame(), self.mini,
+                bool(getattr(st, "lot_split_symbols", False)))
 
     def _sync_size(self) -> None:
         """Figure 크기를 **위젯 실제 크기**에 맞춘다.
@@ -84,10 +85,11 @@ class PlotCanvas(FigureCanvasQTAgg):
         if args is None:
             self.draw_idle()
             return
-        s, data, styles, rf, patterns, size, excluded, compact = args
+        s, data, styles, rf, patterns, size, excluded, compact, lot_split = args
         mpl_renderer.render(s, data, styles, rf, patterns, size,
                             excluded=excluded, compact=compact,
-                            fig=self.figure)      # 캔버스 figure에 직접
+                            fig=self.figure,      # 캔버스 figure에 직접
+                            lot_split=lot_split)
         self._collect_points(spec)
         self.draw_idle()
 

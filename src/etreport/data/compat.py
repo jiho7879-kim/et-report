@@ -67,6 +67,29 @@ def _ctx_col(role: str, col: str) -> str:
             else f'"{col}" AS {role}')
 
 
+def _quote_lot(v: object) -> str:
+    """lot ID 하나를 SQL 문자열 리터럴로. 작은따옴표는 두 번 적어 닫는다.
+
+    사용자가 고른 값이 SQL 문자열로 들어가는 **유일한 자리**다. lot ID에 따옴표가
+    들어갈 일은 없지만, 없다고 가정하지 않는다.
+    """
+    return "'" + str(v).replace("'", "''") + "'"
+
+
+def lot_filter(p: TableProfile, lots: list[str] | None) -> str:
+    """`WHERE lot IN (…)` 조각. 좁힐 것이 없으면 **빈 문자열**.
+
+    빈 문자열이라는 점이 중요하다 — lot을 고르지 않은 DB에서는 예전과 글자 하나까지
+    같은 SQL이 나와야 지금까지의 동작(과 그걸 고정한 테스트)이 그대로 산다.
+    lot 컬럼을 인식하지 못한 스키마에서도 조용히 좁히지 않는다.
+    """
+    col = p.roles.get("lot")
+    if not lots or not col:
+        return ""
+    vals = ", ".join(_quote_lot(v) for v in dict.fromkeys(lots))
+    return f' WHERE "{col}" IN ({vals})'
+
+
 @dataclass
 class TableProfile:
     table: str
@@ -176,7 +199,7 @@ def ctx_select(p: TableProfile) -> list[str]:
             for r in CTX_ROLES]
 
 
-def wafer_index_sql(p: TableProfile) -> str:
+def wafer_index_sql(p: TableProfile, lots: list[str] | None = None) -> str:
     """(lot, wafer, step, temp, site) → 포인트 수. 그룹 편집의 조회용.
 
     item 컬럼을 전혀 건드리지 않으므로 [적용] 없이도 가볍게 돌릴 수 있다
@@ -192,10 +215,25 @@ def wafer_index_sql(p: TableProfile) -> str:
     else:
         n = "count(*) AS n"
     sel = ", ".join([lot_sel, waf_sel, *ctx_select(p), n])
-    return f'SELECT {sel} FROM "{p.table}" GROUP BY ALL'
+    return f'SELECT {sel} FROM "{p.table}"{lot_filter(p, lots)} GROUP BY ALL'
 
 
-def select_sql(p: TableProfile, dedup_latest: bool = True) -> str:
+def lot_index_sql(p: TableProfile) -> str:
+    """lot → wafer 장수. 도크 lot 목록이 쓴다.
+
+    item도 die 좌표도 건드리지 않아 큰 DB에서도 한 번 훑고 끝난다 — DB를 고르는
+    즉시(=[적용] 전에) 도는 조회라 가벼워야 한다.
+    """
+    lot = p.roles.get("lot")
+    if not lot:
+        return ""
+    waf = p.roles.get("wafer")
+    n = f'count(DISTINCT "{waf}") AS wafers' if waf else "0 AS wafers"
+    return f'SELECT "{lot}" AS lot, {n} FROM "{p.table}" GROUP BY 1 ORDER BY 1'
+
+
+def select_sql(p: TableProfile, dedup_latest: bool = True,
+               lots: list[str] | None = None) -> str:
     """분석용 wide SELECT — key/lot/wafer/gid + step/temp/site + item 컬럼들.
 
     long이면 PIVOT으로 wide화한다. time 컬럼이 있으면 재측정(retest)의
@@ -207,6 +245,10 @@ def select_sql(p: TableProfile, dedup_latest: bool = True) -> str:
     있어도 한 행에 함께 실린다. key는 합친 행들의 최솟값을 쓴다 — seq가 하나뿐인
     (=지금까지 정상 동작하던) DB에서는 예전 key와 값이 같아서 제외 사이드카가
     그대로 살아 있다.
+
+    `lots`를 주면 그 lot만 읽는다. **WHERE는 QUALIFY보다 앞**이라 retest 판정도
+    좁힌 범위 안에서 돈다 — 고르지 않은 lot의 재측정 행이 남은 lot의 순위를
+    흔들지 않는다.
     """
     lot = p.roles.get("lot")
     waf = p.roles.get("wafer")
@@ -214,6 +256,7 @@ def select_sql(p: TableProfile, dedup_latest: bool = True) -> str:
     waf_sel = f'"{waf}" AS wafer' if waf else "'(wafer?)' AS wafer"
     key = key_expr(p)
     merge = merges_seq(p)
+    where = lot_filter(p, lots)
 
     if p.is_long:
         item, val = p.roles["item"], p.roles["value"]
@@ -228,7 +271,7 @@ def select_sql(p: TableProfile, dedup_latest: bool = True) -> str:
                         for c in group) or "1"
         gcols = ", ".join(f'"{c}"' for c in group) or "1"
         base = (f'SELECT {sel}, "{item}" AS item_id, "{val}" AS value '
-                f'FROM "{p.table}"')
+                f'FROM "{p.table}"{where}')
         return (f"WITH src AS ({base}) "
                 f"PIVOT src ON item_id USING any_value(value) GROUP BY {gcols}")
 
@@ -244,7 +287,7 @@ def select_sql(p: TableProfile, dedup_latest: bool = True) -> str:
     if not merge:
         sel = ", ".join([f"{key} AS key", lot_sel, waf_sel, "'' AS gid",
                          *ctx_select(p), *items])
-        return f'SELECT {sel} FROM "{p.table}"{dedup}'
+        return f'SELECT {sel} FROM "{p.table}"{where}{dedup}'
 
     temp_col = p.roles.get("temp")
     # 병합 키에 들어가기 **전에** 온도를 보정한다(23.9와 25.0을 한 점으로)
@@ -252,7 +295,7 @@ def select_sql(p: TableProfile, dedup_latest: bool = True) -> str:
               for c in merge_cols(p)]
     mc = [f'"{c}"' for c in merge_cols(p)]
     inner = (f'SELECT {", ".join([f"{key} AS key", lot_sel, waf_sel, *mc_sel, *items])} '
-             f'FROM "{p.table}"{dedup}')
+             f'FROM "{p.table}"{where}{dedup}')
     # step·temp·site는 병합 그룹 키이므로 집계 없이 그대로 뽑을 수 있다
     ctx = [f'"{p.roles[r]}" AS {r}' if r in p.roles else f"NULL AS {r}"
            for r in CTX_ROLES]
