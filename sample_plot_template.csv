@@ -2,4 +2,6 @@
 1,Vtlin N,Idsat N,1,NMOS 특성,Idsat–Vt,M2_ET,scatter,,,site
 1,Vtlin N,Ioff N,2,,Ioff–Vt,M2_ET,scatter,,,site
 1,"Idsat N, Idsat P","Ioff N, Ioff P",3,,N·P 겹쳐 보기,M2_ET,scatter,,,avg
-2,Vtlin N,Vt spread,1,산포,Vt spread,M2_ET,scatter,,,site
+2,Vtlin N,Vt spread,1,산포·기하,Vt spread,M2_ET,scatter,,,site
+2,W,"Idsat N, Ioff N",2,,W trend,M2_ET,trend,,,med
+2,lot+wafer,Idsat N,3,,wafer별 분포,M2_ET,box,,,site

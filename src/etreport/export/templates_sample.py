@@ -74,19 +74,20 @@ def reformatter_sample() -> Sample:
 
 def plot_sample() -> Sample:
     data = pl.DataFrame({
-        "page": [1, 1, 1, 2, 2],
-        "x": ["Vtlin N", "Vtlin N", "Idsat N, Idsat P", "Vtlin N", "W"],
+        "page": [1, 1, 1, 2, 2, 2],
+        "x": ["Vtlin N", "Vtlin N", "Idsat N, Idsat P", "Vtlin N", "W",
+              "lot+wafer"],
         "y": ["Idsat N", "Ioff N", "Ioff N, Ioff P", "Vt spread",
-              "Idsat N, Ioff N"],
-        "order": [1, 2, 3, 1, 2],
-        "title1": ["NMOS 특성", None, None, "산포·기하", None],
+              "Idsat N, Ioff N", "Idsat N"],
+        "order": [1, 2, 3, 1, 2, 3],
+        "title1": ["NMOS 특성", None, None, "산포·기하", None, None],
         "title2": ["Idsat–Vt", "Ioff–Vt", "N·P 겹쳐 보기", "Vt spread",
-                   "W trend"],
-        "Report": ["M2_ET"] * 5,
-        "Type": ["scatter", "scatter", "scatter", "scatter", "trend"],
-        "x_name": [None, None, None, None, None],
-        "y_name": [None, None, None, None, None],
-        "Mode": ["site", "site", "avg", "site", "med"],
+                   "W trend", "wafer별 분포"],
+        "Report": ["M2_ET"] * 6,
+        "Type": ["scatter", "scatter", "scatter", "scatter", "trend", "box"],
+        "x_name": [None, None, None, None, None, None],
+        "y_name": [None, None, None, None, None, None],
+        "Mode": ["site", "site", "avg", "site", "med", "site"],
     })
     desc = _desc([
         ("page", "페이지 번호", "1", "같은 번호끼리 한 슬라이드에 모인다"),
@@ -99,8 +100,8 @@ def plot_sample() -> Sample:
         ("Report", "리포트 이름", "M2_ET",
          "table 템플릿과 짝을 이루는 키. 한 파일에 여러 리포트를 담을 수 있다"),
         ("Type", "그림 종류", "scatter",
-         "scatter(기본) / trend(x는 W 또는 L). 표는 전용 페이지로 자동 생성되므로 "
-         "table 행을 둘 필요가 없다"),
+         "scatter(기본) / box(x는 나눌 기준) / trend(x는 W 또는 L). "
+         "표는 전용 페이지로 자동 생성되므로 table 행을 둘 필요가 없다"),
         ("x_name, y_name", "축 표시 이름", "(비움)",
          "비우면 ALIAS + 단위로 자동 생성"),
         ("Mode", "점을 무엇으로 찍을지 (선택)", "site",
@@ -109,6 +110,11 @@ def plot_sample() -> Sample:
         ("(trend)", "기하 trend 그리기", "Type=trend · x=W",
          "x에 W 또는 L을 적으면 리포메터의 WIDTH·LENGTH 값을 X축으로 쓴다. "
          "탐색 탭에서도 X에 W·L을 넣으면 자동으로 trend가 된다"),
+        ("(box)", "boxplot 그리기", "Type=box · x=lot+wafer",
+         "x는 ALIAS가 아니라 나눌 기준이다: lot+wafer(합쳐 만든 이름) / "
+         "lot / wafer / gid(실험 조건 그룹) / step / temp / site, 그리고 "
+         "[fab tracking 불러오기]에서 이름을 정해 붙인 컬럼. "
+         "y에 적은 item의 분포가 범주마다 상자 하나로 그려진다"),
     ])
     return Sample("plot_template", "plot 템플릿", data, desc)
 

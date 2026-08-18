@@ -15,9 +15,17 @@ myenv/bin/python tools/make_demo.py --out /tmp/etdemo  # 앱 없이 번들만 �
 myenv/bin/python app.py --no-update --log-level DEBUG   # 버전 확인 끄기 · 상세 로그
 myenv/bin/etreport                 # editable 설치된 콘솔 스크립트 (= etreport.app:main)
 
-myenv/bin/python build/build_release.py            # PyInstaller onedir → dist/ETReport + zip
+myenv/bin/python app.py --run-extract "야간 추출" --days 3   # 창 없이 추출·적재만(§13)
+
+myenv/bin/python build/build_release.py            # PyInstaller onefile → dist/*.exe
+myenv/bin/python build/build_release.py --onedir   # 예전 폴더 배포 + zip
 myenv/bin/python build/build_release.py --publish  # 사내 GHE 릴리스 업로드까지 (gh CLI)
 ```
+
+**빌드 정의는 `build/ETReport.spec` 하나다**(빌드 스크립트가 그것을 부른다).
+사내에서 인증서·라이브러리를 더 실어야 하면 spec 위쪽의 `SITE_DATAS` /
+`SITE_BINARIES` / `SITE_HIDDEN`이나, 커밋되지 않는 `build/site_extras.py`에만
+적는다 — spec 본문에 섞으면 다음 갱신에 날아간다.
 
 `myenv/`가 이미 있는 venv(Python 3.11, editable 설치)다.
 
@@ -27,6 +35,19 @@ myenv/bin/python build/build_release.py --publish  # 사내 GHE 릴리스 업로
 `sys.stderr`가 None이다.** 그래서 부팅에서 StreamHandler를 무조건 붙이지 않고,
 처리되지 않은 예외는 `sys.excepthook`이 로그 + 알림 창으로 돌린다(같은 오류는
 한 번만, 앱은 죽이지 않는다). 현장 버그는 이 로그 파일이 유일한 단서다.
+
+**패키지와 함께 배포되는 파일은 `etreport/resources.py`로만 찾는다.**
+`Path(__file__).with_name(...)`은 exe에서 깨진다 — PyInstaller가 모듈을 압축
+아카이브(PYZ)에 넣어서 `__file__` 옆에는 아무것도 없고, `--add-data`로 실은
+파일은 `sys._MEIPASS` 아래에 풀린다. style.qss·설명서 PDF·한글 폰트·빌드
+스탬프가 전부 이 경로를 거친다(현장에서 "style.qss를 찾지 못했습니다"가 뜬 이유).
+
+**"고쳤는데 exe가 그대로"는 빌드 스탬프로 가른다**(`etreport/buildinfo.py`).
+빌드 스크립트가 `assets/build_info.json`(시각·git 해시)을 굽고 번들에 실으며,
+부팅 로그 첫 줄과 [도움말] → [버전 · 빌드 정보]가 그 값을 적는다. 값이 예전
+그대로면 새 빌드를 실행하고 있지 않은 것이고, 바뀌었는데 동작이 그대로면 그때가
+진짜 코드 문제다. spec의 `pathex`가 `src/`를 맨 앞에 두는 것도 같은 목적이다 —
+site-packages에 설치된 예전 etreport가 대신 실리는 사고를 막는다.
 
 ## 테스트 · 린터
 
@@ -86,6 +107,7 @@ myenv/bin/ruff check --fix .                        # 안전한 것만 자동 �
 | `test_demo.py` | **데모 계약** — 기능 덮개·번들 파일 == 화면 값·가짜 소스로 추출→적재 |
 | `test_xlio_csv.py` | csv·tsv 입력(열 타입 규칙·0으로 시작하는 코드·되쓰기) |
 | `test_multi_lot.py` | **§9.2** lot 선택 SQL(안 고르면 예전과 동일)·커버리지·lot 심볼·표 lot 경계·기준 lot |
+| `test_requests_13.py` | 요청 13건 — 단일 exe·리소스 경로·빌드 스탬프·fab tracking 이름 컬럼·조회 조건 자동 채움·boxplot·plot 종류·VARCHAR 읽기·Tukey 필터·예약 실행 |
 | `test_bigset.py` (slow) | 실측 규모 성능·정확성 회귀 (`-s`로 단계별 시간 출력) |
 
 `tools/make_testset.py`는 **사내 PC에서 실제 앱으로** 리포메터를 확인하기 위한
@@ -135,13 +157,23 @@ UI는 스모크 수준만 있다(`test_ui_smoke.py`, offscreen). 화면을 바�
 
 두 워크스페이스(`ui/mainwindow.py`의 QStackedWidget)로 나뉜다.
 
-**[데이터] 파이프라인** (`ui/data_ws.py`의 `_ExtractThread`, 백그라운드 QThread):
+**[데이터] 파이프라인** (`data/pipeline.py: run()`):
 ```
 리포메터 로드(xlwings) → querybuilder(Impala SQL) → extractor(일 단위 청크·4워커
 → long parquet) → reformatter.apply(long, 청크별) → db.pivot_and_load(512 버킷
 피벗 → DuckDB et_data)
 ```
-단계마다 `log`/`step` 시그널로 초 단위 진행이 화면 하단 로그에 남는다.
+**이 함수는 Qt를 모른다.** `ui/data_ws.py`의 `_ExtractThread`는 콜백을 시그널로
+옮기는 껍데기일 뿐이고, 예약 실행(§13)도 같은 함수를 그냥 부른다 — 화면 안에
+두면 두 경로가 조용히 갈린다. 단계마다 `log`/`step`으로 초 단위 진행이 화면
+하단 로그에 남는다.
+
+**예약 실행**(`etreport/schedule.py`, 요청 §13): `ETReport.exe --run-extract
+"<프리셋>" --days N`이 창 없이 추출·적재만 하고 **종료 코드로** 결과를 알린다
+(0=성공 / 1=실패 / 2=프리셋 없음). 그 실행을 반복하는 일은 Windows 작업
+스케줄러(`schtasks`)에 맡긴다 — 상주 프로세스는 로그아웃하면 죽고 죽은 것을
+아무도 모른다. 작업은 `/IT`(로그인 사용자로만)로 등록한다: bdq 자격과 Excel
+COM이 계정에 묶여 있어 로그인 없이 돌리면 조용히 빈 결과가 적재된다.
 
 **[분석] 파이프라인** (`ui/analysis_ws.py` + `model/session.py`):
 파일 선택은 **경로만 담는다(staging)**. [적용]을 눌렀을 때 `session.apply_config()`가
@@ -158,6 +190,11 @@ UI는 스모크 수준만 있다(`test_ui_smoke.py`, offscreen). 화면을 바�
 | 앱 전역 상태 + 변경 알림 | `model/state.py` (`AppState`, `StateBus` 시그널 6종) |
 | 색·모서리·글자 크기 | `ui/theme.py: TOKENS` — `style.qss`의 `%TOKEN%`으로만 들어간다 |
 | 축 범위·로그 판정 | `render/ranges.py` — SPEC∪데이터를 중심 기준 ×1.2 (로그 축이면 ×1.2도 로그 공간에서) |
+| boxplot x축 후보·값 | `model/categories.py` — `lot+wafer`(가상)·lot·wafer·gid·step·temp·site + tracking/계측 컬럼 |
+| plot 종류 목록 | `model/specs.py: PLOT_TYPES` — 화면 콤보와 템플릿 `Type` 열이 같은 목록을 본다 |
+| 그림·표에서 뺄 점 | `model/state.py: AppState.hidden()` = 손으로 찍은 제외 ∪ 이상치 필터 |
+| 이상치 판정 | `model/outliers.py` — Q1−k·IQR / Q3+k·IQR, 기본은 `(step, temp)`별 |
+| 조회 조건 기본값 | `data/lotcontext.py` — 분석 DB의 line·process·part + ET tkout 기준 180일 |
 | 자릿수 포맷 | `model/specs.py: fmt_value` (<1→3자리, ≤10→2자리, >10→1자리) |
 | wafer 집계(평균/n-1 표준편차) | `model/aggregate.py` — 화면·xlsx·PPT 공용, group_by 1회 |
 | lot·wafer 표기 비교 | `model/wafers.py` — `W01`·`W1`·`01`·`1`을 한 키로 |
@@ -227,6 +264,35 @@ Ctrl+Enter는 보고 있는 탭의 `stale_button_attr` 버튼을 누른다 — �
 확인만 받는 알림(캐시 비움·예시 저장 등)은 모달이 아니라
 `ui/widgets/toast.py`의 `toast()`를 쓴다. 모달은 실패와 되돌릴 수 없는 확인에만.
 
+### boxplot과 plot 종류
+
+plot 종류는 `scatter · box · trend` 셋이고 목록은 `model/specs.PLOT_TYPES`
+하나다 — 템플릿의 `Type` 열, 탐색 탭 [종류] 콤보, 리포트 슬롯 인스펙터가 같은
+목록을 본다(갈리면 템플릿으로 저장했다 다시 열 때 종류가 바뀐다).
+
+**boxplot의 x는 item이 아니라 범주다.** 무엇을 범주로 쓸 수 있는지와 값 만드는
+법은 `model/categories.py`가 독점한다 — `lot+wafer`는 DB에 없는 **가상 컬럼**
+이라 그릴 때 만들고(적재해 두면 lot·wafer 표기 규칙이 두 곳이 된다), `gid`는
+축에 gid가 아니라 **그룹 이름**으로 적힌다. 숫자 컬럼은 후보에서 뺀다(값마다
+상자가 하나씩 생긴다) — `choices()`와 `is_category()`가 같은 기준을 써야 한다.
+상자는 범주 자리마다 **그 자리에 값이 있는 그룹끼리만** 폭을 나눈다: 전체 그룹
+수로 나누면 그룹과 범주가 1:1일 때 상자가 눈금에서 비켜 그려진다.
+
+### 이상치 필터 (Tukey)
+
+표·plot을 그리기 **전에** `lo = Q1 − k·IQR`, `hi = Q3 + k·IQR` 밖을 걸러 낸다.
+`k`는 사용자가 정하고(프리셋 3.0·4.5) 기본은 꺼짐 — 데이터를 버리는 동작은
+사용자가 켜야 시작된다. 사분위수는 **`(step, temp)`마다 따로** 구한다: 25 ℃와
+125 ℃를 합쳐 세면 정상적인 고온 측정이 통째로 이상치가 된다. 표본이
+`MIN_POINTS`(12) 미만인 묶음은 경계를 NULL로 두어 아무것도 거르지 않는다.
+
+걸러진 점은 **버리지 않고 기록한다** — `state.filtered`에 남고
+`data/exclusions.py`의 **별도 사이드카**(`*.filter.json`)에 저장되며, 화면에는
+회색 빈 심볼로 그대로 보인다. 손으로 찍은 제외와 파일을 나눈 이유는 필터를 끌 때
+사람이 뺀 점까지 지우지 않기 위해서다. **읽는 쪽은 전부 `state.hidden()`을
+쓴다** — `excluded`만 보는 코드가 하나라도 남으면 그 화면에서만 필터가 빠져
+화면과 PPT의 숫자가 갈린다.
+
 ### 계산은 명시적으로만
 표·plot·미리보기는 자동 재계산하지 않는다. Summary [표 만들기] / 탐색 [그리기] /
 리포트 [미리보기] 버튼이 트리거이고, 변경이 생기면 버튼이 앰버색 + 라벨 끝에 `•`가
@@ -276,6 +342,13 @@ different configuration`), `duckdb.connect(..., read_only=True)`를 직접 부�
 - 컬럼 이름은 고정하지 않고 `data/compat.py`의 `ROLE_ALIASES`로 역할을 추론한다
   (`root_lot_id|lot_id|lot`, `wafer_id|slot_no`, `tkout_time|create_dttm` …).
   long(`item_id`/`value`) 테이블이면 `select_sql()`이 PIVOT으로 wide화한다.
+- **타입 때문에 읽기가 막히지 않는다**(요청 §8). 예전에 손으로 만든 DB는
+  temperature가 VARCHAR인 일이 있는데, 문자열에 산술을 걸면 DuckDB가 값 하나
+  (`'n/a'`·빈칸) 때문에 조회 전체를 떨어뜨려 **DB가 통째로 안 열렸다**. 그래서
+  `temp_expr()`는 `TRY_CAST`를 거치고(못 읽는 값만 NULL, 숫자 컬럼에서는 결과가
+  예전과 같다), 숫자 item이 **하나도 없는** 테이블은 남은 문자열 컬럼을 item으로
+  보고 `TableProfile.numeric_expr()`로 읽는다. 적재는 여전히 숫자만 받는다 —
+  읽기만 관대해진다.
 - **`step_seq`만 다른 행은 읽으면서 한 측정점으로 합친다**(`compat.merges_seq`·
   `MERGE_ROLES`). x가 `step_seq=1`·y가 `2`에 기록되는 경우가 흔한데, 합치지
   않으면 x·y가 함께 있는 행이 0개가 되어 산점도가 통째로 빈다. 그룹 키는
@@ -366,9 +439,27 @@ lot을 찾는다. **`area='PHOTO'`면 recipe(`reticle_id`), 그 외는 `ppid`**�
 혼입 감지는 `model/split.SplitMatrix`가 하며 여기서 매트릭스만 만들어 넘긴다 —
 그룹핑 로직을 두 곳에 두지 않는다.
 
+**뽑을 컬럼의 이름은 사용자가 정한다**(`TrackColumn`, 요청 §2). 예전에는
+`process_id` 값이 그대로 표의 머리글이 돼서 `1400` 같은 코드가 축 이름으로
+나갔고, 한 step에서 recipe와 설비를 함께 볼 수도 없었다. 이제 **이름 · 원본
+컬럼 · step**을 줄마다 정하고(`derive()`), `attach()`가 (lot, wafer)로 분석
+프레임에 붙인다 — 그때부터 boxplot x축·표 범주·PPT 슬라이드에서 쓰인다
+(`state.track_columns` / `state.track_frame`). 기본 제안(`suggest_columns()`)은
+조건이 갈리는 step 그대로라 **창을 열자마자 보이는 것은 지금까지와 같은 결과**다.
+계측과 달리 같은 이름이 있으면 **덮어쓴다** — 조건을 고쳐 다시 뽑는 흐름이라
+덮지 않으면 고친 결과가 반영되지 않는다.
+
 **inline 계측** (`data/metrology.py`) — `fab.f_fab_wf_met`. 조회는 **분석 중인
 lot으로 반드시 좁힌다**(전체 스캔 금지). subitem 규칙은 확정 사항이다: site
 level은 `RANGE/STD/MIN/VALUE/SLOTID/Q2/MAX`를 **뺀** 나머지, wafer level은 `Q2`.
+
+**두 조회 모두 조건을 분석 DB에서 채우고 SQL을 직접 고칠 수 있다**(요청 §3).
+line·process·part와 기간 기본값은 `data/lotcontext.py`가 DuckDB에서 읽어 온다 —
+기간은 **ET tkout_time 기준 180일 이전부터 tkout_time까지**(계측·tracking은 ET
+보다 앞선 공정에서 찍히므로 그 뒤를 볼 이유가 없다). 손으로 적으면 오타 하나에
+조회가 비고, 그때는 "데이터가 없는 것"과 구별되지 않는다. 창이 SQL을 다시
+만드는 것은 [조건으로 다시 만들기]를 눌렀을 때뿐이다 — 고쳐 둔 SQL을 조용히
+덮지 않는다.
 계측 열 이름은 `step_id::item_id`(다른 step의 같은 item이 뭉치지 않게).
 `top_factors()`는 wafer 집계를 `model/aggregate`에서 가져와 상관(r)·그룹 차이
 (Welch t)로 순위를 매기고, 결과는 `state.met_top` → PPT 슬라이드로 나간다.
@@ -430,11 +521,16 @@ ALIAS여야 하고, 아니면 그 행만 건너뛴다.
 
 ## 릴리스
 
-`src/etreport/__init__.py`의 `__version__` 하나가 태그(`vX.Y.Z`)·zip 이름·업데이트
+`src/etreport/__init__.py`의 `__version__` 하나가 태그(`vX.Y.Z`)·자산 이름·업데이트
 체커 비교의 기준이다. 릴리스 시 이 값과 `CHANGELOG.md`를 함께 올린다.
 (현재 `__version__`/`pyproject.toml`은 1.3.0인데 CHANGELOG는 1.7.3까지 있다 —
-다음 릴리스 전에 맞춰야 한다.) 업데이트는 zip을 받아 종료 후 robocopy /MIR로
-폴더째 교체한다(`update/apply.py`) — Windows에서 실행 중 exe가 잠기기 때문.
+다음 릴리스 전에 맞춰야 한다.)
+
+업데이트는 **자산 확장자로 교체 방식을 정한다**(`update/apply.py: plan()`).
+`.exe`면 파일 하나를 `copy /Y`로 덮어쓰고, `.zip`이면 예전처럼 풀어서 robocopy로
+폴더에 붓는다(`/MIR`은 쓰지 않는다 — zip에 없는 파일까지 지운다). 어느 쪽이든
+**앱이 끝난 뒤** 배치가 교체한다: Windows에서 실행 중인 exe·dll은 잠겨 있다.
+`checker.pick_asset()`은 둘 다 올라와 있으면 **exe를 먼저** 고른다.
 
 ## 사내 식별자 (공개 전 확인 — `PUSH.md`)
 

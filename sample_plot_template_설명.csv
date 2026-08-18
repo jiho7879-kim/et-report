@@ -5,6 +5,8 @@ order,페이지 안 위치,1~6,"1·2·3 윗줄 / 4·5·6 아랫줄, 왼쪽에서
 title1,페이지 제목,NMOS 특성,같은 page의 첫 행에만 적는다
 title2,이 plot의 제목,Idsat–Vt,""
 Report,리포트 이름,M2_ET,table 템플릿과 짝을 이루는 키. 한 파일에 여러 리포트를 담을 수 있다
-Type,그림 종류,scatter,scatter(기본) / trend(x는 W 또는 L). 표는 전용 페이지로 자동 생성되므로 table 행을 둘 필요가 없다
+Type,그림 종류,scatter,scatter(기본) / box(x는 나눌 기준) / trend(x는 W 또는 L). 표는 전용 페이지로 자동 생성되므로 table 행을 둘 필요가 없다
 "x_name, y_name",축 표시 이름,(비움),비우면 ALIAS + 단위로 자동 생성
-Mode,그릴 데이터 레벨 (선택),site,site(측정점 그대로) / avg / med / std — 없으면 site
+Mode,점을 무엇으로 찍을지 (선택),site,site(측정점 그대로) / avg(wafer 평균) / med(wafer 중앙값) / std(wafer 산포) — 없으면 site. 화면에서도 plot마다 바꿀 수 있다
+(trend),기하 trend 그리기,Type=trend · x=W,x에 W 또는 L을 적으면 리포메터의 WIDTH·LENGTH 값을 X축으로 쓴다. 탐색 탭에서도 X에 W·L을 넣으면 자동으로 trend가 된다
+(box),boxplot 그리기,Type=box · x=lot+wafer,"x는 ALIAS가 아니라 나눌 기준이다: lot+wafer(합쳐 만든 이름) / lot / wafer / gid(실험 조건 그룹) / step / temp / site, 그리고 [fab tracking 불러오기]에서 이름을 정해 붙인 컬럼. y에 적은 item의 분포가 범주마다 상자 하나로 그려진다"
