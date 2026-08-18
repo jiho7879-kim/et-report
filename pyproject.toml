@@ -34,13 +34,14 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 # 사용 설명서 PDF·한글 폰트·스타일시트는 패키지와 함께 배포한다
-etreport = ["ui/*.qss", "assets/manual/*.pdf", "assets/fonts/*"]
+etreport = ["ui/*.qss", "assets/manual/*.pdf", "assets/fonts/*",
+            "assets/build_info.json"]
 
 # ── 린터 ──────────────────────────────────────────────────────
 [tool.ruff]
 line-length = 100          # 실제 코드 최대치(99)에 맞춤. 새 코드는 88 안쪽 권장
 target-version = "py311"
-exclude = ["myenv", "dist", "build/*.spec"]
+exclude = ["myenv", "dist", "*.spec", "build/pyi"]
 
 [tool.ruff.lint]
 select = [

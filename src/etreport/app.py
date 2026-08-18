@@ -171,6 +171,12 @@ def _build_parser():
                     help="데모를 화면에만 올린다 — 번들 파일·가짜 소스 없이")
     ap.add_argument("--no-update", action="store_true",
                     help="시작 시 새 버전 확인을 건너뛴다")
+    # 예약 실행(§13) — 창을 띄우지 않고 추출·적재만 하고 끝난다.
+    # 작업 스케줄러가 이 인자로 exe를 부른다(etreport/schedule.py).
+    ap.add_argument("--run-extract", metavar="프리셋",
+                    help="창 없이 그 추출 프리셋으로 추출·적재하고 종료한다")
+    ap.add_argument("--days", type=int, default=1,
+                    help="--run-extract의 추출 기간 (오늘 포함 최근 N일, 기본 1)")
     ap.add_argument("--log-level", default="INFO",
                     choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                     help="로그 상세도 (기본 INFO)")
@@ -184,9 +190,19 @@ def main(argv: list[str] | None = None) -> int:
 
     _setup_logging(args.log_level)
     log = logging.getLogger("etreport")
-    log.info("%s v%s 시작 — Python %s · %s",
-             APP_NAME, __version__, sys.version.split()[0], sys.platform)
+    # **빌드 스탬프를 맨 앞에 남긴다.** "코드를 고쳤는데 exe가 그대로"라는 신고가
+    # 오면 이 한 줄이 새 빌드를 실행 중인지부터 갈라 준다(etreport/buildinfo.py).
+    from etreport.buildinfo import get as build_info
+    log.info("%s 시작 — %s · Python %s · %s", APP_NAME, build_info().label(),
+             sys.version.split()[0], sys.platform)
     _install_excepthook(log)
+
+    # 예약 실행 — **창을 만들기 전에** 갈라진다. QApplication을 띄우지 않는다
+    # (창 없는 세션에서 그 자리에 멈출 수 있고, 파이프라인은 Qt가 필요 없다).
+    # 종료 코드가 그대로 작업 스케줄러의 실행 이력이 된다.
+    if args.run_extract:
+        from etreport.schedule import run_headless
+        return run_headless(args.run_extract, args.days, args.log_level)
 
     from etreport import demo
     from etreport.config.settings import Settings

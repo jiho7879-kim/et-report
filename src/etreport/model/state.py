@@ -16,6 +16,12 @@ from etreport.model.specs import GroupStyle, PlotSpec, ReportSpec
 from etreport.model.split import SplitMatrix
 
 
+def _tukey_default():
+    """이상치 필터 설정의 기본값(꺼짐). 순환 import를 피해 함수로 둔다."""
+    from etreport.model.outliers import TukeyConfig
+    return TukeyConfig()
+
+
 @dataclass
 class AppState:
     rf: Reformatter = field(default_factory=Reformatter)
@@ -29,6 +35,11 @@ class AppState:
     data: pl.DataFrame | None = None
     excluded: set[str] = field(default_factory=set)
     undo_stack: list[str] = field(default_factory=list)
+    # 이상치 필터(Tukey)가 걸러 낸 점 — key → {reason, item, at}.
+    # **손으로 찍은 제외와 따로 둔다**: 필터를 끄면 이쪽만 비워야 하고,
+    # 이력에도 "사람이 뺀 것"과 "규칙이 뺀 것"이 구분돼 남아야 한다.
+    filtered: dict[str, dict] = field(default_factory=dict)
+    tukey: object = field(default_factory=lambda: _tukey_default())
 
     log_patterns: list[str] = field(default_factory=lambda: ["Ioff*", "*Leak*", "Jg*"])
     agg: str = "avg"
@@ -54,6 +65,10 @@ class AppState:
     # inline 계측(기능 B) — 붙인 계측 열 이름과 top-k 결과
     met_columns: list[str] = field(default_factory=list)
     met_top: object | None = None      # polars DataFrame | None
+    # fab tracking(기능 A)에서 뽑아 붙인 열 이름. 사용자가 이름을 정하므로
+    # 코드에서 추측할 수 없다 — plot 축 후보·표 범주·PPT 슬라이드가 이 목록을 본다.
+    track_columns: list[str] = field(default_factory=list)
+    track_frame: object | None = None  # polars DataFrame | None (lot·wafer·열들)
     rf_path: str = ""
     rf_sheet: str | int = 0
     exclude_all_plots: bool = True     # 제외를 모든 plot에 적용할지
@@ -72,13 +87,23 @@ class AppState:
     def ref_group(self) -> GroupStyle | None:
         return next((g for g in self.groups if g.ref), None)
 
+    def hidden(self) -> set[str]:
+        """그림·표에서 빠질 점 전부 — 손으로 찍은 제외 ∪ 이상치 필터.
+
+        **읽는 쪽은 전부 이걸 쓴다.** `excluded`만 보는 코드가 하나라도 남으면
+        그 화면에서만 필터가 안 걸려 화면과 PPT의 숫자가 갈린다.
+        찍고 지우는 쪽(클릭 제외)은 여전히 `excluded`를 직접 만진다.
+        """
+        return self.excluded | set(self.filtered)
+
     def active(self) -> pl.DataFrame:
-        """제외 반영된 포인트."""
+        """제외·필터 반영된 포인트."""
         if self.data is None:
             return pl.DataFrame()
-        if not self.excluded:
+        hide = self.hidden()
+        if not hide:
             return self.data
-        return self.data.filter(~pl.col("key").is_in(list(self.excluded)))
+        return self.data.filter(~pl.col("key").is_in(list(hide)))
 
     def wafer_columns(self) -> list[tuple[str, list[str]]]:
         """표의 wafer 열 — **plot과 같은 기준**으로 좁힌다.

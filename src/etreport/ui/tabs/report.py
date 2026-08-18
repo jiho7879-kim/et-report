@@ -22,7 +22,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from etreport.model.specs import POINT_MODES
+from etreport.model.specs import (
+    GEOM_COLUMNS,
+    PLOT_TYPE_LABELS,
+    PLOT_TYPES,
+    POINT_MODES,
+)
 from etreport.model.state import AppState, StateBus
 from etreport.ui.tabs.common import StaleMixin, on_combo
 from etreport.ui.widgets.autocomplete import AutoCompleteEdit
@@ -158,12 +163,23 @@ class ReportTab(StaleMixin, QWidget):
 
         self.slot_card = Card("선택한 슬롯")
         # X·Y는 리포메터 ALIAS를 자동완성으로 — 빈 슬롯에서도 바로 그릴 수 있게
-        self.ed_sx = AutoCompleteEdit(self._alias_items)
+        self.ed_sx = AutoCompleteEdit(self._x_items)
         self.ed_sy = AutoCompleteEdit(self._alias_items)
         self.ed_stitle = QLineEdit()
         for ed in (self.ed_sx, self.ed_sy, self.ed_stitle):
             ed.editingFinished.connect(self._slot_edited)
         self.slot_card.body.addWidget(row("제목", self.ed_stitle, stretch_at=1))
+        # plot 종류 — 탐색 탭과 **같은 목록**(templates의 Type 열과도 같다).
+        # 여기서 바꾼 종류는 [템플릿에 저장]으로 엑셀 Type 열에 그대로 되쓰인다.
+        self.cmb_type = QComboBox()
+        for t in PLOT_TYPES:
+            self.cmb_type.addItem(f"종류: {PLOT_TYPE_LABELS[t]}", t)
+        self.cmb_type.setToolTip(
+            "산점도 — X·Y 모두 item\n"
+            "boxplot — X는 나눌 기준(lot+wafer·그룹·온도·fab tracking 컬럼…)\n"
+            "기하 trend — X는 W 또는 L")
+        on_combo(self.cmb_type, self._type_changed)
+        self.slot_card.body.addWidget(self.cmb_type)
         self.slot_card.body.addWidget(row("X", self.ed_sx, stretch_at=1))
         self.slot_card.body.addWidget(row("Y", self.ed_sy, stretch_at=1))
         self.cmb_point = QComboBox()
@@ -236,6 +252,28 @@ class ReportTab(StaleMixin, QWidget):
             return st.aliases()
         return item_columns(st.data) if st.data is not None else []
 
+    def _x_items(self) -> list[str]:
+        """X 자동완성 — 종류에 따라 뜻이 다르다(탐색 탭과 같은 규칙)."""
+        from etreport.model import categories as cat
+        st = self.state
+        typ = self.cmb_type.currentData() or "scatter"
+        if typ == "box":
+            return cat.choices(st.data, st.track_columns + st.met_columns)
+        if typ == "trend":
+            return list(GEOM_COLUMNS)
+        return self._alias_items()
+
+    def _type_changed(self) -> None:
+        """종류 콤보 — 고른 슬롯이 있으면 그 슬롯에 반영한다.
+
+        빈 슬롯에서 고르는 것도 뜻이 있다: [이 슬롯에 plot 만들기]가 이 값을 쓴다.
+        """
+        spec = self._current_slot()
+        if spec is not None and spec.type != "table":
+            spec.type = self.cmb_type.currentData() or "scatter"
+            self.bus.report_changed.emit()
+            self.refresh_if_visible()
+
     def _point_to_all(self) -> int:
         """점 표시 방식을 모든 페이지·모든 슬롯에 적용. 바뀐 슬롯 수 반환."""
         st = self.state
@@ -260,7 +298,7 @@ class ReportTab(StaleMixin, QWidget):
         탐색 탭의 [＋ 리포트에 추가]와 같은 결과지만, **자리를 고를 수 있다**.
         X가 기하(W·L)면 탐색 탭과 같은 규칙으로 trend가 된다.
         """
-        from etreport.model.specs import GEOM_COLUMNS, PlotSpec
+        from etreport.model.specs import PlotSpec
         st = self.state
         if st.report is None or self.sel_slot is None:
             QMessageBox.information(self, "plot 만들기", "먼저 슬롯을 고르세요")
@@ -271,10 +309,15 @@ class ReportTab(StaleMixin, QWidget):
                                     "X와 Y에 item을 적어 주세요")
             return False
         i = self.cmb_point.currentIndex()
+        # 종류는 고른 값이 우선. 단 X에 W·L을 적었으면 trend로 넘어가 준다 —
+        # 그 손버릇을 살려 두지 않으면 빈 그림이 나온다(탐색 탭과 같은 규칙).
+        typ = self.cmb_type.currentData() or "scatter"
+        if x in GEOM_COLUMNS:
+            typ = "trend"
         spec = PlotSpec(
             title=self.ed_stitle.text().strip() or f"{y} vs {x}",
             x=x, y=y,
-            type="trend" if x in GEOM_COLUMNS else "scatter",
+            type=typ,
             mode=POINT_MODES[i] if 0 <= i < len(POINT_MODES) else "site",
             logy_mode=("auto", "log", "linear")[self.cmb_log.currentIndex()])
         st.report.pages[self.page_idx].slots[self.sel_slot] = spec
@@ -320,8 +363,10 @@ class ReportTab(StaleMixin, QWidget):
                         (self.ed_sy, spec.y if spec else "")):
             ed.setText(val)
             ed.setEnabled(True)
-        for cmb in (self.cmb_log, self.cmb_point):
+        for cmb in (self.cmb_log, self.cmb_point, self.cmb_type):
             cmb.setEnabled(True)
+        # 표 전용 슬롯은 종류를 고르는 대상이 아니다(pptgen이 따로 만든다).
+        self.cmb_type.setEnabled(spec is None or spec.type != "table")
         self.btn_make.setEnabled(True)
         self.btn_point_all.setEnabled(self.state.report is not None)
         if spec:
@@ -330,7 +375,10 @@ class ReportTab(StaleMixin, QWidget):
                      {"auto": 0, "log": 1, "linear": 2}.get(spec.logy_mode, 0)),
                     (self.cmb_point,
                      POINT_MODES.index(spec.mode)
-                     if spec.mode in POINT_MODES else 0)):
+                     if spec.mode in POINT_MODES else 0),
+                    (self.cmb_type,
+                     PLOT_TYPES.index(spec.type)
+                     if spec.type in PLOT_TYPES else 0)):
                 cmb.blockSignals(True)       # 채우는 동안은 편집으로 보지 않는다
                 cmb.setCurrentIndex(idx)
                 cmb.blockSignals(False)

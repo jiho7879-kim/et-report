@@ -11,12 +11,16 @@
 """
 from __future__ import annotations
 
+from PySide6.QtCore import QDate
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
+    QDateEdit,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
@@ -25,7 +29,14 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from etreport.data import lotcontext
 from etreport.model.state import AppState
+from etreport.ui.widgets.cards import GhostButton
+
+
+def _default_line() -> str:
+    from etreport.data.metrology import DEFAULT_LINE
+    return DEFAULT_LINE
 
 
 class MetrologyDialog(QDialog):
@@ -36,14 +47,50 @@ class MetrologyDialog(QDialog):
         self.setWindowTitle("inline 계측 불러오기")
         self.resize(760, 640)
 
+        # 조회 조건 기본값은 분석 중인 DB에서 읽는다(fab tracking과 같은 규칙).
+        self.ctx = lotcontext.from_db(state.db_path,
+                                      list(state.lots_selected) or None)
+
         v = QVBoxLayout(self)
         v.addWidget(QLabel(
             "엑셀에서 복사한 step_id · item_id 목록을 붙여넣으세요 "
             "(비우면 CD|THK|DEPTH|TIP|RCS 전체)"))
         self.paste = QPlainTextEdit()
         self.paste.setPlaceholderText("step_id\titem_id\nM1\tCD_A\nM5\tTHK_B")
-        self.paste.setMaximumHeight(130)
+        self.paste.setMaximumHeight(110)
         v.addWidget(self.paste)
+
+        cond = QHBoxLayout()
+        cond.addWidget(QLabel("line"))
+        self.ed_line = QLineEdit(self.ctx.line_id(_default_line()))
+        self.ed_line.setMaximumWidth(90)
+        cond.addWidget(self.ed_line)
+        lo, hi = self.ctx.date_range()
+        self.chk_dates = QCheckBox("기간")
+        self.chk_dates.setChecked(lo is not None)
+        self.chk_dates.setToolTip(
+            f"분석 중인 lot의 ET tkout_time 기준 "
+            f"{lotcontext.DEFAULT_LOOKBACK_DAYS}일 이전부터가 기본값입니다.\n"
+            "계측은 ET보다 앞선 공정에서 찍히므로 그 뒤를 볼 이유가 없습니다.")
+        cond.addWidget(self.chk_dates)
+        self.dt_from, self.dt_to = QDateEdit(), QDateEdit()
+        for ed, d in ((self.dt_from, lo), (self.dt_to, hi)):
+            ed.setCalendarPopup(True)
+            ed.setDisplayFormat("yyyy-MM-dd")
+            ed.setDate(QDate(d.year, d.month, d.day) if d else QDate.currentDate())
+        cond.addWidget(self.dt_from)
+        cond.addWidget(QLabel("~"))
+        cond.addWidget(self.dt_to)
+        cond.addStretch(1)
+        b_sql = GhostButton("조건으로 SQL 다시 만들기")
+        b_sql.clicked.connect(self._rebuild_sql)
+        cond.addWidget(b_sql)
+        v.addLayout(cond)
+
+        v.addWidget(QLabel("조회 SQL — 직접 고쳐도 됩니다"))
+        self.ed_sql = QPlainTextEdit()
+        self.ed_sql.setMaximumHeight(110)
+        v.addWidget(self.ed_sql)
 
         bar = QHBoxLayout()
         bar.addWidget(QLabel("level"))
@@ -80,6 +127,8 @@ class MetrologyDialog(QDialog):
         bb.accepted.connect(self.accept)
         v.addWidget(bb)
 
+        self._rebuild_sql()          # 창을 열자마자 무엇을 조회할지 보이게
+
     # ── 조회 ─────────────────────────────────────────────────
     def level(self) -> str:
         return "site" if self.cmb_level.currentIndex() == 1 else "wafer"
@@ -90,19 +139,45 @@ class MetrologyDialog(QDialog):
             return []
         return sorted(set(st.data["lot"]))
 
+    def build_sql(self) -> str:
+        """붙여넣은 목록 + 조건 → 조회 SQL. 테스트가 이 함수만 따로 부른다."""
+        from etreport.data import metrology as mt
+        lots = self.lots()
+        if not lots:
+            return ""
+        pairs = mt.parse_pairs(self.paste.toPlainText())
+        steps = sorted({s for s, _ in pairs}) or None
+        items = sorted({i for _, i in pairs}) or None
+        lo = hi = None
+        if self.chk_dates.isChecked():
+            lo = self.dt_from.date().toPython()
+            hi = self.dt_to.date().toPython()
+        return mt.build_met_sql(
+            lots, steps=steps, items=items,
+            line_id=self.ed_line.text().strip() or mt.DEFAULT_LINE,
+            item_regex=None if items else mt.ITEM_REGEX,
+            d_from=lo, d_to=hi)
+
+    def _rebuild_sql(self) -> None:
+        sql = self.build_sql()
+        self.ed_sql.setPlainText(
+            sql or "-- 분석 DB를 먼저 열어 주세요 (lot을 알 수 없습니다)")
+
     def _load(self) -> None:
-        """조회는 사내망 왕복이라 몇 초씩 걸린다 — 진행 창을 띄우고 워커에서."""
+        """조회는 사내망 왕복이라 몇 초씩 걸린다 — 진행 창을 띄우고 워커에서.
+
+        **SQL 칸에 적힌 문장을 그대로 돌린다.** 비어 있으면 조건으로 만들어
+        채워 넣는다 — 손으로 고쳐 둔 SQL을 조용히 덮지 않는다.
+        """
         from etreport.data import metrology as mt
         from etreport.ui.widgets.worker import bdq_call, run_in_background
         lots = self.lots()
         if not lots:
             self.lbl.setText("먼저 [적용]으로 분석 DB를 여세요 — lot을 알 수 없습니다")
             return
-        pairs = mt.parse_pairs(self.paste.toPlainText())
-        steps = sorted({s for s, _ in pairs}) or None
-        items = sorted({i for _, i in pairs}) or None
-        sql = mt.build_met_sql(lots, steps=steps, items=items,
-                               item_regex=None if items else mt.ITEM_REGEX)
+        if not self.ed_sql.toPlainText().strip():
+            self._rebuild_sql()
+        sql = self.ed_sql.toPlainText().strip()
         self.lbl.setText("계측 조회 중…")
         run_in_background(self, "inline 계측 조회",
                           bdq_call(lambda: mt.fetch(sql)),
@@ -134,7 +209,7 @@ class MetrologyDialog(QDialog):
         run_in_background(
             self, "유의 인자 분석",
             lambda: mt.top_factors(st.data, st.met_columns, et_items,
-                                   excluded=st.excluded, k=self.spin_k.value()),
+                                   excluded=st.hidden(), k=self.spin_k.value()),
             done=self._analyze_done)
 
     def _analyze_done(self, top) -> None:

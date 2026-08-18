@@ -140,12 +140,12 @@ class SummaryTab(StaleMixin, QWidget):
         st = self.state
         aliases = [r.item_id for r in st.report.table_rows]
         agg = self.agg_mode()
-        ws = wafer_stats(st.data, st.excluded, aliases,
+        ws = wafer_stats(st.data, st.hidden(), aliases,
                          agg if agg in ("avg", "std") else "avg")
         ref = {}
         if self.chk_delta.isChecked():
             g = st.ref_group()
-            ref = ref_values(st.data, st.excluded, g.gid if g else None,
+            ref = ref_values(st.data, st.hidden(), g.gid if g else None,
                              aliases, agg)
         return ws, ref, agg
 

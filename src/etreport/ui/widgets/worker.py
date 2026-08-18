@@ -79,7 +79,8 @@ class Worker(QThread):
 def run_in_background(parent, title: str, fn: Callable[..., object],
                       done: Callable[[object], None] | None = None,
                       needs_com: bool = False,
-                      with_progress: bool = False) -> Worker:
+                      with_progress: bool = False,
+                      always: Callable[[], None] | None = None) -> Worker:
     """진행 창을 띄우고 fn을 워커에서 실행. 실패는 메시지 박스로 보여준다.
 
     반환된 Worker는 parent에 붙잡아 두므로 호출측이 따로 보관할 필요는 없다.
@@ -117,6 +118,10 @@ def run_in_background(parent, title: str, fn: Callable[..., object],
         holder = getattr(parent, "_bg_workers", None)
         if holder is not None and worker in holder:
             holder.remove(worker)
+        if always is not None:
+            # 성공·실패·Excel 없음 **어느 쪽이든** 부른다 — 잠가 둔 버튼을 푸는
+            # 자리다. 성공 경로에만 두면 조회 한 번 실패한 창이 영영 잠긴다.
+            always()
         if isinstance(result, ImportError):
             QMessageBox.warning(parent, title, EXCEL_MISSING)
             return

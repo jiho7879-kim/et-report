@@ -52,9 +52,12 @@ class SplitSourceDialog(QDialog):
 
     def __init__(self, parent=None, path: str = "", text: str = "",
                  baseline: str = "", baseline_lot: str = "",
-                 lots: list[str] | None = None) -> None:
+                 lots: list[str] | None = None, state=None) -> None:
         super().__init__(parent)
         from etreport.model.split import BASELINE_DEFAULT
+        # fab tracking 조회 창에 넘길 상태(조건 자동 채움·컬럼 붙이기). 없어도
+        # 창은 열린다 — 파일·붙여넣기 경로는 상태가 필요 없다.
+        self.state = state
         self.setWindowTitle("실험 조건 불러오기")
         self.resize(720, 620)
         self.matrix = None
@@ -118,29 +121,33 @@ class SplitSourceDialog(QDialog):
 
     # ── 입력 ─────────────────────────────────────────────────
     def _from_tracking(self) -> None:
-        """fab tracking에서 split 조건을 읽어 온다(기능 A).
+        """fab tracking 조회 창을 연다(기능 A).
 
-        조회는 사내망 왕복이라 수 초씩 걸리므로 **진행 창을 띄우고 워커에서**
-        돌린다(§6 요청). 결과는 붙여넣기 칸에 표(TSV)로 채워 넣는다 —
-        그래야 설정에 저장되고 [적용]에서 같은 조건이 그대로 다시 읽힌다.
-        예전에는 matrix만 들고 있다가 창을 닫는 순간 사라져서 "자동 추출은
-        되는데 적용이 안 되는" 상태였다(§5 요청).
+        예전에는 여기서 lot만 물어보고 바로 조회했다. 그러면 (1) line·process·
+        part·기간을 손으로 적을 자리가 없고 (2) 결과 컬럼 이름이 `process_id`
+        값으로 고정됐다. 조건·SQL·컬럼 이름을 정하는 일은 전부
+        `FabTrackDialog`가 맡고, 여기서는 **결과를 받아 붙여넣기 칸에 표(TSV)로**
+        채운다 — 그래야 설정에 저장되고 [적용]에서 같은 조건이 그대로 다시
+        읽힌다(예전에는 창을 닫는 순간 matrix가 사라졌다).
         """
-        from PySide6.QtWidgets import QInputDialog
+        from etreport.ui.widgets.fabtrack_dialog import FabTrackDialog
 
-        from etreport.data import fabtracking as ft
-        from etreport.ui.widgets.worker import bdq_call, run_in_background
-        lots, ok = QInputDialog.getText(
-            self, "fab tracking", "lot ID (쉼표로 여러 개, 비우면 전체)",
-            text=", ".join(self.lots))     # 도크에서 고른 lot을 기본값으로
-        if not ok:
+        dlg = FabTrackDialog(self.state_for_tracking(), self, lots=self.lots)
+        if not dlg.exec():
             return
-        wanted = [x.strip() for x in lots.replace(",", " ").split() if x.strip()]
-        sql = ft.build_tracking_sql(lots=wanted or None)
-        self.lbl_src.setText("fab tracking 조회 중…")
-        run_in_background(self, "fab tracking 조회",
-                          bdq_call(lambda: ft.fetch(sql)),
-                          done=self._tracking_done)
+        dlg.apply_to_state()               # 이름 붙인 컬럼을 분석 프레임에 붙인다
+        if dlg.tracking is not None:
+            self._tracking_done(dlg.tracking)
+
+    def state_for_tracking(self):
+        """조회 창에 넘길 AppState. 창을 띄운 쪽이 갖고 있으면 그걸 쓴다.
+
+        [실험 조건] 창은 상태 없이도 열리는(파일만 읽는) 창이라 AppState를 들고
+        있지 않을 수 있다. 그때는 빈 상태를 만들어 넘긴다 — 조건 자동 채움만
+        비고 나머지는 그대로 동작한다.
+        """
+        from etreport.model.state import AppState
+        return self.state if getattr(self, "state", None) is not None else AppState()
 
     def _tracking_done(self, df) -> None:
         """조회 결과로 매트릭스를 만들고, lot이 여럿이면 기준 lot을 물어본다.

@@ -114,8 +114,9 @@ class UpdateDialog(QDialog):
             self._fail(f"다운로드 실패: {result}")
             return
         try:
-            new_dir = upd_apply.extract(result)
-            upd_apply.apply_and_restart(new_dir)
+            # 자산이 단일 exe면 파일 하나를 덮어쓰고, zip이면 풀어서 폴더째 붓는다.
+            kind, source = upd_apply.plan(result)
+            upd_apply.apply_and_restart(source, kind)
         except upd_apply.UpdateNotApplicable as e:
             # 소스 실행 등 — 교체할 설치 폴더가 없다. 절대 진행하지 않는다.
             QMessageBox.information(self, "업데이트", str(e))

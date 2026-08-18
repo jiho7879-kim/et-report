@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import os
-import sys
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -63,10 +62,13 @@ def _warn_missing() -> None:
 
 
 def bundled_dir() -> Path:
-    """같이 배포한 폰트 폴더. PyInstaller onedir/onefile 모두에서 동작."""
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
-    p = base / "etreport" / "assets" / "fonts"
-    return p if p.is_dir() else Path(__file__).resolve().parent / "assets" / "fonts"
+    """같이 배포한 폰트 폴더. PyInstaller onedir/onefile 모두에서 동작.
+
+    찾는 규칙은 스타일시트·설명서와 같다(`etreport/resources`) — 리소스를 찾는
+    방법이 파일마다 다르면 spec을 고칠 때 한쪽만 맞추게 된다.
+    """
+    from etreport import resources
+    return resources.path("assets/fonts")
 
 
 def _search_dirs() -> list[Path]:

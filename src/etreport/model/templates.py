@@ -154,6 +154,17 @@ def _validate(t: Templates, rf: Reformatter) -> None:
                     t.skip_plot.add(i)
                     continue
                 bad = [a for a in ys if a not in aliases]
+            elif typ == "box":
+                # x는 **범주 이름**이다(lot+wafer·gid·step·온도·tracking 컬럼…).
+                # 리포메터 ALIAS가 아니므로 여기서 검사할 수 없다 — 실제로 그 이름의
+                # 컬럼이 있는지는 데이터를 읽은 뒤에야 알 수 있고, 없으면 렌더러가
+                # "그릴 값이 없습니다"로 표시한다. y만 검사한다.
+                if not str(r["x"] or "").strip():
+                    t.warnings.append(TemplateError(
+                        "plot", i, "box의 x(범주)가 비어 있어 건너뜁니다"))
+                    t.skip_plot.add(i)
+                    continue
+                bad = [a for a in ys if a not in aliases]
             else:
                 bad = [a for a in (*xs, *ys) if a not in aliases]
             if bad:

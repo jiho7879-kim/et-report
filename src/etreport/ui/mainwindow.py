@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from etreport import APP_NAME, __version__
+from etreport import APP_NAME, AUTHOR, __version__
 from etreport.config.catalog import Catalog
 from etreport.config.settings import Settings
 from etreport.model.state import AppState, StateBus
@@ -105,6 +105,13 @@ class MainWindow(QMainWindow):
         h.addLayout(self.menu_host)
         h.addStretch(1)
         h.addWidget(self._build_rail())
+        # 만든 사람 — 크롬 위 보조 글자로 조용히. 문의처가 화면에 있어야 현장에서
+        # 버그를 어디로 보낼지 찾지 않는다.
+        self.lbl_author = QLabel(AUTHOR)
+        self.lbl_author.setObjectName("railMuted")
+        self.lbl_author.setToolTip(f"만든 사람 · {AUTHOR}")
+        h.addSpacing(10)
+        h.addWidget(self.lbl_author)
         v.addWidget(bar)
 
         # ── 스택 ─────────────────────────────────────────────
@@ -195,9 +202,7 @@ class MainWindow(QMainWindow):
         act.triggered.connect(self._open_manual)
         h.addAction("파일 4종 관계도").triggered.connect(self._show_help)
         h.addAction("단축키").triggered.connect(self._show_shortcuts)
-        h.addAction("버전").triggered.connect(
-            lambda: QMessageBox.information(
-                self, APP_NAME, f"{APP_NAME}  v{__version__}"))
+        h.addAction("버전 · 빌드 정보").triggered.connect(self._show_build_info)
 
         self.menuBar().setVisible(False)
         for menu in (m, h):
@@ -263,6 +268,26 @@ class MainWindow(QMainWindow):
 
     def _show_help(self) -> None:
         QMessageBox.information(self, "파일 4종 관계도", HELP_TEXT)
+
+    def _show_build_info(self) -> str:
+        """버전 + **이 실행 파일이 언제·어느 소스로 만들어졌는지** + 로그 위치.
+
+        "고친 코드가 exe에 안 들어간 것 같다"는 신고가 반복돼서 넣었다. 빌드 시각과
+        커밋 해시가 예전 그대로면 새 빌드를 실행하고 있지 않은 것이고, 바뀌었는데
+        동작이 그대로면 그때부터가 진짜 코드 문제다. 두 경우를 구분할 수단이
+        없으면 어느 쪽도 고칠 수 없다. 반환값은 테스트가 읽는다.
+        """
+        from etreport.buildinfo import get as build_info
+        from etreport.paths import log_file
+        b = build_info()
+        text = (f"{APP_NAME}  v{b.version}\n"
+                f"만든 사람   {AUTHOR}\n\n"
+                f"빌드 시각   {b.built_at or '(소스 실행 — 스탬프 없음)'}\n"
+                f"소스 커밋   {b.commit or '(알 수 없음)'}\n"
+                f"실행 형태   {b.label().rsplit(' · ', 1)[-1]}\n\n"
+                f"로그 파일   {log_file()}")
+        QMessageBox.information(self, f"{APP_NAME} — 버전", text)
+        return text
 
     def closeEvent(self, e) -> None:
         """종료 정리 — 실행 중인 추출 스레드와 열려 있는 DB 연결을 닫는다."""

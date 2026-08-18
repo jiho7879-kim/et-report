@@ -47,9 +47,14 @@ def test_apply_and_restart_refuses_off_windows(tmp_path):
 
 def test_update_batch_is_ascii_and_not_mirroring():
     """/MIR는 대상 폴더에서 zip에 없는 파일을 지운다 — 쓰지 않는다."""
-    upd_apply._BAT.encode("ascii")                    # 콘솔 코드페이지 무관
-    assert "/MIR" not in upd_apply._BAT
-    assert "robocopy" in upd_apply._BAT and "/E" in upd_apply._BAT
+    for bat in (upd_apply._BAT_DIR, upd_apply._BAT_EXE):
+        bat.encode("ascii")                           # 콘솔 코드페이지 무관
+        assert "/MIR" not in bat
+        assert "tasklist" in bat                      # 앱이 끝나기를 기다린다
+    assert "robocopy" in upd_apply._BAT_DIR and "/E" in upd_apply._BAT_DIR
+    # 단일 exe는 파일 하나만 덮어쓴다 — 폴더를 통째로 붓지 않는다
+    assert "copy /Y" in upd_apply._BAT_EXE
+    assert "robocopy" not in upd_apply._BAT_EXE
 
 
 def test_extract_rejects_paths_outside_target(tmp_path, monkeypatch):
@@ -127,12 +132,16 @@ def test_load_state_closes_previous_connection(tmp_path, appdata, monkeypatch):
 
 # ── P1: 원본 rawdata 보존 ───────────────────────────────────
 def test_reformatting_writes_a_separate_file(tmp_path):
-    """추출 결과를 덮어쓰면 리포메터를 고쳐 다시 돌릴 때 재추출해야 한다."""
+    """추출 결과를 덮어쓰면 리포메터를 고쳐 다시 돌릴 때 재추출해야 한다.
+
+    파이프라인은 `data/pipeline.run()`에 있다 — 화면(QThread)과 예약 실행(CLI)이
+    같은 코드를 쓰게 하려고 옮겼으므로, 규칙도 그쪽에서 확인한다.
+    """
     import inspect
 
-    from etreport.ui import data_ws
+    from etreport.data import pipeline
 
-    src = inspect.getsource(data_ws._ExtractThread.run)
+    src = inspect.getsource(pipeline.run)
     assert "_rf.parquet" in src
     assert "out.write_parquet(f)" not in src
 

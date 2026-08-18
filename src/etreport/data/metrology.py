@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+from datetime import date, timedelta
 
 import polars as pl
 
@@ -43,11 +44,18 @@ def build_met_sql(lots: list[str], steps: list[str] | None = None,
                   items: list[str] | None = None,
                   line_id: str = DEFAULT_LINE,
                   item_regex: str | None = None,
-                  table: str = TABLE) -> str:
+                  table: str = TABLE,
+                  d_from: date | None = None,
+                  d_to: date | None = None) -> str:
     """계측 조회 SQL — **분석 대상 lot으로 반드시 좁힌다**.
 
     lot을 비우면 전체 스캔이 되므로 호출측이 항상 lot을 준다(ET 추출에서
     `item_id IN (...)`을 강제하는 것과 같은 이유).
+
+    기간을 주면 `tkout_time`으로도 좁힌다. 기본값은 화면이 정하는데, 분석 중인
+    lot의 ET tkout_time 기준 180일 이전부터다(`data/lotcontext.py`) — 계측은 ET
+    보다 앞선 공정에서 찍히므로 그 뒤를 볼 이유가 없고, 같은 lot 이름이 예전에도
+    쓰였다면 기간 없이는 옛날 값이 섞인다. **비우면 조건을 걸지 않는다**(예전과 동일).
     """
     if not lots:
         raise ValueError("분석 대상 lot이 필요합니다 (전체 스캔 방지)")
@@ -63,6 +71,11 @@ def build_met_sql(lots: list[str], steps: list[str] | None = None,
         where.append(_in("item_id", items))
     if item_regex:
         where.append(f"item_id REGEXP '{item_regex}'")
+    if d_from is not None:
+        where.append(f"tkout_time >= '{d_from:%Y-%m-%d} 00:00:00'")
+    if d_to is not None:
+        hi = d_to + timedelta(days=1)
+        where.append(f"tkout_time <  '{hi:%Y-%m-%d} 00:00:00'")
     body = "\n  AND  ".join(where)
     cols = ", ".join(COLUMNS)
     return f"SELECT {cols}\nFROM   {table}\nWHERE  {body}"

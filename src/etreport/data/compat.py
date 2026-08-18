@@ -30,6 +30,11 @@ ROLE_ALIASES: dict[str, tuple[str, ...]] = {
     "site":  ("total_site_cnt", "site_cnt", "site_no", "site"),
     "time":  ("tkout_time", "create_dttm", "meas_time", "test_time", "dttm"),
     "line":  ("line_id", "line", "fab", "fab_id"),
+    # fab tracking·계측 조회의 기본값을 DB에서 뽑을 때 쓴다(data/lotcontext.py).
+    # 값 컬럼이 아니므로 item 인식에서 빠지는 것이 맞다 — 원래도 문자열이라
+    # 숫자 item으로 잡히지 않았고, 새로 만든 문자열 폴백에서도 빠진다.
+    "process": ("process_id", "process", "proc_id"),
+    "part":  ("part_id", "part", "product_id", "device_id"),
     "key":   ("key_hash", "key"),
     "item":  ("item_id", "item", "param", "parameter", "item_name"),
     "value": ("et_value", "value", "val", "result", "meas_value"),
@@ -37,6 +42,9 @@ ROLE_ALIASES: dict[str, tuple[str, ...]] = {
 
 NUMERIC_TYPES = {"DOUBLE", "FLOAT", "REAL", "DECIMAL", "HUGEINT",
                  "BIGINT", "INTEGER", "SMALLINT", "TINYINT"}
+#: 문자열 타입 — 예전 DB는 온도·측정값까지 여기에 들어 있다. 읽을 때 TRY_CAST로
+#: 숫자를 꺼낸다(적재는 여전히 숫자만 받는다).
+TEXT_TYPES = {"VARCHAR", "TEXT", "STRING", "CHAR", "BPCHAR"}
 
 # step_seq만 다른 행을 **한 측정점으로 합칠 때**의 그룹 키(계획서 §10.1).
 # x는 step_seq=1, y는 step_seq=2에 기록되는 경우가 흔하다. seq를 키에 두면
@@ -57,8 +65,15 @@ def temp_expr(col: str) -> str:
     **읽는 시점**에 보정한다(ABSOLUTE를 로딩 때 다시 거는 것과 같은 이유) —
     이미 쌓인 DB도 화면·표·PPT가 맞아야 하고, 보정 경로를 두 곳에 두지 않는다.
     병합·필터·배정 비교가 모두 이 값을 쓰므로 **한 군데라도 빠뜨리면 어긋난다.**
+
+    **TRY_CAST를 거치는 이유**: 예전에 손으로 만든 DB는 temperature가 VARCHAR다.
+    문자열에 산술을 걸면 DuckDB가 암시적 캐스팅을 시도하다 `'25C'`·`''` 같은 값
+    하나에서 `Conversion Error`로 조회 전체를 떨어뜨린다 — 그러면 **DB가 통째로
+    안 열려서** 표도 plot도 못 본다. TRY_CAST는 못 읽는 값만 NULL로 두고 나머지
+    행을 살린다. 숫자 컬럼에서는 결과가 예전과 완전히 같다(캐스팅이 무손실).
     """
-    return f'CAST(ROUND("{col}" / {TEMP_STEP}) AS BIGINT) * {TEMP_STEP}'
+    return (f'CAST(ROUND(TRY_CAST("{col}" AS DOUBLE) / {TEMP_STEP}) AS BIGINT)'
+            f" * {TEMP_STEP}")
 
 
 def _ctx_col(role: str, col: str) -> str:
@@ -97,6 +112,20 @@ class TableProfile:
     roles: dict[str, str] = field(default_factory=dict)   # 역할 → 실제 컬럼명
     items: list[str] = field(default_factory=list)        # wide일 때 item 컬럼
     is_long: bool = False
+    #: 숫자로 읽어야 하지만 DB에는 문자열로 들어 있는 컬럼(예전 DB). 읽을 때
+    #: TRY_CAST를 씌운다 — `numeric_expr()` 참조.
+    text_numeric: set[str] = field(default_factory=set)
+
+    def numeric_expr(self, col: str) -> str:
+        """숫자로 다뤄야 하는 컬럼 하나의 SELECT 식.
+
+        예전에 손으로 만든 DB는 값이 VARCHAR로 들어 있는 일이 있다. 그대로 읽으면
+        polars 쪽에서 문자열 컬럼이 되어 plot·표가 통째로 비고, 산술을 걸면
+        DuckDB가 값 하나 때문에 조회 전체를 떨어뜨린다. **못 읽는 값만 NULL로
+        두고 나머지 행은 살린다** — 숫자 컬럼에서는 예전과 글자까지 같은 SQL이다.
+        """
+        return (f'TRY_CAST("{col}" AS DOUBLE) AS "{col}"'
+                if col in self.text_numeric else f'"{col}"')
 
     @property
     def lot_col(self) -> str | None:
@@ -151,12 +180,31 @@ def profile(con: duckdb.DuckDBPyConnection, table: str) -> TableProfile:
                 break
 
     p.is_long = "item" in p.roles and "value" in p.roles
-    if not p.is_long:
-        used = set(p.roles.values())
-        p.items = [c for c, t in cols.items()
-                   if c not in used
-                   and t.split("(")[0] in NUMERIC_TYPES]
+    if p.is_long:
+        # long의 value가 문자열인 예전 DB — PIVOT 결과가 문자열 컬럼이 되어
+        # plot이 통째로 빈다. 읽을 때만 숫자로 바꾼다.
+        if _is_text(cols.get(p.roles["value"], "")):
+            p.text_numeric.add(p.roles["value"])
+        return p
+
+    used = set(p.roles.values())
+    rest = {c: t for c, t in cols.items() if c not in used}
+    p.items = [c for c, t in rest.items() if t.split("(")[0] in NUMERIC_TYPES]
+    if not p.items:
+        # **숫자 컬럼이 하나도 없다** = 값이 전부 VARCHAR로 적재된 예전 DB.
+        # 여기서 포기하면 "item이 0개"라 표도 plot도 그릴 수 없다. 남은 컬럼을
+        # item으로 보고 읽을 때 TRY_CAST를 씌운다 — 진짜 문자열 컬럼은 전부
+        # NULL이 되어 조용히 빠질 뿐, 읽기 자체를 막지는 않는다.
+        p.items = [c for c, t in rest.items() if _is_text(t)]
+        p.text_numeric.update(p.items)
+        if p.items:
+            log.warning("%s: 숫자 item 컬럼이 없어 문자열 %d개를 숫자로 읽습니다",
+                        table, len(p.items))
     return p
+
+
+def _is_text(duck_type: str) -> str:
+    return duck_type.split("(")[0] in TEXT_TYPES
 
 
 def key_expr(p: TableProfile) -> str:
@@ -270,12 +318,15 @@ def select_sql(p: TableProfile, dedup_latest: bool = True,
         sel = ", ".join(f'{temp_expr(c)} AS "{c}"' if c == temp_col else f'"{c}"'
                         for c in group) or "1"
         gcols = ", ".join(f'"{c}"' for c in group) or "1"
-        base = (f'SELECT {sel}, "{item}" AS item_id, "{val}" AS value '
+        # value가 VARCHAR인 예전 DB면 여기서 숫자로 꺼낸다(numeric_expr).
+        val_sel = p.numeric_expr(val).replace(f'AS "{val}"', "AS value") \
+            if val in p.text_numeric else f'"{val}" AS value'
+        base = (f'SELECT {sel}, "{item}" AS item_id, {val_sel} '
                 f'FROM "{p.table}"{where}')
         return (f"WITH src AS ({base}) "
                 f"PIVOT src ON item_id USING any_value(value) GROUP BY {gcols}")
 
-    items = [f'"{c}"' for c in p.items]
+    items = [p.numeric_expr(c) for c in p.items]
     dedup = ""
     if dedup_latest and "time" in p.roles and lot and waf:
         keys = [p.roles[r] for r in ("x", "y", "temp", "step", "site", "seq")
@@ -299,7 +350,9 @@ def select_sql(p: TableProfile, dedup_latest: bool = True,
     # step·temp·site는 병합 그룹 키이므로 집계 없이 그대로 뽑을 수 있다
     ctx = [f'"{p.roles[r]}" AS {r}' if r in p.roles else f"NULL AS {r}"
            for r in CTX_ROLES]
+    # 바깥에서는 **이름만** 쓴다 — 안쪽에서 이미 TRY_CAST가 걸려 별칭이 붙었다.
+    names = [f'"{c}"' for c in p.items]
     outer = ", ".join(["min(key) AS key", "lot", "wafer", "'' AS gid", *ctx,
-                       *[f"any_value({c}) AS {c}" for c in items]])
+                       *[f"any_value({c}) AS {c}" for c in names]])
     return (f"SELECT {outer} FROM ({inner}) "
             f'GROUP BY {", ".join(["lot", "wafer", *mc])}')

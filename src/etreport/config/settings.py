@@ -50,6 +50,14 @@ class ExtractPreset:
     )
     save_csv: bool = True
     save_sbdf: bool = False
+    # 예약 실행(§13) — 작업 스케줄러에 등록해 둔 내용을 여기에도 남긴다.
+    # 스케줄러가 진실이지만, 화면이 "무엇을 걸어 뒀는지" 보여 주려면 사본이 필요하다
+    # (schtasks /Query로는 우리가 넣은 --days를 되읽기 번거롭다).
+    schedule_enabled: bool = False
+    schedule_freq: str = "DAILY"      # DAILY | WEEKLY | HOURLY
+    schedule_at: str = "06:00"
+    schedule_days: int = 1            # 추출 기간 — 오늘 포함 최근 N일
+    schedule_interval: int = 6        # HOURLY일 때 몇 시간마다
 
 
 @dataclass
@@ -77,6 +85,11 @@ class AnalysisConfig:
     split_baseline_lot: str = ""
     # plot에서 lot마다 심볼을 달리할지. 표시 옵션이라 DB를 다시 읽지 않는다.
     lot_split_symbols: bool = False
+    # 이상치 필터(Tukey) — 표·plot을 그리기 전에 IQR의 k배 밖을 걸러 낸다.
+    # 기본은 꺼짐: 데이터를 버리는 동작은 사용자가 켜야 시작된다.
+    tukey_enabled: bool = False
+    tukey_k: float = 3.0
+    tukey_scope: str = "cond"      # cond(step·온도별) | all(item 전체)
 
 
 @dataclass

@@ -127,10 +127,11 @@ def build_deck(
     factors: pl.DataFrame | None = None,       # inline 계측 top-k (기능 B)
     meta: dict | None = None,                  # 표지에 넣을 메타데이터
     split_rows=None,                           # 실험 조건 매트릭스(wide)
+    track_rows=None,                           # fab tracking에서 뽑은 컬럼(기능 A)
     lot_split: bool = False,                   # lot마다 심볼을 달리할지(§9.2)
     on_progress=None,                          # (done, total, 라벨) — 진행 표시용
 ) -> Presentation:
-    """페이지 순서: **표지 → (실험 조건) → plot 전부 → 표 전부 →
+    """페이지 순서: **표지 → (실험 조건) → (fab tracking) → plot 전부 → 표 전부 →
     (그룹별 평균 표) → (유의 인자) → 제외 이력**.
 
     표지·실험 조건·그룹별 평균은 사용자 요청으로 붙었고, 그 사이 순서는 확정
@@ -154,7 +155,8 @@ def build_deck(
     table_parts = parts_of(tables)
     group_parts = parts_of(group_tables or [])
     n_plot = len(experiments) * len(report.pages)
-    total = (bool(meta) + (split_rows is not None) + n_plot
+    has_track = track_rows is not None and not track_rows.is_empty()
+    total = (bool(meta) + (split_rows is not None) + has_track + n_plot
              + len(table_parts) + len(group_parts)
              + (factors is not None and not factors.is_empty()) + 1)
     done = 0
@@ -171,6 +173,12 @@ def build_deck(
     if split_rows is not None:
         _split_slide(prs, blank, split_rows)
         tick("실험 조건")
+    if has_track:
+        # fab tracking에서 뽑아 붙인 컬럼 — **이름은 사용자가 정한 것 그대로**
+        # 머리글이 된다(그게 이 기능의 요점이다).
+        _split_slide(prs, blank, track_rows, name="fab tracking",
+                     group_label="공정 조건")
+        tick("fab tracking")
 
     for exp in experiments:
         styles = group_styles_of(exp)
@@ -478,20 +486,25 @@ def _title_slide(prs, layout, meta: dict) -> None:
         para.font.color.rgb = TEXT_COLOR
 
 
-def _split_slide(prs, layout, wide) -> None:
-    """실험 조건 한 장 — 어떤 wafer가 어떤 조건이었는지 정리한 표.
+def _split_slide(prs, layout, wide, name: str = "실험 조건",
+                 group_label: str = "step 조건") -> None:
+    """`lot | wafer | <열들…>` 한 장 — 어떤 wafer가 어떤 조건이었는지 정리한 표.
 
     표 렌더러(§7.4 스타일)를 그대로 쓰되 값이 숫자가 아니라 조건 코드다.
+    실험 조건(split)과 fab tracking에서 뽑은 컬럼이 **모양이 같아** 같은 함수를
+    쓴다 — 제목과 열 묶음 이름만 다르다.
     """
     if wide is None or wide.is_empty():
         return
     steps = [c for c in wide.columns if c not in ("lot", "wafer")]
+    if not steps:
+        return
     rows = [{"cats": [rec["lot"]], "item": rec["wafer"],
              "values": [rec[s] for s in steps],
              "offspec": [False] * len(steps)}
             for rec in wide.iter_rows(named=True)]
     _table_slide(prs, layout,
-                 TableData("실험 조건", [("step 조건", steps)], rows,
+                 TableData(name, [(group_label, steps)], rows,
                            cat_names=["lot"]))
 
 

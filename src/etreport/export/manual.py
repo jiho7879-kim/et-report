@@ -42,9 +42,13 @@ class Section:
 
 
 def manual_path() -> Path:
-    """패키지에 함께 배포되는 PDF 경로(있을 수도, 없을 수도 있다)."""
-    return (Path(__file__).resolve().parent.parent / "assets" / "manual"
-            / "ET_Report_사용설명서.pdf")
+    """패키지에 함께 배포되는 PDF 경로(있을 수도, 없을 수도 있다).
+
+    exe에서는 `--add-data`로 실린 자리를 봐야 한다(`etreport/resources`). 만드는 쪽
+    (`tools/make_manual.py`)도 이 함수를 쓰므로, 없으면 소스 트리 자리를 돌려준다.
+    """
+    from etreport import resources
+    return resources.path("assets/manual/ET_Report_사용설명서.pdf")
 
 
 def sections(shots: dict[str, Path] | None = None) -> list[Section]:

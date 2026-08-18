@@ -46,6 +46,8 @@ QToolTip { background:%INK%; color:%INK_TEXT%; border:1px solid %INK_LINE%;
 #railLamp[state="ok"]    { color:%OK_INK%; }
 #railLamp[state="dirty"] { color:%WARN_INK%; }
 #railLamp[state="off"]   { color:%INK_MUTED%; }
+/* 상단바 오른쪽 끝의 보조 글자(만든 사람) — 읽히되 눈에 걸리지 않게 */
+#railMuted { font-size:%FS_MICRO%; color:%INK_MUTED%; }
 
 /* ── 도크 (크롬) ──────────────────────────────────────────────────── */
 #dockScroll, #dock { background:%INK%; border:none;

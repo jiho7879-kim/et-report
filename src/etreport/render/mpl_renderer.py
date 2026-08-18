@@ -114,6 +114,9 @@ def render(spec: PlotSpec,
         return _render_trend(spec, data, styles, rf, log_patterns, figsize,
                              excluded=excluded, compact=compact, fig=fig,
                              lot_split=lot_split)
+    if spec.type == "box":
+        return _render_box(spec, data, styles, rf, log_patterns, figsize,
+                           excluded=excluded, compact=compact, fig=fig)
     if fig is None:
         fig = Figure(figsize=figsize, dpi=140 if compact else 180)
         ax = fig.add_subplot(111)
@@ -419,6 +422,210 @@ def _render_trend(spec: PlotSpec,
         leg.get_frame().set_linewidth(0.6)
     fig.tight_layout(pad=0.8 if compact else 0.9)
     return fig
+
+
+#: boxplot 수염 길이 — 표준 Tukey 1.5×IQR. 이상치 **필터**(config의 배수)와는
+#: 다른 값이다: 그림은 늘 같은 눈으로 읽혀야 하고, 필터는 무엇을 버릴지의 문제다.
+BOX_WHIS = 1.5
+BOX_MAX_LABELS = 24        # 이보다 많으면 축 이름을 기울여 적는다
+
+
+def _render_box(spec: PlotSpec,
+                data: dict[str, pl.DataFrame],
+                styles: list[GroupStyle],
+                rf: Reformatter,
+                log_patterns: list[str],
+                figsize: tuple[float, float],
+                excluded: pl.DataFrame | None = None,
+                compact: bool = False,
+                fig: Figure | None = None) -> Figure:
+    """boxplot — x는 **범주**, y는 item 값.
+
+    산점도와 다른 점은 x가 데이터 컬럼(숫자)이 아니라 나눌 기준이라는 것뿐이다.
+    무엇으로 나눌 수 있는지와 값을 만드는 법은 `model/categories.py`가 갖는다 —
+    화면·PPT가 같은 함수를 쓰므로 "화면 = PPT"가 그대로 유지된다.
+
+    그룹이 여럿이면 한 범주 자리에 상자를 **나란히** 놓고 그룹 색을 칠한다.
+    겹쳐 그리면 어느 상자가 어느 그룹인지 알 수 없다.
+
+    y축 범위·로그 판정은 산점도와 같은 규칙(`render/ranges.py`)이다. x축은
+    범주라 규격이 의미가 없고, 대신 y의 규격선·타깃을 가로선으로 긋는다.
+    """
+    from etreport.model import categories as cat
+
+    if fig is None:
+        fig = Figure(figsize=figsize, dpi=140 if compact else 180)
+    else:
+        fig.clear()
+    ax = fig.add_subplot(111)
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    xname = spec.x.strip()
+    items = [t.strip() for t in spec.y.split(",") if t.strip()]
+    excluded_keys = (set(excluded["key"]) if excluded is not None
+                     and not excluded.is_empty() else set())
+    labels = cat.group_labels(styles)
+
+    # ── 상자 하나하나의 값 모으기 ────────────────────────────
+    # (그룹, 범주) → 값들. 범주 순서는 전체를 모아 한 번에 정한다 — 그룹마다
+    # 따로 정하면 같은 범주가 그룹에 따라 다른 자리에 놓인다.
+    series: dict[str, dict[str, list[float]]] = {}
+    seen: list[str] = []
+    for st in styles:
+        if not st.visible or st.gid not in data:
+            continue
+        df = data[st.gid]
+        if df.is_empty():
+            continue
+        vals = _box_values(df, xname, items, spec.mode, excluded_keys, labels)
+        series[st.gid] = vals
+        seen += list(vals)
+    cats = cat.order(seen)
+    if not cats:
+        ax.text(0.5, 0.5, "그릴 값이 없습니다", ha="center", va="center",
+                transform=ax.transAxes, fontsize=_font_size(figsize, compact),
+                color="#8e8e93")
+        ax.set_xticks([])
+        ax.set_yticks([])
+        fig.tight_layout(pad=0.8 if compact else 0.9)
+        return fig
+
+    drawn = [st for st in styles if st.gid in series]
+    width = 0.8 / max(1, len(drawn))
+    # 자리는 **범주마다 그 자리에 실제로 값이 있는 그룹끼리만** 나눈다. 전체 그룹
+    # 수로 나누면, 그룹과 범주가 1:1인 경우(x축을 그룹으로 놓았을 때)에 상자
+    # 하나가 눈금에서 비켜서 그려진다.
+    here = {c: [st.gid for st in drawn if series[st.gid].get(c)] for c in cats}
+    for st in drawn:
+        pos, vals = [], []
+        for j, c in enumerate(cats):
+            v = series[st.gid].get(c) or []
+            if not v:
+                continue
+            mates = here[c]
+            k, m = mates.index(st.gid), len(mates)
+            pos.append(j + (k - (m - 1) / 2) * width)
+            vals.append(v)
+        if not vals:
+            continue
+        color = REF_COLOR if st.ref else st.color
+        bp = ax.boxplot(vals, positions=pos, widths=width * 0.82,
+                        whis=BOX_WHIS, patch_artist=True, manage_ticks=False,
+                        flierprops={"marker": ".", "markersize": 3,
+                                    "markerfacecolor": color,
+                                    "markeredgecolor": "none", "alpha": 0.6},
+                        medianprops={"color": "#12161B", "linewidth": 1.1},
+                        whiskerprops={"color": color, "linewidth": 0.9},
+                        capprops={"color": color, "linewidth": 0.9})
+        for patch in bp["boxes"]:
+            patch.set_facecolor(color)
+            patch.set_alpha(0.35)
+            patch.set_edgecolor(color)
+            patch.set_linewidth(1.0)
+        # 범례는 상자가 아니라 대리 선으로 — boxplot은 라벨을 받지 않는다
+        ax.plot([], [], color=color, linewidth=6, alpha=0.55, label=st.name)
+
+    # ── 축 ───────────────────────────────────────────────────
+    lgy = resolve_log(spec.logy_mode, items, log_patterns)
+    ys = [v for by in series.values() for vs in by.values() for v in vs]
+    if spec.range_mode == "manual" and None not in (spec.ymin, spec.ymax):
+        ylo, yhi = spec.ymin, spec.ymax
+    else:
+        ylo, yhi = compute_range(items, min(ys) if ys else None,
+                                 max(ys) if ys else None, rf, lgy)
+    if lgy:
+        ax.set_yscale("log")
+    ax.set_ylim(ylo, yhi)
+    ax.set_xlim(-0.6, len(cats) - 0.4)
+    ax.set_xticks(range(len(cats)))
+    rot = 45 if (len(cats) > 6 or max(len(c) for c in cats) > 6) else 0
+    ax.set_xticklabels(cats, rotation=rot,
+                       ha="right" if rot else "center")
+    # 다 적으면 서로 겹쳐 **아무것도** 안 읽힌다 — 몇 개 걸러 적는다.
+    # 상자는 전부 그대로 그린다(값을 감추는 게 아니라 이름만 솎는다).
+    limit = BOX_MAX_LABELS // 2 if compact else BOX_MAX_LABELS
+    if len(cats) > limit:
+        stride = -(-len(cats) // limit)          # 올림 나눗셈
+        for k, lab in enumerate(ax.get_xticklabels()):
+            lab.set_visible(k % stride == 0)
+
+    # 규격·타깃은 y축 가로선으로. x가 범주라 규격 '창'은 그릴 수 없다.
+    for item in items:
+        rule = rf.by_alias.get(item)
+        if rule is None:
+            continue
+        for bound in (rule.speclow, rule.spechigh):
+            if bound is not None:
+                ax.axhline(bound, color=SPEC_COLOR, lw=1.2, zorder=2.2)
+        if rule.target is not None:
+            ax.axhline(rule.target, color=TARGET_COLOR, lw=1.1, zorder=2.2)
+
+    fs = _font_size(figsize, compact)
+    ax.set_xlabel(spec.x_name or xname, fontsize=fs)
+    u = next((rf.by_alias[a].unit for a in items
+              if a in rf.by_alias and rf.by_alias[a].unit), "")
+    ax.set_ylabel(spec.y_name or ", ".join(items) + (f" [{u}]" if u else ""),
+                  fontsize=fs)
+    if not compact:
+        ax.set_title(spec.title, fontsize=fs + 1, fontweight="bold", loc="left")
+    ax.tick_params(labelsize=max(FONT_MIN_PT, fs - 0.8),
+                   pad=1 if compact else 3, length=2 if compact else 3)
+    ax.grid(True, axis="y", color="#ececee", lw=0.6, zorder=0)
+    for sp in ax.spines.values():
+        sp.set_color("#d2d2d7")
+    if not compact and ax.get_legend_handles_labels()[0]:
+        leg = ax.legend(fontsize=fs - 0.5, frameon=True, framealpha=0.95,
+                        loc="upper left", bbox_to_anchor=(1.015, 1.0),
+                        borderaxespad=0)
+        leg.get_frame().set_edgecolor("#d2d2d7")
+        leg.get_frame().set_linewidth(0.6)
+    fig.tight_layout(pad=0.8 if compact else 0.9)
+    return fig
+
+
+def _box_values(df: pl.DataFrame, xname: str, items: list[str], mode: str,
+                excluded_keys: set[str], labels: dict[str, str]
+                ) -> dict[str, list[float]]:
+    """한 그룹의 프레임 → {범주: 값들}.
+
+    `mode`가 site면 측정점 값을 그대로, 그 밖이면 (lot, wafer) 집계값 하나씩
+    쓴다 — 산점도의 점 표시 방식과 같은 뜻이어야 한다. 집계일 때 범주는 그
+    wafer의 **첫 값**으로 정한다(한 wafer가 두 범주에 걸치는 일은 없다:
+    tracking 컬럼도 lot·wafer 단위로 붙는다).
+    """
+    from etreport.model import categories as cat
+
+    cols = [c for c in items if c in df.columns]
+    if not cols:
+        return {}
+    if excluded_keys and "key" in df.columns:
+        df = df.filter(~pl.col("key").is_in(list(excluded_keys)))
+    if df.is_empty():
+        return {}
+    keys = cat.series(df, xname, labels)
+    work = df.with_columns(keys.alias("_cat"))
+
+    if mode == "site":
+        out: dict[str, list[float]] = {}
+        for c in cols:
+            sub = work.select(["_cat", c]).drop_nulls()
+            for k, v in zip(sub["_cat"].to_list(), sub[c].to_list()):
+                out.setdefault(str(k), []).append(float(v))
+        return out
+
+    agg = {"avg": pl.mean, "med": pl.median}.get(mode)
+    expr = ([pl.col(c).mean().alias(c) for c in cols] if agg is pl.mean else
+            [pl.col(c).median().alias(c) for c in cols] if agg is pl.median else
+            [pl.col(c).std(ddof=1).alias(c) for c in cols])
+    per_wafer = (work.group_by(["lot", "wafer"], maintain_order=True)
+                 .agg(pl.col("_cat").first().alias("_cat"), *expr))
+    out = {}
+    for c in cols:
+        sub = per_wafer.select(["_cat", c]).drop_nulls()
+        for k, v in zip(sub["_cat"].to_list(), sub[c].to_list()):
+            out.setdefault(str(k), []).append(float(v))
+    return out
 
 
 def _spec_box(ax, x_lo, x_hi, y_lo, y_hi) -> None:

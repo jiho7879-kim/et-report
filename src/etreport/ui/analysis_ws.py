@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from etreport.config.settings import AnalysisConfig, Settings
+from etreport.model import outliers
 from etreport.model.state import AppState, StateBus
 from etreport.ui.tabs.common import on_combo
 from etreport.ui.tabs.common import pick_sheet as _pick_sheet
@@ -165,6 +166,12 @@ class AnalysisWorkspace(QWidget):
                  "fab.f_fab_wf_met에서 계측값을 가져와 (lot, wafer)로 붙입니다.\n"
                  "붙인 값은 탐색 X축·Summary에서 쓰고, 유의 인자 top-k는\n"
                  "PPT 슬라이드로 나갑니다.", self._open_metrology),
+                ("fab tracking 불러오기",
+                 "fab.f_fab_tracking에서 lot·wafer별 공정 조건을 가져옵니다.\n"
+                 "line·process·part·기간은 분석 중인 DB에서 자동으로 채우고,\n"
+                 "SQL은 직접 고칠 수 있습니다. 뽑을 컬럼의 이름을 정해 붙이면\n"
+                 "boxplot X축·표 범주·PPT에서 그대로 쓸 수 있습니다.",
+                 self._open_fabtrack),
                 ("SQL 조회 · 내보내기",
                  "DB를 직접 조회하고 결과를 csv·xlsx로 내보냅니다.",
                  self._open_sql)):
@@ -219,6 +226,47 @@ class AnalysisWorkspace(QWidget):
         b = GhostButton("그룹 편집")
         b.clicked.connect(self._edit_groups)
         v.addWidget(b)
+
+        # 이상치 필터 ------------------------------------------
+        v.addWidget(SectionLabel("이상치 필터 (Tukey)"))
+        self.chk_tukey = QCheckBox("IQR 밖 자동 제외")
+        self.chk_tukey.setToolTip(
+            "표·plot을 그리기 전에 사분위수 밖의 점을 걸러 냅니다.\n"
+            "lo = Q1 − k×IQR · hi = Q3 + k×IQR\n"
+            "걸러진 점은 버리지 않고 이력에 남고, 그림에는 회색 빈 심볼로 보입니다.")
+        self.chk_tukey.toggled.connect(self._tukey_changed)
+        v.addWidget(self.chk_tukey)
+        row_t = QHBoxLayout()
+        row_t.addWidget(QLabel("배수"))
+        self.cmb_tukey_k = QComboBox()
+        self.cmb_tukey_k.setEditable(True)      # 프리셋 밖의 값도 넣을 수 있게
+        self.cmb_tukey_k.addItems([f"{k:g}" for k in outliers.PRESET_K])
+        self.cmb_tukey_k.setToolTip(
+            "IQR의 몇 배 밖을 이상치로 볼지. 3.0·4.5가 흔히 쓰는 값입니다.\n"
+            "상자그림 수염(1.5)보다 크게 잡습니다 — 여기서 하는 일은 표시가\n"
+            "아니라 '버리기'라, 1.5로 거르면 정상 산포의 꼬리까지 잘립니다.")
+        self.cmb_tukey_k.currentTextChanged.connect(
+            lambda _t: self._tukey_changed())
+        row_t.addWidget(self.cmb_tukey_k, 1)
+        self.cmb_tukey_scope = QComboBox()
+        for key, label in outliers.SCOPE_LABELS.items():
+            self.cmb_tukey_scope.addItem(label, key)
+        self.cmb_tukey_scope.setToolTip(
+            "사분위수를 어느 범위에서 구할지.\n"
+            "25 ℃와 125 ℃를 한데 섞으면 정상적인 고온 측정이 통째로 이상치가\n"
+            "되므로 기본은 측정 조건별입니다.")
+        on_combo(self.cmb_tukey_scope, self._tukey_changed)
+        row_t.addWidget(self.cmb_tukey_scope, 2)
+        w_t = QWidget()
+        w_t.setLayout(row_t)
+        v.addWidget(w_t)
+        self.lbl_tukey = QLabel()
+        self.lbl_tukey.setObjectName("hint")
+        self.lbl_tukey.setWordWrap(True)
+        v.addWidget(self.lbl_tukey)
+        self.btn_tukey_log = GhostButton("걸러진 점 보기")
+        self.btn_tukey_log.clicked.connect(self._open_filter_log)
+        v.addWidget(self.btn_tukey_log)
 
         # 제외 -------------------------------------------------
         v.addWidget(SectionLabel("제외 포인트"))
@@ -433,6 +481,7 @@ class AnalysisWorkspace(QWidget):
         self.chk_lot_split.setChecked(bool(getattr(c, "lot_split_symbols", False)))
         self.chk_lot_split.blockSignals(False)
         self.state.lot_split_symbols = self.chk_lot_split.isChecked()
+        self._sync_tukey()
         self._load_lots(c.db_path)          # DB가 바뀌면 lot 목록도 바뀐다
         self._show_report(c.report)
         self._mark_unapplied("설정을 불러왔습니다 — [적용]을 누르세요")
@@ -475,9 +524,70 @@ class AnalysisWorkspace(QWidget):
         # report는 [적용]이 템플릿에서 정한 값을 그대로 쓴다(콤보 없음)
         c.table_slide_mode = self.state.table_slide_mode
         c.lot_split_symbols = self.chk_lot_split.isChecked()
+        c.tukey_enabled = self.chk_tukey.isChecked()
+        c.tukey_k = self._tukey_k()
+        c.tukey_scope = self.cmb_tukey_scope.currentData() or outliers.SCOPE_COND
         # lot 선택은 프리셋이 아니라 DB 경로별로 남긴다 — 프리셋을 바꿔도 같은
         # DB면 같은 lot을 보고 싶기 때문이다(§9.2).
         self._collect_lots()
+
+    # ── 이상치 필터 ─────────────────────────────────────────
+    def _tukey_k(self) -> float:
+        """콤보에 적힌 배수. 숫자가 아니면 기본값으로 물러선다(입력 중일 수 있다)."""
+        try:
+            k = float(self.cmb_tukey_k.currentText().strip())
+        except ValueError:
+            return outliers.DEFAULT_K
+        return k if k > 0 else outliers.DEFAULT_K
+
+    def _tukey_changed(self) -> None:
+        """설정만 바꾸고 **다시 걸지는 않는다** — 지연 계산 규약.
+
+        데이터를 버리는 동작이라 더더욱 [적용]을 눌렀을 때만 돌아야 한다.
+        여기서 바로 걸면 배수를 타이핑하는 중간값(예: '4'를 치는 순간)으로도
+        한 번씩 계산이 돈다.
+        """
+        c = self.cfg()
+        c.tukey_enabled = self.chk_tukey.isChecked()
+        c.tukey_k = self._tukey_k()
+        c.tukey_scope = self.cmb_tukey_scope.currentData() or outliers.SCOPE_COND
+        for w in (self.cmb_tukey_k, self.cmb_tukey_scope, self.btn_tukey_log):
+            w.setEnabled(c.tukey_enabled or w is self.btn_tukey_log)
+        self._mark_unapplied(
+            f"이상치 필터 {outliers.TukeyConfig(c.tukey_enabled, c.tukey_k, c.tukey_scope).label()}"
+            f" — [적용](F5)을 눌러 반영하세요")
+
+    def _sync_tukey(self) -> None:
+        """설정 → 입력칸. 프리셋을 갈아탈 때 부른다."""
+        c = self.cfg()
+        self.chk_tukey.blockSignals(True)
+        self.chk_tukey.setChecked(bool(getattr(c, "tukey_enabled", False)))
+        self.chk_tukey.blockSignals(False)
+        self.cmb_tukey_k.blockSignals(True)
+        self.cmb_tukey_k.setCurrentText(f"{getattr(c, 'tukey_k', 3.0):g}")
+        self.cmb_tukey_k.blockSignals(False)
+        scope = getattr(c, "tukey_scope", outliers.SCOPE_COND)
+        idx = self.cmb_tukey_scope.findData(scope)
+        if idx >= 0:
+            self.cmb_tukey_scope.blockSignals(True)
+            self.cmb_tukey_scope.setCurrentIndex(idx)
+            self.cmb_tukey_scope.blockSignals(False)
+        for w in (self.cmb_tukey_k, self.cmb_tukey_scope):
+            w.setEnabled(self.chk_tukey.isChecked())
+
+    def _open_filter_log(self) -> None:
+        """걸러진 점 목록 — 무엇이 왜 빠졌는지 확인하는 자리."""
+        from etreport.model import outliers as ol
+        from etreport.ui.widgets.table_dialog import FrameDialog
+        df = ol.frame(self.state)
+        if df.is_empty():
+            QMessageBox.information(
+                self, "이상치 필터",
+                "걸러진 점이 없습니다.\n\n"
+                "필터를 켜고 [적용](F5)을 누르면 여기에 이력이 쌓입니다.")
+            return
+        cfg = getattr(self.state, "tukey", None) or ol.TukeyConfig()
+        FrameDialog(df, f"이상치 필터 이력 — {cfg.label()}", self).exec()
 
     # ── 파일 고르기 (읽지 않는다) ────────────────────────────
     def _pick_db(self) -> None:
@@ -529,7 +639,8 @@ class AnalysisWorkspace(QWidget):
                                 text=getattr(c, "split_text", ""),
                                 baseline=getattr(c, "split_baseline", ""),
                                 baseline_lot=getattr(c, "split_baseline_lot", ""),
-                                lots=list(self.state.lots_selected))
+                                lots=list(self.state.lots_selected),
+                                state=self.state)
         if dlg.exec() and dlg.matrix is not None:
             c.split_path, c.split_text = dlg.path, dlg.text
             c.split_baseline = dlg.baseline
@@ -696,6 +807,12 @@ class AnalysisWorkspace(QWidget):
         self.lbl_excl.style().unpolish(self.lbl_excl)
         self.lbl_excl.style().polish(self.lbl_excl)
         self.btn_undo.setEnabled(bool(st.undo_stack))
+        cfg = getattr(st, "tukey", None) or outliers.TukeyConfig()
+        n_f = len(getattr(st, "filtered", {}) or {})
+        self.lbl_tukey.setText(
+            f"{cfg.label()} · {n_f:,}점 제외됨" if cfg.enabled
+            else "꺼짐 — 켜면 [적용] 때 IQR 밖의 점을 걸러 냅니다")
+        self.btn_tukey_log.setEnabled(bool(n_f))
 
     # ── 나머지 동작 ──────────────────────────────────────────
     def _toggle_group(self, item: QListWidgetItem) -> None:
@@ -778,6 +895,32 @@ class AnalysisWorkspace(QWidget):
         dlg = MetrologyDialog(self.state, self)
         dlg.exec()
         if self.state.met_columns:
+            self.bus.data_changed.emit()
+            self._refresh_dock()
+
+    def _open_fabtrack(self) -> None:
+        """fab tracking 창(기능 A) — 이름 붙인 컬럼을 분석 프레임에 붙인다.
+
+        [적용]으로 눌렀을 때만 붙인다(창 안에서 처리). 붙은 뒤에는 축 후보와 표가
+        달라지므로 화면에 알린다 — 지연 계산 규약대로 **다시 그리라고 표시만** 하고
+        여기서 그리지는 않는다.
+        """
+        from etreport.ui.widgets.fabtrack_dialog import FabTrackDialog
+        from etreport.ui.widgets.toast import toast
+        st = self.state
+        if st.data is None:
+            QMessageBox.information(
+                self, "fab tracking",
+                "먼저 [적용](F5)으로 분석 DB를 여세요 — 붙일 대상이 필요합니다")
+            return
+        dlg = FabTrackDialog(st, self, lots=list(st.lots_selected))
+        if not dlg.exec():
+            return
+        names = dlg.apply_to_state()
+        if names:
+            toast(self, f"fab tracking 컬럼 {len(names)}개를 붙였습니다 "
+                        f"({', '.join(names[:4])}{'…' if len(names) > 4 else ''}) "
+                        f"— boxplot X축·표 범주에서 쓸 수 있습니다")
             self.bus.data_changed.emit()
             self._refresh_dock()
 

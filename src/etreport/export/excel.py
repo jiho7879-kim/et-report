@@ -41,11 +41,11 @@ def build_table(state, cat1: str, opt: SummaryOptions) -> TableData:
     header = state.wafer_columns()
     rows_spec = [r for r in state.report.table_rows if r.cat1 == cat1]
     aliases = [r.item_id for r in rows_spec]
-    ws = wafer_stats(state.data, state.excluded, aliases, opt.agg)
+    ws = wafer_stats(state.data, state.hidden(), aliases, opt.agg)
     ref = {}
     if opt.delta_vs_ref:
         g = state.ref_group()
-        ref = ref_values(state.data, state.excluded, g.gid if g else None,
+        ref = ref_values(state.data, state.hidden(), g.gid if g else None,
                          aliases, opt.agg)
 
     rows = []
@@ -104,11 +104,11 @@ def _group_wafer_table(state, cat1: str, opt: SummaryOptions) -> TableData:
     rows_spec = [r for r in state.report.table_rows if r.cat1 == cat1]
     aliases = [r.item_id for r in rows_spec]
     header = group_wafer_columns(state)
-    ws = wafer_stats(state.data, state.excluded, aliases, "avg")
+    ws = wafer_stats(state.data, state.hidden(), aliases, "avg")
     ref = {}
     if opt.delta_vs_ref:
         g = state.ref_group()
-        ref = ref_values(state.data, state.excluded, g.gid if g else None,
+        ref = ref_values(state.data, state.hidden(), g.gid if g else None,
                          aliases, "avg")
 
     rows = []
@@ -152,7 +152,7 @@ def _group_table(state, cat1: str, opt: SummaryOptions) -> TableData:
     for g in groups or [None]:
         sub = (state.data if g is None
                else state.data.filter(pl.col("gid") == g.gid))
-        ws = wafer_stats(sub, state.excluded, aliases, "avg")
+        ws = wafer_stats(sub, state.hidden(), aliases, "avg")
         vals: dict[str, float | None] = {}
         for a in aliases:
             got = [v for per in ws.values.values()

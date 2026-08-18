@@ -56,7 +56,12 @@ LOG_PLACEHOLDER = ("여기에 단계별 진행이 남습니다.\n"
 
 
 class _ExtractThread(QThread):
-    """추출 → 리포메팅 → 적재. 각 단계를 로그와 진행률로 내보낸다."""
+    """추출 → 리포메팅 → 적재를 **워커 스레드에서** 돌린다.
+
+    실제 순서와 계산은 전부 `data/pipeline.run()`이 갖는다. 여기 남은 일은
+    그 콜백을 Qt 시그널로 옮기는 것뿐이다 — 파이프라인이 화면 안에 들어 있으면
+    예약 실행(§13)이 같은 코드를 한 벌 더 쓰게 되고, 두 경로가 조용히 갈린다.
+    """
 
     log = Signal(str)                 # 한 줄 로그
     step = Signal(str, int, int)      # 단계명, 완료, 전체
@@ -68,124 +73,15 @@ class _ExtractThread(QThread):
         self.p, self.d_from, self.d_to, self.catalog = preset, d_from, d_to, catalog
 
     def run(self) -> None:
-        import time
-        t0 = time.monotonic()
+        from etreport.data import pipeline
         try:
-            import polars as pl
-
-            from etreport.data import extractor
-            from etreport.data.db import Store, pivot_and_load
-            from etreport.data.reformatter import apply as rf_apply
-            from etreport.data.reformatter import load as rf_load
-            from etreport.paths import cleanup_staging, staging_dir
-
-            # 1) 리포메터 -------------------------------------
-            t = time.monotonic()
-            self.step.emit("리포메터 읽는 중", 0, 0)
-            sheet = self.p.reformatter_sheet or 0
-            self.log.emit(f"리포메터 열기: {Path(self.p.reformatter_path).name}"
-                          + (f" [{sheet}]" if isinstance(sheet, str) else ""))
-            rf = rf_load(self.p.reformatter_path, sheet)
-            if rf.errors:
-                raise RuntimeError("리포메터를 쓸 수 없습니다:\n" +
-                                   "\n".join(rf.report_lines()[:8]))
-            self.log.emit(
-                f"  REAL {len(rf.reals())} · ADDP {len(rf.addps())}"
-                f"  ({time.monotonic() - t:.1f}초)")
-            for w in rf.warnings[:20]:
-                self.log.emit(f"  ⚠ {w.row}행 {w.alias}: {w.message}")
-            if len(rf.warnings) > 20:
-                self.log.emit(f"  ⚠ 외 {len(rf.warnings) - 20}건 더 제외")
-
-            # 2) 추출 ------------------------------------------
-            t = time.monotonic()
-            rf_items = [r.itemid for r in rf.reals() if r.itemid]
-            groups = extractor.item_groups(rf_items)
-            if len(groups) > 1:
-                self.log.emit(
-                    f"조회 item {len(rf_items):,}개 (REAL만, ADDP 제외) — "
-                    f"상한 초과로 {len(groups)}개 그룹 분할")
-            units = extractor.plan_units(self.d_from, self.d_to, rf_items)
-            self.log.emit(f"추출 시작 — {self.d_from} ~ {self.d_to} "
-                          f"· 청크 {len(units)}개 · 워커 {extractor.N_WORKERS}")
-            self.step.emit("추출 중", 0, len(units))
-
-            def on_prog(done: int, total: int, label: str) -> None:
-                self.step.emit("추출 중", done, total)
-                self.log.emit(f"  청크 {done}/{total} 완료  ({label})")
-
-            files = extractor.extract_to_parquet(
-                self.p.conditions, self.d_from, self.d_to, self.catalog,
-                staging_dir(), on_prog, self.isInterruptionRequested,
-                item_ids=rf_items)
-            if not files:
-                raise RuntimeError("중지되었거나 결과가 없습니다")
-            raw = sum(pl.scan_parquet(str(f)).select(pl.len())
-                      .collect().item() for f in files)
-            self.log.emit(f"추출 완료 — {raw:,}행 (long) "
-                          f"· {time.monotonic() - t:.1f}초")
-            self.log.emit("  온도 보정 적용 — 5단위 정수로 맞춰 적재합니다 "
-                          "(23.9 → 25)")
-
-            # 3) 리포메팅 --------------------------------------
-            t = time.monotonic()
-            n_addp = len(rf.addps())
-            self.log.emit(f"리포메팅 시작 — 파일 {len(files)}개 · ADDP {n_addp}개")
-            self.step.emit("리포메팅 중", 0, len(files))
-            done_rows = 0
-            reformatted: list[Path] = []
-            for i, f in enumerate(files, 1):
-                ft = time.monotonic()
-                src = pl.read_parquet(f)
-
-                def prog(stage: str, d: int, tot: int, _i=i) -> None:
-                    # ADDP가 많으면 어느 item에서 시간이 가는지 보이게
-                    self.step.emit(f"리포메팅 {_i}/{len(files)} · {stage}",
-                                   d, tot or 1)
-
-                out = rf_apply(rf, src, on_progress=prog)
-                # 원본(추출 결과)은 남긴다 — 추출이 가장 비싼 단계라, 리포메터를
-                # 고쳐서 다시 돌릴 때 재추출 없이 이 파일만 다시 쓰면 된다.
-                rf_file = f.with_name(f.stem + "_rf.parquet")
-                out.write_parquet(rf_file)
-                reformatted.append(rf_file)
-                done_rows += out.height
-                self.log.emit(
-                    f"  파일 {i}/{len(files)}  {src.height:,}행 → {out.height:,}행"
-                    f"  ({time.monotonic() - ft:.1f}초)")
-            self.log.emit(f"리포메팅 완료 — {done_rows:,}행 "
-                          f"· {time.monotonic() - t:.1f}초")
-
-            # 4) 적재 ------------------------------------------
-            t = time.monotonic()
-            self.log.emit(f"DuckDB 적재: {Path(self.p.db_path).name}")
-            self.step.emit("적재 중", 0, 100)
-            last = [0.0]
-
-            def load_prog(d: int, tot: int) -> None:
-                self.step.emit("적재 중", d, tot)
-                now = time.monotonic()
-                if now - last[0] > 2.0 or d == tot:    # 2초마다 한 줄
-                    last[0] = now
-                    self.log.emit(f"  버킷 {d}/{tot}")
-
-            # 적재 연결은 반드시 닫는다 — 열려 있으면 DuckDB 쓰기 잠금이 남아
-            # 곧바로 이어지는 [분석] 자동 연결(읽기 전용 열기)이 실패한다.
-            store = Store(self.p.db_path)
-            try:
-                n = pivot_and_load(store, reformatted, on_progress=load_prog)
-            finally:
-                store.close()
-            self.log.emit(f"적재 완료 — {n:,}행 · {time.monotonic() - t:.1f}초")
-
-            # 5) 뒷정리 — staging은 놔두면 하루 수십 MB씩 쌓인다
-            gone = cleanup_staging()
-            if gone:
-                self.log.emit(f"staging 정리 — 오래된 파일 {gone}개 삭제")
-
-            el = time.monotonic() - t0
-            self.log.emit(f"── 전체 {el:.1f}초 ──")
-            self.finished_ok.emit(n, f"{el:.1f}초")
+            res = pipeline.run(
+                self.p, self.d_from, self.d_to, self.catalog,
+                on_log=self.log.emit,
+                on_step=lambda label, done, total: self.step.emit(
+                    label, done, total),
+                should_stop=self.isInterruptionRequested)
+            self.finished_ok.emit(res.rows, f"{res.seconds:.1f}초")
         except Exception as e:                      # noqa: BLE001 → UI로
             self.log.emit(f"실패: {e}")
             self.failed.emit(str(e))
@@ -389,8 +285,13 @@ class DataWorkspace(QWidget):
         self.chk_csv.setChecked(True)
         self.lbl_step = QLabel(WAIT_TEXT)
         self.lbl_step.setObjectName("hint")
+        self.btn_schedule = GhostButton("예약 실행…")
+        self.btn_schedule.setToolTip(
+            "정해진 시각에 이 프리셋으로 추출·적재를 돌립니다.\n"
+            "앱이 꺼져 있어도 Windows 작업 스케줄러가 실행합니다.")
+        self.btn_schedule.clicked.connect(self._open_schedule)
         rc.body.addWidget(row(self.btn_run, self.btn_cancel, self.chk_csv,
-                              QCheckBox("SBDF"), None))
+                              QCheckBox("SBDF"), self.btn_schedule, None))
         # 진행 문구는 제 줄에 둔다 — 체크박스 옆에 붙이면 그 체크박스의 설명처럼 읽힌다
         rc.body.addWidget(row(self.lbl_step, None))
         self.bar = QProgressBar()
@@ -638,6 +539,23 @@ class DataWorkspace(QWidget):
         self.lbl_cat.setText(
             f"{len(self.catalog.columns)}개 컬럼 · "
             f"{self.catalog.fetched_at or '캐시 없음'}")
+
+    def _open_schedule(self) -> None:
+        """예약 실행 창(§13).
+
+        예약은 **저장된 프리셋**을 이름으로 찾아 돈다 — 화면에서 고쳐 놓고 저장하지
+        않은 조건은 예약 실행에 반영되지 않는다. 그래서 여는 순간 저장한다.
+        """
+        from etreport.ui.widgets.schedule_dialog import ScheduleDialog
+        p = self.preset()
+        if not (p.db_path and p.reformatter_path):
+            QMessageBox.information(
+                self, "예약 실행",
+                "DB와 리포메터를 먼저 지정하세요 — 예약은 저장된 프리셋으로 돕니다")
+            return
+        self.settings.save()          # 지금 화면의 조건이 예약에도 쓰이도록
+        ScheduleDialog(p, self).exec()
+        self.settings.save()          # 창에서 바꾼 예약 설정을 남긴다
 
     # ── 실행 ─────────────────────────────────────────────────
     def _run(self) -> None:

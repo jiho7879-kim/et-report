@@ -24,6 +24,16 @@ def fmt_value(v: float | None, delta: bool = False) -> str:
 #: site=측정점 그대로, 나머지는 (lot, wafer) 집계 한 점.
 POINT_MODES = ("site", "avg", "med", "std")
 
+#: plot 종류 — 템플릿의 `Type` 열과 같은 값. **화면 콤보와 템플릿이 같은 목록을
+#: 본다**(둘이 갈리면 템플릿으로 저장했다 다시 열 때 종류가 바뀐다).
+#: table은 표 전용 페이지라 사용자가 고르는 종류가 아니다(pptgen이 따로 만든다).
+PLOT_TYPES = ("scatter", "box", "trend")
+PLOT_TYPE_LABELS = {
+    "scatter": "산점도",
+    "box":     "boxplot (범주별 분포)",
+    "trend":   "기하 trend (W·L)",
+}
+
 GEOM_COLUMNS = ("W", "L")   # trend chart X축 식별자 — 리포메터 WIDTH/LENGTH 컬럼에 매핑
 
 
@@ -50,7 +60,7 @@ class PlotSpec:
     y: str = ""
     x_name: str = ""
     y_name: str = ""
-    type: str = "scatter"            # scatter | table | box(예정) | trend
+    type: str = "scatter"            # scatter | box | trend | table(표 전용 페이지)
     mode: str = "site"               # site | avg | med | std — 그릴 데이터 레벨
     logx_mode: str = "auto"          # auto | log | linear
     logy_mode: str = "auto"

@@ -103,7 +103,9 @@ CONTRAST_PAIRS: tuple[tuple[str, str, str], ...] = (
 
 
 def qss_path() -> Path:
-    return Path(__file__).with_name("style.qss")
+    """style.qss의 실제 자리. **exe에서는 모듈 옆이 아니다** — resources가 찾는다."""
+    from etreport import resources
+    return resources.path("ui/style.qss")
 
 
 # ── 아이콘 ────────────────────────────────────────────────────────────────

@@ -3,9 +3,12 @@
 배포 규칙
 ---------
 - 릴리스 태그: ``vX.Y.Z``  (etreport.__version__ 과 동일하게)
-- 자산(asset): ``ETReport-X.Y.Z-win64.zip``  — PyInstaller --onedir 결과 폴더를 통째로 zip
-  (실행 중인 exe는 Windows에서 잠겨 있어 단일 exe 교체가 불가능하므로,
-   zip을 받아 종료 후 폴더째 덮어쓰는 방식을 쓴다. apply.py 참고)
+- 자산(asset): ``ETReport-X.Y.Z-win64.exe``  — PyInstaller onefile 결과(지금 기본)
+               ``ETReport-X.Y.Z-win64.zip``  — 예전 onedir 폴더를 통째로 zip
+
+**exe를 먼저 고른다.** 둘 다 올라와 있으면 파일 하나만 바꾸면 되는 쪽이 안전하다.
+실행 중인 exe는 Windows에서 잠겨 있으므로, 어느 쪽이든 앱이 끝난 뒤 배치가
+교체한다(apply.py 참고).
 """
 from __future__ import annotations
 
@@ -49,6 +52,25 @@ def _headers() -> dict[str, str]:
     return h
 
 
+#: 내려받을 자산 확장자 — **앞쪽이 우선**. exe 한 장이 폴더째 붓는 것보다 안전하다.
+ASSET_SUFFIXES = (".exe", ".zip")
+
+
+def pick_asset(assets: list[dict]) -> dict | None:
+    """릴리스 자산 목록에서 내려받을 것 하나. 없으면 None.
+
+    같은 확장자가 여럿이면 **이름 순 첫 번째**를 쓴다 — 릴리스마다 자산 순서가
+    흔들려도 고르는 결과가 같아야 한다(디버깅 가능성).
+    """
+    for suffix in ASSET_SUFFIXES:
+        hit = sorted((a for a in assets
+                      if str(a.get("name", "")).lower().endswith(suffix)),
+                     key=lambda a: str(a.get("name", "")))
+        if hit:
+            return hit[0]
+    return None
+
+
 def check_for_update(current: str = __version__) -> UpdateInfo | None:
     """새 버전이 있으면 UpdateInfo, 없거나 확인 실패면 None.
 
@@ -74,12 +96,9 @@ def check_for_update(current: str = __version__) -> UpdateInfo | None:
     if latest <= cur:
         return None
 
-    asset = next(
-        (a for a in rel.get("assets", []) if a["name"].lower().endswith(".zip")),
-        None,
-    )
+    asset = pick_asset(rel.get("assets", []))
     if asset is None:
-        log.warning("릴리스 %s 에 zip 자산이 없음", tag)
+        log.warning("릴리스 %s 에 내려받을 자산(.exe/.zip)이 없음", tag)
         return None
 
     return UpdateInfo(

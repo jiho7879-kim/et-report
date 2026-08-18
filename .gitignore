@@ -7,7 +7,11 @@ venv/
 myenv/
 
 # 빌드 산출물
-build/*.spec
+/*.spec                 # PyInstaller가 루트에 자동 생성하는 것
+!build/ETReport.spec    # 빌드 정의는 저장소에 둔다
+build/pyi/              # PyInstaller 작업 폴더
+build/site_extras.py    # 사내 인증서·라이브러리 경로 — 커밋 금지
+src/etreport/assets/build_info.json   # 빌드할 때 굽는 스탬프
 dist/
 *.zip
 *.pptx

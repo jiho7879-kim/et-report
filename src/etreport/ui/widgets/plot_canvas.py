@@ -105,10 +105,16 @@ class PlotCanvas(FigureCanvasQTAgg):
         self.draw()          # 즉시 다시 칠한다 — 예전 라벨 잔상이 남지 않게
 
     def _excluded_frame(self) -> pl.DataFrame | None:
+        """회색 빈 심볼로 남길 점 — 손으로 찍은 제외 **과 이상치 필터**.
+
+        필터가 걸러 낸 점도 그림에 남긴다. 계산에서는 빠지되 화면에서 통째로
+        사라지면 "왜 이 점이 없지"를 확인할 방법이 없다.
+        """
         st = self.state
-        if st.data is None or not st.excluded:
+        hide = st.hidden()
+        if st.data is None or not hide:
             return None
-        return st.data.filter(pl.col("key").is_in(list(st.excluded)))
+        return st.data.filter(pl.col("key").is_in(list(hide)))
 
     def _collect_points(self, spec: PlotSpec) -> None:
         """히트테스트용 데이터 좌표 수집 (픽셀 변환은 클릭 때)."""

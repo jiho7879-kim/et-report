@@ -316,13 +316,25 @@ def sync_exclusion(state: AppState, key: str, exclude: bool,
         exclusions.remove(state.db_path, state.excl_points, key)
 
 
-def exclusion_frame(state: AppState) -> pl.DataFrame:
-    """PPT 제외 이력 슬라이드용."""
-    pts = getattr(state, "excl_points", {}) or {}
-    if not pts:
-        return pl.DataFrame({"key_hash": [], "reason": [], "created_at": []})
-    return pl.DataFrame({
-        "key_hash": list(pts),
-        "reason": [v.get("reason", "") for v in pts.values()],
-        "created_at": [v.get("at", "") for v in pts.values()],
-    })
+def exclusion_frame(state: AppState, include_filtered: bool = False
+                    ) -> pl.DataFrame:
+    """PPT 제외 이력 슬라이드용.
+
+    `include_filtered=True`면 이상치 필터가 걸러 낸 점도 함께 싣는다. 기본값이
+    False인 이유는 이 함수가 "**사람이** 뺀 점"을 뜻해 온 자리이기 때문이다 —
+    세는 곳(화면의 '제외 N점')이 갑자기 수백으로 뛰면 안 된다. PPT는 무엇이
+    빠졌는지 전부 남겨야 하므로 켜서 부른다.
+    """
+    schema = {"key_hash": pl.Utf8, "reason": pl.Utf8, "created_at": pl.Utf8}
+
+    def _frame(pts: dict) -> pl.DataFrame:
+        return pl.DataFrame({
+            "key_hash": list(pts),
+            "reason": [v.get("reason", "") for v in pts.values()],
+            "created_at": [v.get("at", "") for v in pts.values()],
+        }, schema=schema)
+
+    out = _frame(getattr(state, "excl_points", {}) or {})
+    if include_filtered:
+        out = pl.concat([out, _frame(getattr(state, "filtered", {}) or {})])
+    return out

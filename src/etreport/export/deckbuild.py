@@ -41,8 +41,8 @@ def _plot_data(state: AppState, exp: str, spec: PlotSpec) -> dict[str, pl.DataFr
     df = state.data
     if df is None:
         return {}
-    active = df.filter(~pl.col("key").is_in(list(state.excluded))) \
-        if state.excluded else df
+    hide = state.hidden()          # 손으로 찍은 제외 + 이상치 필터
+    active = df.filter(~pl.col("key").is_in(list(hide))) if hide else df
     from etreport.model import wafers
     assign = _assignment_for(state, exp)
     gids = wafers.map_gids(active["lot"], active["wafer"], assign)
@@ -132,7 +132,9 @@ def generate(state: AppState, out_path: str, on_progress=None) -> str:
     """
     experiments = state.factors if len(state.factors) > 1 else [""]
     from etreport.data.loader import exclusion_frame
-    exlog = exclusion_frame(state)
+    # 이상치 필터가 걸러 낸 점도 이력에 싣는다 — 덱을 받은 사람이 "무엇이 빠졌나"를
+    # 알 수 있어야 한다(이유 문자열에 배수와 item이 적혀 있다).
+    exlog = exclusion_frame(state, include_filtered=True)
     if on_progress:
         on_progress(0, 0, "표 집계 중")
     prs = pptgen.build_deck(
@@ -149,6 +151,8 @@ def generate(state: AppState, out_path: str, on_progress=None) -> str:
         factors=getattr(state, "met_top", None),   # inline 계측 top-k(기능 B)
         meta=deck_meta(state),                     # 표지
         split_rows=(state.split.wide if state.split is not None else None),
+        # fab tracking에서 뽑아 붙인 컬럼(기능 A) — 이름은 사용자가 정한 그대로
+        track_rows=getattr(state, "track_frame", None),
         lot_split=bool(getattr(state, "lot_split_symbols", False)),
         on_progress=on_progress,
     )

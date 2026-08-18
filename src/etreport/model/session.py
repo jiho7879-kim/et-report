@@ -193,6 +193,25 @@ def apply_config(state: AppState, cfg: AnalysisConfig,
             log.debug("커버리지 요약 실패(무시): %s", e)
         tick("DB 완료")
 
+    # 5) 이상치 필터 --------------------------------------------
+    # DB를 읽은 **뒤** 건다 — 사분위수는 실제로 분석할 데이터에서 구해야 한다.
+    # 표·plot은 이 결과를 반영한 상태에서 그려진다(요청: "그리기 전에 필터").
+    from etreport.model.outliers import TukeyConfig
+    from etreport.model.outliers import apply as tukey_apply
+    state.tukey = TukeyConfig(
+        enabled=bool(getattr(cfg, "tukey_enabled", False)),
+        k=float(getattr(cfg, "tukey_k", 3.0) or 3.0),
+        scope=str(getattr(cfg, "tukey_scope", "cond") or "cond"))
+    if state.data is not None:
+        try:
+            res = tukey_apply(state)
+            if state.tukey.enabled:
+                # 버린 점이므로 notes가 아니라 warnings다 — 사용자가 세어야 한다.
+                rep.warnings.append(f"[이상치] {res.summary()}")
+        except Exception as e:
+            log.warning("이상치 필터 실패(무시): %s", e, exc_info=True)
+            rep.warnings.append(f"[이상치] 필터를 걸지 못했습니다: {e}")
+
     state.log_patterns = cfg.log_patterns or state.log_patterns
     state.lot_split_symbols = bool(getattr(cfg, "lot_split_symbols", False))
     from etreport.render.pptgen import table_mode_of  # 예전 값 'wide' 흡수

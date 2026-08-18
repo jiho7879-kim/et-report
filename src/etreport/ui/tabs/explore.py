@@ -22,7 +22,12 @@ from PySide6.QtWidgets import (
 )
 
 from etreport.data.loader import RESERVED, item_columns
-from etreport.model.specs import POINT_MODES
+from etreport.model.specs import (
+    GEOM_COLUMNS,
+    PLOT_TYPE_LABELS,
+    PLOT_TYPES,
+    POINT_MODES,
+)
 from etreport.model.state import AppState, StateBus
 from etreport.ui.tabs.common import StaleMixin, on_combo
 from etreport.ui.widgets.autocomplete import AutoCompleteEdit
@@ -70,14 +75,23 @@ class ExploreTab(StaleMixin, QWidget):
 
         side = QVBoxLayout()
         card = Card("축")
-        def _items() -> list[str]:
-            if state.rf.rules:
-                return state.aliases()
-            if state.data is not None:
-                return item_columns(state.data)
-            return []
-        self.ed_x = AutoCompleteEdit(_items)
-        self.ed_y = AutoCompleteEdit(_items)
+        # plot 종류 — 템플릿의 Type 열과 같은 값(model/specs.PLOT_TYPES).
+        # 종류를 바꾸면 X가 뜻하는 것이 달라지므로(item ↔ 범주 ↔ 기하) 자동완성
+        # 후보와 안내 문구도 함께 바뀐다.
+        self.cmb_type = QComboBox()
+        for t in PLOT_TYPES:
+            self.cmb_type.addItem(PLOT_TYPE_LABELS[t], t)
+        self.cmb_type.setToolTip(
+            "산점도 — X·Y 모두 item\n"
+            "boxplot — X는 나눌 기준(lot+wafer·그룹·온도·fab tracking 컬럼…)\n"
+            "기하 trend — X는 W 또는 L")
+        self.cmb_type.setCurrentIndex(
+            PLOT_TYPES.index(state.explore.type)
+            if state.explore.type in PLOT_TYPES else 0)
+        on_combo(self.cmb_type, self._type_changed)
+        card.body.addWidget(row("종류", self.cmb_type, stretch_at=1))
+        self.ed_x = AutoCompleteEdit(self._x_items)
+        self.ed_y = AutoCompleteEdit(self._y_items)
         self.ed_x.setText(state.explore.x)
         self.ed_y.setText(state.explore.y)
         self.ed_x.editingFinished.connect(self._axes_changed)
@@ -95,14 +109,12 @@ class ExploreTab(StaleMixin, QWidget):
             if state.explore.mode in POINT_MODES else 0)
         on_combo(self.cmb_point, self._point_changed)
         card.body.addWidget(row("점", self.cmb_point, stretch_at=1))
-        hint = QLabel("쉼표로 여러 xy쌍 → 한 그림에 겹칩니다\n"
-                      "X에 W 또는 L을 넣으면 기하 trend로 그립니다\n"
-                      "축 범위 자동 · 규격 ∪ 데이터 × 1.2\n"
-                      "로그는 item 이름 규칙으로 자동")
-        hint.setObjectName("hint")
-        hint.setWordWrap(True)
-        hint.setMinimumHeight(74)
-        card.body.addWidget(hint)
+        self.lbl_hint = QLabel()
+        self.lbl_hint.setObjectName("hint")
+        self.lbl_hint.setWordWrap(True)
+        self.lbl_hint.setMinimumHeight(74)
+        card.body.addWidget(self.lbl_hint)
+        self._sync_hint()
         card.body.addSpacing(4)
         side.addWidget(card)
         side.addWidget(self._scale_card())
@@ -251,15 +263,92 @@ class ExploreTab(StaleMixin, QWidget):
             else "site"
         self.redraw()
 
-    def _sync_type(self) -> None:
-        """X축이 기하(WIDTH·LENGTH)면 trend, 아니면 scatter.
+    # ── plot 종류 ────────────────────────────────────────────
+    def _x_items(self) -> list[str]:
+        """X 자동완성 — **종류에 따라 뜻이 다르다**.
 
-        탐색 탭은 템플릿의 Type 열이 없으므로 **입력만 보고 판정**한다 —
-        예전에는 항상 scatter로 그려서 x에 W/L을 넣으면 아무것도 안 나왔다.
+        boxplot의 X는 item이 아니라 나눌 기준이다(`model/categories`). 여기에
+        item 목록을 띄우면 사용자가 item을 골라 놓고 상자가 왜 수천 개인지
+        묻게 된다. 종류를 바꾼 순간 후보도 바뀌어야 한다.
         """
-        from etreport.model.specs import GEOM_COLUMNS
-        x = self.state.explore.x.strip()
-        self.state.explore.type = "trend" if x in GEOM_COLUMNS else "scatter"
+        from etreport.model import categories as cat
+        st = self.state
+        if st.explore.type == "box":
+            return cat.choices(st.data, st.track_columns + st.met_columns)
+        if st.explore.type == "trend":
+            return list(GEOM_COLUMNS)
+        return self._y_items()
+
+    def _y_items(self) -> list[str]:
+        """Y 자동완성 — 리포메터 ALIAS, 없으면 데이터의 item 컬럼."""
+        st = self.state
+        if st.rf.rules:
+            return st.aliases()
+        return item_columns(st.data) if st.data is not None else []
+
+    def _type_changed(self) -> None:
+        """종류를 고르면 **X도 그 종류가 읽을 수 있는 값으로** 바꿔 준다.
+
+        X는 종류마다 뜻이 다르다(item ↔ 범주 ↔ 기하). 종류만 바꾸고 X를 그대로
+        두면 그릴 수 없는 조합이 되어 빈 그림이 나오고, `_sync_type`이 종류를
+        되돌려 놓아 "골랐는데 안 바뀐다"가 된다. 지금 X가 그 종류에 맞지 않을
+        때만 손댄다 — 이미 맞으면 사용자가 적어 둔 값을 건드리지 않는다.
+        """
+        from etreport.model import categories as cat
+        st = self.state
+        typ = self.cmb_type.currentData() or "scatter"
+        x = st.explore.x.strip()
+        if typ == "trend" and x not in GEOM_COLUMNS:
+            st.explore.x = GEOM_COLUMNS[0]
+        elif typ == "box" and not cat.is_category(x, st.data):
+            st.explore.x = cat.LOT_WAFER
+        elif typ == "scatter" and (x in GEOM_COLUMNS
+                                   or cat.is_category(x, st.data)):
+            items = self._y_items()
+            st.explore.x = items[0] if items else ""
+        st.explore.type = typ
+        self.ed_x.setText(st.explore.x)
+        self._sync_hint()
+        self.redraw()
+
+    def _sync_hint(self) -> None:
+        """종류별 안내 — X가 무엇인지가 종류마다 달라서 한 문장으로 못 적는다."""
+        common = ("축 범위 자동 · 규격 ∪ 데이터 × 1.2\n"
+                  "로그는 item 이름 규칙으로 자동")
+        text = {
+            "scatter": "쉼표로 여러 xy쌍 → 한 그림에 겹칩니다\n"
+                       "X·Y 모두 item(리포메터 ALIAS)입니다\n" + common,
+            "box": "X는 **나눌 기준**입니다 — lot+wafer · 그룹 · 온도 ·\n"
+                   "step · fab tracking에서 뽑은 컬럼\n"
+                   "Y는 item(쉼표로 여러 개)\n" + common,
+            "trend": "X는 W 또는 L (리포메터의 WIDTH·LENGTH)\n"
+                     "Y에 적은 item들이 기하값 위에 늘어섭니다\n" + common,
+        }.get(self.state.explore.type, common)
+        self.lbl_hint.setText(text.replace("**", ""))
+
+    def _sync_type(self) -> None:
+        """콤보와 상태를 맞춘다. X가 기하(W·L)면 trend로 **넘어가 준다**.
+
+        탐색 탭은 템플릿의 Type 열이 없어서 예전에는 입력만 보고 판정했다. 이제
+        종류를 직접 고르지만, X에 W/L을 적는 손버릇은 그대로 살려 둔다 — 그렇게
+        적었는데 산점도로 그려 빈 그림이 나오는 것이 예전 버그였다.
+        """
+        st = self.state
+        x = st.explore.x.strip()
+        if x in GEOM_COLUMNS:
+            st.explore.type = "trend"
+        elif st.explore.type == "trend":
+            # trend는 X가 W·L일 때만 뜻이 있다. X를 item으로 바꿨는데 trend로
+            # 남아 있으면 빈 그림이 나온다 — 산점도로 되돌린다.
+            st.explore.type = "scatter"
+        if st.explore.type not in PLOT_TYPES:
+            st.explore.type = "scatter"
+        idx = PLOT_TYPES.index(st.explore.type)
+        if self.cmb_type.currentIndex() != idx:
+            self.cmb_type.blockSignals(True)
+            self.cmb_type.setCurrentIndex(idx)
+            self.cmb_type.blockSignals(False)
+            self._sync_hint()
 
     def _pick(self, key: str) -> None:
         from etreport.data.loader import sync_exclusion
