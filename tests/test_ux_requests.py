@@ -67,35 +67,36 @@ def test_trend_has_no_vertical_spec_lines(demo_state):
     assert dashed == []
 
 
-# ── 2 리포트 탭의 그룹 스타일 ────────────────────────────────
-def test_report_tab_has_the_same_style_card(qapp, demo_state):
-    """★ 탐색 탭과 **같은 위젯**을 쓴다 — 스타일 규칙이 갈라지지 않게."""
+# ── 2 그룹 스타일은 화면마다 갖지 않는다 ─────────────────────
+def test_group_style_lives_in_one_shared_section(qapp, demo_state):
+    """★ 탐색·리포트가 **같은 섹션 하나**를 본다 — 스타일 규칙이 갈라지지 않게.
+
+    예전에는 두 탭이 각자 `GroupStyleCard`를 하나씩 갖고 있었다(설계 §0 B).
+    지금은 워크스페이스가 인스펙터 공용 자리에 하나만 만든다.
+    """
+    from etreport.config.settings import Settings
     from etreport.model.state import StateBus
-    from etreport.ui.tabs.explore import ExploreTab
-    from etreport.ui.tabs.report import ReportTab
-    from etreport.ui.widgets.style_card import GroupStyleCard
+    from etreport.ui.analysis_ws import AnalysisWorkspace
+    from etreport.ui.widgets.group_section import GroupSection
 
-    bus = StateBus()
-    rep = ReportTab(demo_state, bus)
-    exp = ExploreTab(demo_state, bus)
-
-    assert isinstance(rep.style_card, GroupStyleCard)
-    assert isinstance(exp._style, GroupStyleCard)
-    rep.deleteLater()
-    exp.deleteLater()
+    ws = AnalysisWorkspace(demo_state, StateBus(), Settings.defaults())
+    assert len(ws.findChildren(GroupSection)) == 1
+    for tab in ws.tab_widgets():
+        assert not hasattr(tab, "style_card")
+    ws.deleteLater()
 
 
-def test_style_card_edit_reaches_the_group(qapp, demo_state):
+def test_group_style_edit_reaches_the_group(qapp, demo_state):
+    from etreport.config.settings import Settings
     from etreport.model.state import StateBus
-    from etreport.ui.tabs.report import ReportTab
+    from etreport.ui.analysis_ws import AnalysisWorkspace
 
-    rep = ReportTab(demo_state, StateBus())
-    rep.style_card.cmb_group.setCurrentIndex(0)
-    qt_until(lambda: False, ms=150)
-    rep.style_card.cmb_size.setCurrentText("12")
+    ws = AnalysisWorkspace(demo_state, StateBus(), Settings.defaults())
+    ws.group_section.select(0)
+    ws.group_section.cmb_size.setCurrentText("12")
 
     assert qt_until(lambda: demo_state.groups[0].size == 12)
-    rep.deleteLater()
+    ws.deleteLater()
 
 
 # ── 3 예시 파일 · WIDTH/LENGTH ───────────────────────────────
@@ -177,6 +178,7 @@ def test_explore_switches_to_trend_for_geometry(qapp, demo_state, axis):
     tab.ed_x.setText(axis)
     tab.ed_y.setText(demo_state.aliases()[0])
     tab._axes_changed()
+    tab.redraw()                       # [그리기] — 지연 규약상 버튼으로 그린다
 
     assert demo_state.explore.type == "trend"
     ax = tab.canvas.figure.axes[0]

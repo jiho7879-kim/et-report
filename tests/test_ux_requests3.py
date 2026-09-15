@@ -6,7 +6,7 @@
   3  SQL 조회 OOM — 미리보기는 LIMIT, 저장은 COPY 스트리밍
   4  정규식 조건의 띄어쓰기를 `|`로
   5  fab tracking 자동 조회 결과가 [적용]까지 살아남는다
-  9  Summary CAT1 접기
+  9  요약 CAT1 접기
  10  온도 보정을 **적재 시점에** 반영
  11·13  W01·W1·01·1을 같은 wafer로 · 머리글은 있어도 없어도 같다
  15  자동완성이 `_`·`-`·공백을 무시하고 `*`를 받는다
@@ -247,11 +247,11 @@ def _make_db(tmp_path):
 
 
 def test_preview_reads_only_a_page(appdata, tmp_path):
-    """★ 미리보기는 LIMIT만 읽고, 전체 행 수는 count로 따로 센다."""
+    """★ 미리보기는 LIMIT만 읽고, 전체 행 수용 재실행은 하지 않는다."""
     from etreport.ui.widgets.sql_dialog import preview_query
     head, total = preview_query(str(_make_db(tmp_path)),
                                 "SELECT * FROM et_data", rows=10)
-    assert head.height == 10 and total == 5000
+    assert head.height == 10 and total is None
 
 
 def test_save_streams_through_duckdb(appdata, tmp_path):
@@ -268,6 +268,102 @@ def test_save_streams_through_duckdb(appdata, tmp_path):
     pq = tmp_path / "out.parquet"
     copy_to(str(db), "SELECT * FROM et_data", str(pq), "parquet")
     assert pl.read_parquet(pq).height == 5000
+
+
+def test_save_wide_writes_csv_next_to_db(appdata, tmp_path):
+    """★ 적재 후 내보내기는 DB 옆에 et_data.csv를 만든다 (BOM 포함)."""
+    from types import SimpleNamespace
+
+    from etreport.data.exporting import save_wide
+    db = _make_db(tmp_path)
+    msgs = []
+    saved = save_wide(SimpleNamespace(
+        db_path=str(db), out_dir="", save_csv=True, save_sbdf=False),
+        on_log=msgs.append)
+    assert saved == [str(tmp_path / "et_data.csv")]
+    raw = (tmp_path / "et_data.csv").read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf")
+    assert len(raw.decode("utf-8-sig").strip().splitlines()) == 5001
+    assert not (tmp_path / "et_data.csv.part").exists()
+
+
+def test_save_wide_honors_out_dir(appdata, tmp_path):
+    """★ out_dir이 있으면 그 폴더로, 없으면 DB 옆으로 간다."""
+    from types import SimpleNamespace
+
+    from etreport.data.exporting import save_wide
+    db = _make_db(tmp_path)
+    out = tmp_path / "out"
+    saved = save_wide(SimpleNamespace(
+        db_path=str(db), out_dir=str(out), save_csv=True, save_sbdf=False))
+    assert saved == [str(out / "et_data.csv")]
+    assert (out / "et_data.csv").exists()
+
+
+def test_save_wide_skips_sbdf_without_library(appdata, tmp_path, monkeypatch):
+    """★ SBDF 라이브러리가 없으면 경고만 남기고 건너뛴다 — 실패하지 않는다."""
+    from types import SimpleNamespace
+
+    from etreport.data import exporting
+    monkeypatch.setattr(exporting, "import_sbdf", lambda: None)
+    msgs = []
+    saved = exporting.save_wide(SimpleNamespace(
+        db_path=str(_make_db(tmp_path)), out_dir="",
+        save_csv=False, save_sbdf=True),
+        on_log=msgs.append)
+    assert saved == []
+    assert any("건너뜀" in m for m in msgs)
+
+
+def test_save_wide_writes_sbdf_via_library(appdata, tmp_path, monkeypatch):
+    """★ import_sbdf가 주는 모듈로 export_data를 부른다 (pandas 프레임 경유)."""
+    from types import SimpleNamespace
+
+    from etreport.data import exporting
+
+    class FakeSBDF:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def export_data(self, df, path) -> None:
+            self.calls.append((df, path))
+
+    fake = FakeSBDF()
+    monkeypatch.setattr(exporting, "import_sbdf", lambda: fake)
+    db = _make_db(tmp_path)
+    saved = exporting.save_wide(SimpleNamespace(
+        db_path=str(db), out_dir="", save_csv=False, save_sbdf=True))
+    assert saved == [str(tmp_path / "et_data.sbdf")]
+    assert len(fake.calls) == 1
+    (df, path) = fake.calls[0]
+    assert df.shape == (5000, 1)
+    assert path == str(tmp_path / "et_data.sbdf")
+
+
+def test_save_wide_skips_sbdf_over_row_ceiling(appdata, tmp_path, monkeypatch):
+    """★ 행 수 상한을 넘으면 pandas로 올리지 않고 건너뛴다 (헤드리스 OOM 방지)."""
+    from types import SimpleNamespace
+
+    from etreport.data import exporting
+
+    class FakeSBDF:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def export_data(self, df, path) -> None:
+            self.calls.append((df, path))
+
+    fake = FakeSBDF()
+    monkeypatch.setattr(exporting, "import_sbdf", lambda: fake)
+    monkeypatch.setattr(exporting, "SBDF_WARN_ROWS", 100)
+    msgs = []
+    saved = exporting.save_wide(SimpleNamespace(
+        db_path=str(_make_db(tmp_path)), out_dir="",
+        save_csv=False, save_sbdf=True),
+        on_log=msgs.append)
+    assert saved == []
+    assert fake.calls == []
+    assert any("상한" in m for m in msgs)
 
 
 # ── 5. fab tracking 결과가 살아남는다 ────────────────────────
@@ -326,7 +422,7 @@ def ws(appdata, monkeypatch):
     w.deleteLater()
 
 
-# ── 9. Summary CAT1 접기 ─────────────────────────────────────
+# ── 9. 요약 CAT1 접기 ─────────────────────────────────────
 def test_summary_cat1_folds_and_remembers(ws):
     """★ CAT1마다 토글 · [모두 접기] · 표를 다시 만들어도 접힘이 유지된다."""
     tab = ws.tab_summary
@@ -375,9 +471,9 @@ def test_point_mode_applies_to_every_slot(ws):
 
 
 def test_group_style_applies_to_all_groups(ws):
-    """★ 그룹 스타일 카드의 [모든 plot에 적용] — 심볼·크기를 한 번에."""
-    card = ws.tab_report.style_card
-    card.cmb_group.setCurrentIndex(0)
+    """★ 인스펙터 [그룹]의 [스타일을 전 plot에] — 심볼·크기를 한 번에."""
+    card = ws.group_section
+    card.select(0)
     g0 = ws.state.groups[0]
     g0.symbol, g0.size = "t", 10
 

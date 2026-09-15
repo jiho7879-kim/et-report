@@ -52,7 +52,7 @@ def _plot_data(state: AppState, exp: str, spec: PlotSpec) -> dict[str, pl.DataFr
 
 
 def _tables(state: AppState) -> list[TableData]:
-    """CAT1별 TableData — Summary 탭과 완전히 같은 집계를 쓴다.
+    """CAT1별 TableData — 요약 탭과 완전히 같은 집계를 쓴다.
 
     실험(factor)과 무관하다. 표는 (lot, wafer)별 집계라 실험마다 다시 만들면
     같은 표가 중복될 뿐이다(§7.2). 분할(split)은 pptgen이 페이지를 만들 때 한다.
@@ -61,7 +61,7 @@ def _tables(state: AppState) -> list[TableData]:
     from etreport.export.excel import build_table as _bt
     if state.report is None or state.data is None:
         return []
-    # 화면(Summary 탭)의 평균/산포·Δ 선택을 그대로 쓴다 — "화면 = 출력"
+    # 화면(요약 탭)의 평균/산포·Δ 선택을 그대로 쓴다 — "화면 = 출력"
     opt = SummaryOptions(agg=state.agg, delta_vs_ref=state.delta_vs_ref)
     return [_bt(state, cat1, opt) for cat1 in state.report.table_names()]
 

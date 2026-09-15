@@ -28,7 +28,7 @@ def test_sections_cover_every_screen():
     from etreport.export.manual import sections
 
     titles = " ".join(s.title for s in sections())
-    for word in ("데이터 추출", "적용", "탐색", "trend", "Summary",
+    for word in ("데이터 추출", "적용", "탐색", "trend", "요약",
                  "리포트 구성"):
         assert word in titles
 

@@ -57,13 +57,20 @@ def test_report_name_is_shown_as_text(win):
 
 
 def test_multiple_reports_are_only_announced(win):
+    """여럿이라는 **사실**은 라벨 한 줄, 목록과 바꾸는 방법은 툴팁.
+
+    좁아진 레일(244px)에 4줄짜리 산문이 상주하면 그만큼 소스 목록이 잘린다
+    (설계 §2 — 조작면에 산문을 두지 않는다).
+    """
     win.anal_ws.state.reports = ["M2_ET", "DEV_EVAL", "AC"]
     win.anal_ws._show_report("M2_ET")
 
     text = win.anal_ws.lbl_report.text()
-    assert "M2_ET" in text
-    assert "리포트 3개" in text and "DEV_EVAL" in text
-    assert "Report 열" in text                    # 바꾸는 방법을 알려 준다
+    assert "M2_ET" in text and "리포트 3개" in text
+    assert text.count("\n") == 0
+    tip = win.anal_ws.lbl_report.toolTip()
+    assert "DEV_EVAL" in tip
+    assert "Report 열" in tip                     # 바꾸는 방법을 알려 준다
 
 
 # ── §11.4 템플릿 예시 ────────────────────────────────────────
@@ -145,7 +152,8 @@ def test_menus_exist(win):
     titles = [m.title() for m in win.menuBar().findChildren(type(win.menuBar()))]
     actions = [a.text() for m in win.menuBar().actions()
                if m.menu() for a in m.menu().actions()]
-    assert [a.text() for a in win.menuBar().actions()] == ["템플릿", "도움말"]
+    assert [a.text() for a in win.menuBar().actions()] == ["템플릿", "도구",
+                                                           "도움말"]
     assert any("리포메터" in a for a in actions)
     assert any("4종 한 파일로" in a for a in actions)
     assert any("관계도" in a for a in actions)

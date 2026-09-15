@@ -56,9 +56,20 @@ class PlotCanvas(FigureCanvasQTAgg):
             return None
         styles = st.groups or [_ALL]
         active = st.active()
-        data = {g.gid: (active if g.gid == "" and not st.groups
-                        else active.filter(pl.col("gid") == g.gid))
-                for g in styles}
+        if not st.groups:
+            data = {"": active}
+        else:
+            # `partition_by`로 **한 번에** 쪼갠다. 그룹마다 filter를 걸면 전체
+            # 프레임을 그룹 수만큼 훑어 O(n×g)가 된다(슬롯 6개 × 그룹 4개면
+            # 20만 행을 24번). 값이 없는 그룹도 자리를 만들어 둔다 —
+            # 렌더러가 `st.gid not in data`로 건너뛰기 때문이다.
+            parts = (active.partition_by("gid", as_dict=True)
+                     if "gid" in active.columns else {})
+            data = {}
+            for g in styles:
+                sub = parts.get((g.gid,), parts.get(g.gid))
+                if sub is not None:
+                    data[g.gid] = sub
         w, h = self.figure.get_size_inches()
         return (spec, data, styles, st.rf, st.log_patterns, (w, h),
                 self._excluded_frame(), self.mini,
@@ -109,16 +120,23 @@ class PlotCanvas(FigureCanvasQTAgg):
 
         필터가 걸러 낸 점도 그림에 남긴다. 계산에서는 빠지되 화면에서 통째로
         사라지면 "왜 이 점이 없지"를 확인할 방법이 없다.
+
+        만드는 일은 `AppState`가 한다 — 슬롯 6개가 각자 만들면 같은 필터를
+        여섯 번 돌린다(캐시는 거기 있다).
         """
-        st = self.state
-        hide = st.hidden()
-        if st.data is None or not hide:
-            return None
-        return st.data.filter(pl.col("key").is_in(list(hide)))
+        return self.state.hidden_frame()
 
     def _collect_points(self, spec: PlotSpec) -> None:
-        """히트테스트용 데이터 좌표 수집 (픽셀 변환은 클릭 때)."""
+        """히트테스트용 데이터 좌표 수집 (픽셀 변환은 클릭 때).
+
+        **클릭 제외가 꺼져 있으면 아무것도 모으지 않는다.** 예전에는 `on_pick`
+        여부와 무관하게 돌아서, 리포트 미리보기 한 번에 `key.to_list()`가 슬롯
+        수만큼(6번) 실행됐다 — 20만 행이면 파이썬 문자열 객체 120만 개를
+        만들었다가 버리는 셈이었다.
+        """
         self._series = []
+        if self.on_pick is None:
+            return
         if spec.type != "scatter" or spec.mode != "site":
             return
         st = self.state
@@ -144,12 +162,29 @@ class PlotCanvas(FigureCanvasQTAgg):
             return
         ax = self.figure.axes[0]
         tol = 10.0 if self.mini else 15.0        # 슬롯은 작으므로 더 촘촘히
+
+        # **역변환 한 번**으로 클릭 자리와 허용 오차를 데이터 공간에 옮긴다.
+        # 예전에는 점 전체를 순방향으로 픽셀 변환했다 — 20만 점이면 클릭할
+        # 때마다 N×2 배열을 만들어 아핀 변환을 돌렸다. 로그 축에서도 맞도록
+        # 오차는 좌우·상하 tol만큼 떨어진 자리를 각각 역변환해 구한다.
+        inv = ax.transData.inverted()
+        lo_x, lo_y = inv.transform((ev.x - tol, ev.y - tol))
+        hi_x, hi_y = inv.transform((ev.x + tol, ev.y + tol))
+        x0, x1 = min(lo_x, hi_x), max(lo_x, hi_x)
+        y0, y1 = min(lo_y, hi_y), max(lo_y, hi_y)
+
         best, bd = None, tol ** 2
         for xs, ys, keys in self._series:
-            pix = ax.transData.transform(np.column_stack([xs, ys]))
+            near = (xs >= x0) & (xs <= x1) & (ys >= y0) & (ys <= y1)
+            idx = np.flatnonzero(near)
+            if idx.size == 0:
+                continue
+            # 후보만 정확히 픽셀 거리로 재 본다(둥근 허용 반경 · 축 비율 무시 없이)
+            pix = ax.transData.transform(
+                np.column_stack([xs[idx], ys[idx]]))
             d = (pix[:, 0] - ev.x) ** 2 + (pix[:, 1] - ev.y) ** 2
             i = int(np.argmin(d))
             if d[i] < bd:
-                bd, best = d[i], keys[i]
+                bd, best = d[i], keys[idx[i]]
         if best:
             self.on_pick(best)

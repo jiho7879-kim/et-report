@@ -1,10 +1,13 @@
 """시각 토큰 단일 진실 — 색·모서리·글자 크기와 그것을 Qt에 거는 방법.
 
-방향은 **계측기 콘솔**이다. 상단바·도크는 무채색 그래파이트(크롬), 카드·표·
-캔버스는 종이 흰색(측정면)으로 나눈다. 색은 "알아채야 하는 상태"에만 쓴다 —
-차트가 이미 Okabe-Ito 8색(`model/split.py`)과 규격 빨강을 쓰고 있어서, UI가 같은
-색조로 경쟁하면 눈이 데이터로 가지 않는다. 액센트가 딥 틸인 이유도 그것이다
-(차트가 쓰지 않는 색조 + 흰 글자 대비 5.5:1).
+방향은 **라이트 크롬 + 종이 측정면**이다. 상단바·도크는 밝은 무채색(크롬,
+은은한 보라 틴트 — `design-plans/calm-accent-violet.md`), 카드·표·캔버스는
+종이 흰색(측정면)으로 나눈다. "데이터는 여전히 잉크, 크롬은 이제 종이" —
+위계는 어둠이 아니라 hairline 경계선과 표면 명도로 표현한다.
+색은 "알아채야 하는 상태"에만 쓴다 — 차트가 이미 Okabe-Ito 8색
+(`model/split.py`)과 규격 빨강을 쓰고 있어서, UI가 같은 색조로 경쟁하면 눈이
+데이터로 가지 않는다. 액센트가 보라인 이유도 그것이다(차트·타깃 파랑이 쓰지
+않는 색조 — 차분한 보라 #6D5BD0, 흰 글자 대비 5.18:1).
 
 여기 있는 값이 `style.qss`의 `%TOKEN%` 자리로 들어간다. **색을 코드나 QSS에
 직접 적지 말고 반드시 이 표에 넣는다** — `tests/test_theme.py`가 대비(WCAG AA)를
@@ -24,19 +27,20 @@ log = logging.getLogger(__name__)
 
 # ── 토큰 ──────────────────────────────────────────────────────────────────
 TOKENS: dict[str, str] = {
-    # 크롬 — 무채색. 상단바·도크·콘솔.
-    "INK":       "#12161B",
-    "INK_2":     "#1A1F26",
-    "INK_3":     "#252C35",     # 크롬 위 hover
-    "INK_LINE":  "#2A313A",
-    "INK_TEXT":  "#E6E9ED",
-    "INK_MUTED": "#9AA4B2",     # INK 대비 6.6:1
+    # 크롬 — 밝은 무채색(라이트 크롬). 상단바·도크.
+    "INK":       "#F5F6F9",     # 은은한 보라 틴트 (calm-accent-violet)
+    "INK_2":     "#FFFFFF",     # 크롬 위 입력면·올린 표면
+    "INK_3":     "#E9EAF0",     # 크롬 위 hover (보라 틴트)
+    "INK_LINE":  "#E1E2E9",     # 크롬 hairline (보라 틴트)
+    "INK_TEXT":  "#1B2027",
+    "INK_MUTED": "#5F6874",     # INK 대비 5.3:1
 
-    # 크롬 위 신호색 — 어두운 배경에서는 같은 색조를 밝게 쓴다
-    "ACC_INK":  "#63C6CE",
-    "OK_INK":   "#5FCB8E",
-    "WARN_INK": "#E4A85C",
-    "ERR_INK":  "#F08A93",
+    # 크롬 위 신호색 — 어두운 크롬이 사라져 "한 색조를 밝게 뒤집는" 일이
+    # 필요 없으므로 측정면 신호색과 같은 값으로 단일화한다.
+    "ACC_INK":  "#6D5BD0",
+    "OK_INK":   "#136B3A",
+    "WARN_INK": "#8A4B00",
+    "ERR_INK":  "#B91C1C",
 
     # 측정면 — 종이. 카드·표·캔버스.
     "PAPER":  "#FFFFFF",
@@ -47,29 +51,32 @@ TOKENS: dict[str, str] = {
     "TEXT":   "#12161B",
     "MUTED":  "#5C6672",        # PAPER 대비 5.9:1 (예전 #a1a1a6은 2.3:1)
 
-    # 신호 — 주 동작·상태.
-    "ACC":       "#0B6E77",     # 딥 틸. 흰 글자 5.5:1
-    "ACC_H":     "#095A62",
-    "ACC_SOFT":  "#E4EFF0",
-    "ACC_LINE":  "#9CC3C7",
-    "WARN":      "#8A4B00",     # 미적용(dirty). 흰 글자 6.0:1
+    # 신호 — 주 동작·상태. 액센트는 차분한 보라 — 딥 인디고·파랑은 Okabe-Ito
+    # 파랑(#0072B2)·타깃 파랑(#0071e3)과 겹치기 쉽고 레거시 공정관리 툴
+    # 냄새가 난다 (`design-plans/calm-accent-violet.md`).
+    "ACC":       "#6D5BD0",     # 보라. 흰 글자 5.18:1
+    "ACC_H":     "#5A49B8",
+    "ACC_SOFT":  "#F2F0FC",
+    "ACC_LINE":  "#B9B0E8",
+    "WARN":      "#8A4B00",     # 미적용(dirty). 흰 글자 6.8:1
     "WARN_H":    "#6F3C00",
-    "WARN_SOFT": "#FBF0E2",
+    "WARN_SOFT": "#FEF3E2",
     "WARN_TEXT": "#7A4300",     # WARN_SOFT 위 글자
-    "ERR":       "#B3121B",
-    "ERR_SOFT":  "#FCECEE",
-    "OK":        "#136B3A",
+    "ERR":       "#B91C1C",     # 흰 글자 6.5:1
+    "ERR_SOFT":  "#FDECEC",
+    "OK":        "#136B3A",     # 흰 글자 6.6:1
     "OK_SOFT":   "#E7F3EB",
     "DIM":       "#7C8593",     # 흐린 글자·플레이스홀더 (FIELD 위 3.4:1)
     "DISABLED":  "#CBD1D9",     # 비활성 버튼 표면 (그 위 글자는 MUTED)
 
-    # 형태
-    "RADIUS":    "6px",
-    "RADIUS_LG": "10px",
+    # 형태 — 바깥(카드)일수록 크게, 안쪽(뱃지·칩)일수록 작게. 전부 같은
+    # 모서리를 주면 카드 안의 요소가 카드처럼 보여 층이 사라진다.
+    "RADIUS":    "8px",
+    "RADIUS_LG": "14px",
     "RADIUS_SM": "4px",
 
     # 글자 크기 — 6단계만 쓴다
-    "FS_MICRO": "10.5px",
+    "FS_MICRO": "11px",
     "FS_SM":    "11.5px",
     "FS_BASE":  "13px",
     "FS_NUM":   "12.5px",       # 모노(숫자·식별자)
@@ -221,8 +228,8 @@ def _apply_palette(app) -> None:
         QPalette.BrightText:      C(TOKENS["ERR"]),
         QPalette.Highlight:       C(TOKENS["ACC"]),
         QPalette.HighlightedText: C(TOKENS["PAPER"]),
-        QPalette.ToolTipBase:     C(TOKENS["INK"]),
-        QPalette.ToolTipText:     C(TOKENS["INK_TEXT"]),
+        QPalette.ToolTipBase:     C(TOKENS["PAPER"]),
+        QPalette.ToolTipText:     C(TOKENS["TEXT"]),
         QPalette.Link:            C(TOKENS["ACC"]),
         QPalette.Mid:             C(TOKENS["RULE"]),
         QPalette.Midlight:        C(TOKENS["FIELD"]),

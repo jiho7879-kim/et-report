@@ -162,9 +162,9 @@ def test_scatter_mode_avg_aggregates_per_wafer():
     fig = render(PlotSpec(x="A", y="B", mode="avg"), {"": df},
                  _one_style(), rf, [], (4, 3))
     ax = fig.axes[0]
-    colls = [c for c in ax.collections if c.get_offsets().shape[0] > 0]
-    assert len(colls) == 1
-    assert len(colls[0].get_offsets()) == 4   # wafer 4장
+    # 점을 무엇으로 그렸는지(Line2D/PathCollection)는 성능 문제이지 계약이
+    # 아니다 — 세는 일은 렌더러의 `point_xy` 하나가 한다.
+    assert len(mpl_renderer.point_xy(ax)) == 4   # wafer 4장
 
 
 def test_scatter_mode_avg_uses_rf_agg():
@@ -175,9 +175,8 @@ def test_scatter_mode_avg_uses_rf_agg():
     fig = render(PlotSpec(x="A", y="B", mode="avg"), {"": df},
                  _one_style(), rf, [], (4, 3))
     ax = fig.axes[0]
-    colls = [c for c in ax.collections if c.get_offsets().shape[0] > 0]
-    pts = sorted((round(float(x), 6), round(float(y), 6))
-                 for x, y in colls[0].get_offsets())
+    pts = sorted((round(x, 6), round(y, 6))
+                 for x, y in mpl_renderer.point_xy(ax))
     # wafer 평균: (1.2+1.4)/2, (1.6+1.8)/2, ...
     assert pts == [(0.35, 1.3), (0.55, 1.7), (0.75, 2.1), (0.95, 2.5)]
 
@@ -190,9 +189,7 @@ def test_scatter_mode_std_aggregates_per_wafer():
     fig = render(PlotSpec(x="A", y="B", mode="std"), {"": df},
                  _one_style(), rf, [], (4, 3))
     ax = fig.axes[0]
-    colls = [c for c in ax.collections if c.get_offsets().shape[0] > 0]
-    assert len(colls) == 1
-    assert len(colls[0].get_offsets()) == 4
+    assert len(mpl_renderer.point_xy(ax)) == 4
 
 
 def test_scatter_site_keeps_die_level():
@@ -203,9 +200,7 @@ def test_scatter_site_keeps_die_level():
     fig = render(PlotSpec(x="A", y="B", mode="site"), {"": df},
                  _one_style(), rf, [], (4, 3))
     ax = fig.axes[0]
-    colls = [c for c in ax.collections if c.get_offsets().shape[0] > 0]
-    assert len(colls) == 1
-    assert len(colls[0].get_offsets()) == 8   # die 8개
+    assert len(mpl_renderer.point_xy(ax)) == 8   # die 8개
 
 
 # ── ref_band 제거 회귀 ─────────────────────────────────────

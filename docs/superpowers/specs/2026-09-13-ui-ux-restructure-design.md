@@ -261,9 +261,16 @@ def _fetch(sql):                 # extractor.py:95
   받으면 최소한 즉시 해제 + 상한 초과 시 차단.
 - **`preview_query`가 쿼리를 두 번 실행한다**(`LIMIT 200` 1회 + `count(*)` 1회).
   무거운 집계면 시간이 2배 → 전체 행 수는 지연 계산으로 옮긴다.
-- **DuckDB에 `memory_limit`이 없다**(`loader.py:47`은 `threads: 4`만).
-  `memory_limit`·`temp_directory`를 설정해 **OOM 대신 디스크로 흘리게** 한다.
-  SQL 창과 적재 양쪽에 동시에 듣는 가장 값싼 안전장치다.
+- **DuckDB `readonly_config()`에 `memory_limit`이 없다**(`loader.py:28-48`).
+  `temp_directory`는 **이미 설정돼 있다**(디스크 스필용, `{"threads": 4}`만
+  돌려주는 것은 mkdir이 실패했을 때의 폴백 경로다). 빠진 것은 상한뿐이라,
+  DuckDB가 기본값인 **물리 메모리의 80%**까지 쓴다. 현장 PC는 Excel COM과
+  메모리를 나눠 쓰므로 이 기본값이 과하다 → 명시적 `memory_limit`으로 예측
+  가능한 천장을 준다. 단, 과거 로그의 `Arrow buffer failed to allocate`는
+  DuckDB 내부가 아니라 **결과를 파이썬으로 실체화하는 쪽**에서 났으므로
+  `memory_limit`이 그 사고를 직접 막지는 않는다 — 그쪽은 이미 `LIMIT 200` +
+  `COPY TO`로 막혀 있고, 여기서 얻는 것은 DuckDB가 다른 프로세스를 굶기지
+  않게 하는 것이다.
 
 ### 4-C. Plot 핸들링 (지목된 UI 병목)
 
@@ -338,13 +345,78 @@ matplotlib 렌더는 UI 스레드 유지(워커로 옮기면 폰트·텍스트 �
 
 | # | 단계 | 주요 파일 |
 |---|---|---|
-| 1 | 골격 — 하단 액션바 + 인스펙터 패널 + 3단 재조립 + 패널 접기(F9/F10) | `ui/actionbar.py`(신) `ui/inspector.py`(신) `analysis_ws.py` |
-| 2 | 왼쪽 레일 — 프리셋 `⋯`, 파일행 필수/선택, 접힘 섹션, `[적용]` 하단 고정 | `ui/source_rail.py`(신) |
-| 3 | 그룹 단일화 — `GroupStyleCard` 흡수, 도크 그룹 리스트 제거 | `ui/widgets/group_section.py`(신) `widgets/style_card.py` |
-| 4 | 탭 정리 + **plot 병목(4-C)** — 같은 파일을 만지므로 함께 | `tabs/explore.py` `summary.py` `report.py` `plot_canvas.py` `mpl_renderer.py` `model/state.py` |
-| 5 | 빈 상태 3종 + **입력 가이드(§5)** + 도구 재배치 | `ui/guidance.py`(신) `mainwindow.py` 각 탭 |
-| 6 | 데이터 화면 + **OOM(4-A·4-B)** | `data_ws.py` `extractor.py` `loader.py` `sql_dialog.py` |
-| 7 | 마감 — 테스트 갱신, 설명서 PDF 재생성, 문서 갱신, 성능 전후 기록 | `tests/*` `tools/make_manual.py` `CLAUDE.md` `README.md` |
+| 1 | ✅ 골격 — 하단 액션바 + 인스펙터 패널 + 3단 재조립 + 패널 접기(F9/F10) | `ui/actionbar.py`(신) `ui/inspector.py`(신) `analysis_ws.py` |
+| 2 | ✅ 왼쪽 레일 — 프리셋 `⋯`, 파일행 필수/선택, 접힘 섹션, `[적용]` 하단 고정 | `ui/source_rail.py`(신) |
+| 3 | ✅ 그룹 단일화 — `GroupStyleCard` 흡수, 도크 그룹 리스트 제거 | `ui/widgets/group_section.py`(신) `widgets/style_card.py` |
+| 4 | ✅ 탭 정리 + **plot 병목(4-C)** — 같은 파일을 만지므로 함께 | `tabs/explore.py` `summary.py` `report.py` `plot_canvas.py` `mpl_renderer.py` `model/state.py` |
+| 5 | ✅ 빈 상태 3종 + **입력 가이드(§5)** + 도구 재배치 | `ui/guidance.py`(신) `mainwindow.py` 각 탭 |
+| 6 | ✅ 데이터 화면 + **OOM(4-A·4-B)** | `data_ws.py` `extractor.py` `loader.py` `sql_dialog.py` |
+| 7 | ✅ 마감 — 테스트 갱신, 설명서 PDF 재생성, 문서 갱신, 성능 전후 기록 | `tests/*` `tools/make_manual.py` `CLAUDE.md` `README.md` |
+
+### 진행 기록
+
+**단계 1 (2026-09-13, 완료).** `ActionBar`·`InspectorPanel`을 만들고
+`AnalysisWorkspace`를 `[레일 | 탭 | 인스펙터] + 액션바`로 다시 조립했다.
+탭은 `action_items()`/`inspector_sections()`로 **자기가 만든 위젯을 그대로**
+넘긴다(프록시 금지 — dirty `•`·`Ctrl+Enter`가 갈린다). 요약의 2번째 칼럼과
+리포트의 자체 인스펙터(292px)가 사라져 1366×768에서 탭이 쓰는 폭이 616 → 794px가
+됐다. F9·F10으로 양쪽을 접으면 1350px. 새 테스트는 `test_actionbar.py`·
+`test_layout_narrow.py`.
+
+곁가지로 드러난 것: `test_app_boot`의 excepthook 테스트가 **앞선 파일이
+QApplication을 만들어 두면 모달에서 멈추는** 순서 의존을 갖고 있었다(액션바
+테스트가 알파벳 앞이라 드러났다). `no_modal_dialogs`를 conftest 공용 픽스처로
+올리고 "같은 오류는 한 번만 알린다" 계약을 테스트로 고정했다.
+
+남은 것: 레일 폭은 아직 `DOCK_WIDTH = 300`(단계 2에서 244로), 리포트 페이지
+목록은 아직 세로 158px(단계 4에서 가로 스트립), 그룹 스타일 카드는 아직 탐색·
+리포트에 한 벌씩(단계 3에서 인스펙터 공용 `shared`로 합친다 — 자리는 만들어 뒀다).
+
+**단계 2~6 (2026-09-13, 완료).** 레일(`source_rail.SourceRail`, `RAIL_WIDTH=244`)
+— 프리셋 `⋯` 메뉴, 파일 5행의 필수/선택 구분, 접힘 섹션(lot·이상치·추가 소스),
+`[적용]`은 스크롤 **밖** 하단 고정. 위젯만 갖고 동작은 워크스페이스가 한다.
+그룹은 `widgets/group_section.GroupSection` 하나로 합쳐(`style_card.py` 삭제)
+워크스페이스가 한 개만 만들고, 리스트에서 고른 행이 곧 편집 대상이라 그룹 고르기
+콤보가 사라졌다. 리포트 페이지 목록은 가로 스트립(`widgets/page_strip.py`, 36px).
+plot 병목 다섯(§4-C)과 입력 가이드(`ui/guidance.py` — 필요 표시·`F2`·빈 상태가
+같은 판정을 읽는다), 데이터 화면의 기간 카드 통합과 액션바, 추출 OOM(§4-A)·
+SQL 창(§4-B)·`memory_limit`까지 들어갔다.
+
+**단계 7 (2026-09-15~16, 완료).** 마감에서 정리한 것과, 마감이 **드러낸 것** 셋.
+
+- 단계 6의 마지막 줄(행 수 기준 분할)을 채웠다. 첫 청크를 단독 실행해 실측한
+  행 수가 `MAX_ROWS_PER_UNIT`을 넘으면 `plan_group_size()`가 새 item 그룹
+  크기를 정하고 `resplit_units()`가 **아직 시작하지 않은 단위만** 다시 나눈다.
+  `plan_units`에 `max_rows`를 받는 대신 `group_size`를 받게 했다 — 계획 시점에는
+  행 수를 알 수 없고, 아는 것은 첫 청크를 재고 난 뒤인 실행부다.
+- **워커 풀 버그.** `ThreadPoolExecutor(max_workers=workers)`를 `workers=1`로
+  만들어 두고 나중에 `workers`를 4로 올리고 있었다 — `max_workers`는 생성 후
+  못 늘리므로 추출이 **영영 직렬**이었다. 풀은 상한으로 만들고 동시에 띄우는
+  수만 조절하도록 고쳤다(`test_workers_ramp_up_after_the_first_measured_chunk`).
+- **유령 캔버스.** 리포트 슬롯을 다시 만들 때 `deleteLater()`만 불러, 파괴가
+  이벤트 루프로 밀리는 동안 옛 캔버스 6개가 예전 자리에 계속 그려졌다
+  (미리보기를 두 번 누르면 12개, 세 번이면 18개). 설명서 캡처의 슬롯 경계에
+  삐져나온 축 조각이 그것이었다. 레이아웃에서 뺀 위젯은 `tabs/common.detach()`로
+  부모를 즉시 끊는다 — 같은 패턴이던 네 곳(리포트·요약·페이지 스트립·데이터
+  조건 행)을 모두 고쳤다.
+- 그룹 색 견본 버튼의 `색`이 기본 버튼 padding(좌우 18px)에 밀려 세로 막대로
+  뭉개져 있었다. `swatch_qss`가 padding을 덮는다.
+- `Std` 그룹 표본표준편차(요청 ⑤)가 들어오면서 `test_bigset`의 행 단위 대조가
+  정의가 다른 둘을 비교하고 있었다(대용량 테스트라 기본 실행에서 빠져 드러나지
+  않았다). 순수 `Std` 규칙은 갈라내고 **그룹 정의로** 따로 검증한다.
+- 설명서 PDF 재생성, `CLAUDE.md`(레일·그룹·스트립·가이드·OOM·`detach`),
+  `README.md` 폴더 구조 전면 갱신.
+
+성능 전후(데모 데이터를 20만 행으로 늘려 같은 스크립트로 개편 전 커밋과 비교):
+리포트 미리보기(슬롯 6개) **1.15초 → 0.69초**, 탐색 [그리기] 0.32초 → 0.23초,
+`active()` 12회 0.11초 → 0.00초. 대용량 회귀(`pytest -m slow -s`)는 리포메팅
+0.46초 / 적재 1.2초 / 7일 적재 4.7초로 개편 전과 같은 자릿수다.
+
+**환경 주의.** `myenv`는 CLAUDE.md의 설명과 달리 editable이 아니라 **복사본
+설치**(site-packages에 etreport 1.3.0)가 들어 있다. `pytest`(pythonpath=src)와
+`python app.py`는 `src/`를 보지만, `myenv/bin/etreport`와 맨 `python -c "import
+etreport"`는 **옛 사본**을 본다 — 고친 것이 반영되지 않는 것처럼 보인다.
+`myenv/bin/pip install -e .`로 되돌리는 것이 좋다.
 
 ---
 

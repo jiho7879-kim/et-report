@@ -2,7 +2,7 @@
 
 화면 로직에는 테스트가 없었다. 여기서는 headless(offscreen)로 창을 띄워
 ① 세 탭이 조립되는지 ② 지연 계산(StaleMixin) 규약이 지켜지는지
-③ Summary 복사가 화면 표와 같은 숫자인지 를 확인한다.
+③ 요약 복사가 화면 표와 같은 숫자인지 를 확인한다.
 
 Qt를 띄울 수 없는 환경이면 통째로 skip한다.
 """
@@ -27,15 +27,9 @@ def qapp():
 
 
 @pytest.fixture(autouse=True)
-def no_modal_dialogs(qapp, monkeypatch):
-    """모달 창은 headless에서 영원히 기다린다 — 전부 눌린 셈 치고 넘긴다."""
-    from PySide6.QtWidgets import QMessageBox
-
-    for name in ("information", "warning", "critical"):
-        monkeypatch.setattr(QMessageBox, name,
-                            staticmethod(lambda *a, **k: QMessageBox.Ok))
-    monkeypatch.setattr(QMessageBox, "question",
-                        staticmethod(lambda *a, **k: QMessageBox.Yes))
+def _no_modal_dialogs(qapp, no_modal_dialogs):
+    """모달 차단은 conftest의 공용 픽스처가 한다 — 여기서는 자동으로 걸기만."""
+    return no_modal_dialogs
 
 
 @pytest.fixture
@@ -56,7 +50,7 @@ def win(qapp, appdata):
 def test_window_builds_all_tabs(win):
     assert win.anal_ws.tabs.count() == 3
     assert [win.anal_ws.tabs.tabText(i) for i in range(3)] == [
-        "탐색", "Summary", "리포트 구성"]
+        "탐색", "요약", "리포트 구성"]
 
 
 def test_explore_draws_demo_data(win):
@@ -74,7 +68,7 @@ def test_stale_toggles_dirty_property(win):
     tab.mark_stale()
     assert tab.btn_build.property("dirty") == "true"
     assert "표 만들기" in tab.lbl_state.text()
-    # Summary는 보고 있어도 자동으로 만들지 않는다 (확정 사양)
+    # 요약은 보고 있어도 자동으로 만들지 않는다 (확정 사양)
     assert tab._stale
 
 

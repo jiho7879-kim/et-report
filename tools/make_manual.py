@@ -64,6 +64,7 @@ def capture(win, out_dir: Path) -> dict[str, Path]:
     anal.tab_explore.ed_x.setText("W")
     anal.tab_explore.ed_y.setText(", ".join(win.state.aliases()[:2]))
     anal.tab_explore._axes_changed()
+    anal.tab_explore.redraw()          # [그리기] — 지연 규약상 버튼으로 그린다
     shot("trend")
 
     anal.tabs.setCurrentIndex(1)

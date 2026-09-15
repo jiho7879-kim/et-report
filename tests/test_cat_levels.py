@@ -170,7 +170,7 @@ def test_ppt_label_width_follows_cat_count():
     assert wide > narrow
 
 
-# ── 화면(Summary 탭) ─────────────────────────────────────────
+# ── 화면(요약 탭) ─────────────────────────────────────────
 @pytest.fixture(scope="module")
 def qapp():
     try:

@@ -7,11 +7,21 @@ venv/
 myenv/
 
 # 빌드 산출물
-/*.spec                 # PyInstaller가 루트에 자동 생성하는 것
-!build/ETReport.spec    # 빌드 정의는 저장소에 둔다
-build/pyi/              # PyInstaller 작업 폴더
-build/site_extras.py    # 사내 인증서·라이브러리 경로 — 커밋 금지
-src/etreport/assets/build_info.json   # 빌드할 때 굽는 스탬프
+# .gitignore는 **줄 끝 주석을 모르므로** 주석은 반드시 제 줄에 둔다 —
+# `build/pyi/  # 설명`은 그 문장 전체가 패턴이 되어 아무것도 걸러지지 않았다.
+# PyInstaller가 루트에 자동 생성하는 것
+/*.spec
+# 빌드 정의는 저장소에 둔다
+!build/ETReport.spec
+# PyInstaller 작업 폴더
+build/pyi/
+# setuptools(pip install .)가 만드는 복사본
+build/lib/
+build/bdist.*/
+# 사내 인증서·라이브러리 경로 — 커밋 금지
+build/site_extras.py
+# 빌드할 때 굽는 스탬프
+src/etreport/assets/build_info.json
 dist/
 *.zip
 *.pptx
@@ -37,3 +47,14 @@ sessions/
 
 # opencode 세션 아티팩트
 .omo/
+.omx/
+.omx-state-locks/
+.omx-state-locks.identity.json
+.codex/*
+!.codex/agents/
+!.codex/agents/**
+!.codex/skills/
+!.codex/skills/**
+.codex/skills/.system/**
+!.codex/prompts/
+!.codex/prompts/**

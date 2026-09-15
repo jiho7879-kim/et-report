@@ -82,8 +82,16 @@ def test_dim_is_readable_enough():
 
 
 def test_chrome_and_paper_are_separated():
-    """크롬과 측정면은 확실히 다른 면이어야 한다(둘이 붙으면 경계가 사라진다)."""
-    assert contrast(theme.TOKENS["INK"], theme.TOKENS["PAPER"]) > 10
+    """크롬과 측정면은 다른 면이어야 한다(둘이 붙으면 경계가 사라진다).
+
+    어두운 테마는 명도 차이만으로 면을 갈랐지만, 라이트 테마의 크롬(#F6F7F9)과
+    측정면(#FFFFFF)은 명도가 가까워 눈으로 구분되지 않는다 — 대신 #dock의
+    border-right hairline이 경계를 그린다. 따라서 "색이 달라야 한다"는 값 그
+    자체가 아니라 **경계선 규칙이 있어야 한다**로 바뀐다.
+    """
+    qss = theme.qss_path().read_text(encoding="utf-8")
+    assert theme.TOKENS["INK"] != theme.TOKENS["PAPER"]
+    assert "border-right:1px solid %INK_LINE%" in qss
 
 
 # ── ③ 덮는 범위 ──────────────────────────────────────────────────────────
@@ -101,9 +109,32 @@ def test_chrome_and_paper_are_separated():
     "#statusRail",
     "#fileRow",
     "#toast",
+    "#console",
+    "#probePanel",
+    "#toolStrip",
+    "#pageStrip",
+    "#inspector",
 ])
 def test_qss_covers(selector):
     assert selector in theme.qss_path().read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("surface", [
+    "#console",
+    "#probePanel",
+    "#toolStrip",
+    "#pageStrip",
+    "#inspector",
+])
+def test_chrome_surface_checkbox_text(surface):
+    """새 크롬 표면의 체크박스 글자는 크롬 글자색이어야 한다(도크와 같은 이유).
+
+    QCheckBox는 QLabel이 아니라 `#dock QLabel` 규칙이 닿지 않는다. 규칙이
+    없으면 전역 `QWidget { color:TEXT }`(측정면용 먹색)를 물려받아 어두운
+    크롬 위에 어두운 글자가 찍히고, 라벨이 통째로 안 보인다.
+    """
+    qss = theme.qss_path().read_text(encoding="utf-8")
+    assert f"{surface} QCheckBox" in qss
 
 
 def test_no_global_widget_background():

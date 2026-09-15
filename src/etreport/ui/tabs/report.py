@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
     QMessageBox,
     QPushButton,
     QVBoxLayout,
@@ -29,12 +28,17 @@ from etreport.model.specs import (
     POINT_MODES,
 )
 from etreport.model.state import AppState, StateBus
-from etreport.ui.tabs.common import StaleMixin, on_combo
+from etreport.ui.actionbar import ActionItems
+from etreport.ui.tabs.common import StaleMixin, detach, on_combo
 from etreport.ui.widgets.autocomplete import AutoCompleteEdit
-from etreport.ui.widgets.cards import Card, GhostButton, row
+from etreport.ui.widgets.cards import ChromeSection, GhostButton, row
+from etreport.ui.widgets.page_strip import PageStrip
 from etreport.ui.widgets.plot_canvas import PlotCanvas
 from etreport.ui.widgets.slot_grid import SlotFrame, swap_slots
 from etreport.ui.widgets.worker import run_in_background
+
+#: 예전 이름 — 이 모듈의 섹션 위젯은 cards.ChromeSection 하나로 합쳤다.
+_ChromeSection = ChromeSection
 
 
 class ReportTab(StaleMixin, QWidget):
@@ -53,11 +57,13 @@ class ReportTab(StaleMixin, QWidget):
         self._frames: list[SlotFrame] = []
         self._canvases: dict[int, PlotCanvas] = {}   # 슬롯 index → 살아 있는 캔버스
 
-        lay = QHBoxLayout(self)
+        lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 10, 16, 14)
-        lay.setSpacing(12)
-        self.pages = QListWidget()
-        self.pages.setFixedWidth(158)
+        lay.setSpacing(8)
+
+        # 페이지는 **가로 스트립**이다 — 세로 목록(158px)을 슬라이드에 돌려준다
+        # (설계 §2). 3장이면 전부 보이고 30장이어도 세로 높이는 36px 그대로다.
+        self.pages = PageStrip()
         self.pages.currentRowChanged.connect(self._page_changed)
         lay.addWidget(self.pages)
 
@@ -67,17 +73,19 @@ class ReportTab(StaleMixin, QWidget):
         self.ed_title.textEdited.connect(self._title_changed)
         bar.addWidget(QLabel("페이지 제목"))
         bar.addWidget(self.ed_title, 1)
-        b_save = GhostButton("템플릿에 저장")
-        b_save.setToolTip("화면 배치를 plot 템플릿 엑셀에 되씁니다 (.bak 사본 생성)")
-        b_save.clicked.connect(self._save_template)
-        bar.addWidget(b_save)
-        self.btn_draw = QPushButton("미리보기")
-        self.btn_draw.clicked.connect(self.rebuild)
-        bar.addWidget(self.btn_draw)
-        b = QPushButton("PPT 생성")
-        b.clicked.connect(self._ppt)
-        bar.addWidget(b)
         mid.addLayout(bar)
+
+        # [미리보기]·[PPT 생성]·[템플릿에 저장]은 하단 액션바가 갖는다
+        # (설계 §1 규칙 3 — 주 동작은 움직이지 않고, 결과는 오른쪽 끝에서 꺼낸다).
+        self.btn_draw = QPushButton("미리보기")
+        self.btn_draw.setToolTip("이 페이지의 슬롯을 다시 그립니다 (Ctrl+Enter)")
+        self.btn_draw.clicked.connect(self.rebuild)
+        self.btn_save_tpl = GhostButton("템플릿에 저장")
+        self.btn_save_tpl.setToolTip(
+            "화면 배치를 plot 템플릿 엑셀에 되씁니다 (.bak 사본 생성)")
+        self.btn_save_tpl.clicked.connect(self._save_template)
+        self.btn_ppt = QPushButton("PPT 생성")
+        self.btn_ppt.clicked.connect(self._ppt)
 
         tools = QHBoxLayout()
         self.chk_pick = QCheckBox("클릭으로 점 제외")
@@ -95,9 +103,8 @@ class ReportTab(StaleMixin, QWidget):
         hint.setObjectName("hint")
         tools.addWidget(hint)
         tools.addStretch(1)
-        self.lbl_excl = QLabel()
+        self.lbl_excl = QLabel()          # 액션바 가운데 상태 줄
         self.lbl_excl.setObjectName("hint")
-        tools.addWidget(self.lbl_excl)
         mid.addLayout(tools)
 
         self.slide = QFrame()
@@ -113,10 +120,11 @@ class ReportTab(StaleMixin, QWidget):
         sv.addWidget(self.grid_host, 1)
         mid.addWidget(self.slide, 1)
         mw = QWidget()
+        mw.setContentsMargins(0, 0, 0, 0)
         mw.setLayout(mid)
         lay.addWidget(mw, 1)
 
-        lay.addWidget(self._build_inspector())
+        self._sections = self._build_sections()
 
         # [적용]·템플릿 변경은 dirty만, 그룹 토글은 즉시 반영(확정 §3)
         bus.groups_changed.connect(self.refresh_if_visible)
@@ -154,14 +162,16 @@ class ReportTab(StaleMixin, QWidget):
             return None
         return st.report.pages[self.page_idx].slots[idx]
 
-    # ── 인스펙터 ─────────────────────────────────────────────
-    def _build_inspector(self) -> QWidget:
-        side = QWidget()
-        side.setFixedWidth(276)
-        sv = QVBoxLayout(side)
-        sv.setContentsMargins(0, 0, 0, 0)
+    # ── 인스펙터 (패널은 워크스페이스가 하나만 소유한다) ─────
+    def action_items(self) -> ActionItems:
+        return ActionItems(primary=self.btn_draw, status=self.lbl_excl,
+                           extra=[self.btn_save_tpl, self.btn_ppt])
 
-        self.slot_card = Card("선택한 슬롯")
+    def inspector_sections(self) -> list[QWidget]:
+        return self._sections
+
+    def _build_sections(self) -> list[QWidget]:
+        self.slot_card = ChromeSection("선택한 슬롯")
         # X·Y는 리포메터 ALIAS를 자동완성으로 — 빈 슬롯에서도 바로 그릴 수 있게
         self.ed_sx = AutoCompleteEdit(self._x_items)
         self.ed_sy = AutoCompleteEdit(self._alias_items)
@@ -188,7 +198,9 @@ class ReportTab(StaleMixin, QWidget):
         self.cmb_point.setToolTip("이 슬롯의 점을 무엇으로 찍을지 — 템플릿 Mode 열")
         on_combo(self.cmb_point, self._slot_edited)
         self.slot_card.body.addWidget(self.cmb_point)
-        self.btn_point_all = GhostButton("모든 plot에 적용")
+        # 라벨에 **무엇을** 적용하는지 적는다 — 예전에는 이 화면에 뜻이 다른
+        # `[모든 plot에 적용]`이 둘이었다(여기는 점 표시, 그룹 섹션은 스타일).
+        self.btn_point_all = GhostButton("점 표시를 전 슬롯에")
         self.btn_point_all.setToolTip(
             "이 점 표시 방식을 모든 페이지의 모든 plot 슬롯에 적용합니다.")
         self.btn_point_all.clicked.connect(self._point_to_all)
@@ -207,9 +219,8 @@ class ReportTab(StaleMixin, QWidget):
         b_del = GhostButton("이 슬롯 비우기")
         b_del.clicked.connect(self._clear_slot)
         self.slot_card.body.addWidget(b_del)
-        sv.addWidget(self.slot_card)
 
-        self.info = Card("생성될 덱")
+        self.info = ChromeSection("생성될 덱")
         self.lbl_info = QLabel()
         # **일반 텍스트 + 직접 줄바꿈.** 리치 텍스트(<br>)는 Qt가 위젯 폭에 맞춰
         # 다시 흘려보내는데, 폭이 고정된 사이드 카드에서는 sizeHint가 실제보다
@@ -226,23 +237,10 @@ class ReportTab(StaleMixin, QWidget):
         on_combo(self.cmb_tbl, lambda: self._mode_changed(
             self.cmb_tbl.currentIndex()))
         self.info.body.addWidget(self.cmb_tbl)
-        sv.addWidget(self.info)
-        # 탐색 탭과 **같은 카드** — 색·심볼·크기·REF를 여기서도 바꿀 수 있다
-        from etreport.ui.widgets.style_card import GroupStyleCard
-        self.style_card = GroupStyleCard(self.state, self.bus,
-                                         on_changed=self.refresh_if_visible)
-        sv.addWidget(self.style_card)
-        sv.addStretch(1)
-
-        # 스크롤에 담는다 — 창이 낮으면 Qt가 카드를 sizeHint 아래로 눌러
-        # '생성될 덱' 마지막 줄이 잘렸다(1500×940에서 실제로 잘렸다).
-        from PySide6.QtWidgets import QScrollArea
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setWidget(side)
-        scroll.setFixedWidth(292)
-        return scroll
+        # 그룹 스타일 카드는 여기 없다 — 인스펙터 공용 [그룹] 섹션 하나가 갖는다
+        # (설계 §1 규칙 2). 예전에는 이 화면 한 장면에 뜻이 다른
+        # `[모든 plot에 적용]`이 둘이나 있었다(점 표시 / 그룹 스타일).
+        return [self.slot_card, self.info]
 
     def _alias_items(self) -> list[str]:
         """자동완성 후보 — 리포메터 ALIAS, 없으면 데이터의 item 컬럼."""
@@ -463,18 +461,21 @@ class ReportTab(StaleMixin, QWidget):
         st = self.state
         self.mark_fresh()
         if st.report is None or not st.report.pages:
-            self.pages.clear()
-            self.slide_title.setText("Plot 템플릿을 열고 REPORT를 선택하세요")
+            from etreport.ui import guidance
+            self.pages.set_pages([])
+            self.slide_title.setText("")
             self._clear_grid()
+            lab = QLabel(guidance.empty_message(st, "report"))
+            lab.setObjectName("emptyHint")
+            lab.setAlignment(Qt.AlignCenter)
+            lab.setWordWrap(True)
+            self.grid.addWidget(lab, 1)
+            self._update_info()
             return
-        self.pages.blockSignals(True)
-        self.pages.clear()
-        for p in st.report.pages:
-            n = sum(1 for s in p.slots if s)
-            self.pages.addItem(f"{p.number}. {p.title}\n     슬롯 {n}/6")
         self.page_idx = min(self.page_idx, len(st.report.pages) - 1)
-        self.pages.setCurrentRow(self.page_idx)
-        self.pages.blockSignals(False)
+        self.pages.set_pages(
+            [f"{p.number}. {p.title}  ({sum(1 for s in p.slots if s)}/6)"
+             for p in st.report.pages], self.page_idx)
 
         page = st.report.pages[self.page_idx]
         self.ed_title.setText(page.title)
@@ -529,7 +530,7 @@ class ReportTab(StaleMixin, QWidget):
         while self.grid.count():
             it = self.grid.takeAt(0)
             if it.widget():
-                it.widget().deleteLater()
+                detach(it.widget())
 
     # ── 저장 / 생성 ──────────────────────────────────────────
     def _save_template(self) -> None:

@@ -1,10 +1,12 @@
 """inline 계측 창 — step_id·item_id 목록을 받아 분석 데이터에 붙인다(기능 B).
 
-흐름은 셋뿐이다.
+흐름은 넷뿐이다.
   1. 엑셀에서 복사한 `step_id  item_id` 목록을 붙여넣는다
   2. [불러오기] — **분석 중인 lot에 한해** `fab.f_fab_wf_met`를 조회해
-     (lot, wafer)로 붙인다. site/wafer level은 확정 규칙을 따른다
-  3. [유의 인자 분석] — 계측 인자 × ET item을 훑어 top-k를 뽑는다.
+     미리보기만 보여 준다(분석 데이터에는 아직 붙이지 않는다)
+  3. [분석에 활용] — 조회 결과를 (lot, wafer)로 분석 데이터에 붙인다.
+     이 버튼을 누르기 전에는 **결과만 조회한 상태**다(요구 사항)
+  4. [유의 인자 분석] — 계측 인자 × ET item을 훑어 top-k를 뽑는다.
      결과는 상태에 남아 [PPT 생성] 때 슬라이드로 나간다
 
 지연 계산 규약을 지킨다 — 이 창에서도 버튼을 눌러야 계산한다.
@@ -100,6 +102,14 @@ class MetrologyDialog(QDialog):
         b = QPushButton("불러오기")
         b.clicked.connect(self._load)
         bar.addWidget(b)
+        self.btn_use = QPushButton("분석에 활용")
+        self.btn_use.setEnabled(False)   # 조회 전에는 누를 수 없다
+        self.btn_use.setToolTip(
+            "조회한 계측값을 분석 데이터에 (lot, wafer)로 붙입니다.\n"
+            "누르기 전에는 결과를 조회만 한 상태입니다 — 누른 뒤에\n"
+            "탐색 X축 · 요약 표 · PPT에서 쓸 수 있습니다.")
+        self.btn_use.clicked.connect(self._use)
+        bar.addWidget(self.btn_use)
         bar.addSpacing(12)
         bar.addWidget(QLabel("top-k"))
         self.spin_k = QSpinBox()
@@ -184,15 +194,41 @@ class MetrologyDialog(QDialog):
                           done=lambda df: self._load_done(df, len(lots)))
 
     def _load_done(self, met, n_lots: int) -> None:
-        """조회 결과를 프레임에 붙인다 — UI 갱신은 여기서만."""
+        """조회 결과를 미리보기만 한다 — 데이터에는 [분석에 활용]으로 붙인다.
+
+        UI 갱신은 여기서만. 이 함수는 `state.data`를 건드리지 않는다 — 사용자가
+        결과를 먼저 보고 붙일지 말지 정해야 하기 때문이다(요구: 버튼을 누르지
+        않으면 그냥 결과만 조회한 상태).
+        """
+        self.met = met
+        self.btn_use.setEnabled(met is not None and not met.is_empty())
+        wide = self._met_wide()
+        names = ([c for c in wide.columns if c not in ("lot", "wafer")]
+                 if wide is not None else [])
+        self.lbl.setText(
+            f"lot {n_lots}개 · 계측 {len(names)}개 조회 완료 — "
+            f"[분석에 활용]을 누르면 분석 데이터에 붙습니다")
+        self._show_met_preview()
+
+    def _use(self) -> None:
+        """[분석에 활용] — 조회 결과를 이 버튼으로 분석 데이터에 붙인다."""
         from etreport.data import metrology as mt
         st = self.state
-        self.met = met
+        if st.data is None:
+            self.lbl.setText("먼저 [적용]으로 분석 DB를 여세요")
+            return
+        if self.met is None:
+            self.lbl.setText("먼저 [불러오기]로 계측값을 조회하세요")
+            return
         st.data, names = mt.attach(st.data, self.met, self.level())
+        if not names:
+            self.lbl.setText("붙일 새 계측 열이 없습니다 (같은 이름이 이미 붙어 있습니다)")
+            self._show_met_preview()
+            return
         st.met_columns = sorted({*st.met_columns, *names})
         self.lbl.setText(
-            f"lot {n_lots}개 · 계측 {len(names)}개 붙임 "
-            f"({self.level()} level) — 탐색 X축과 Summary에서 쓸 수 있습니다")
+            f"분석에 활용 — 계측 {len(names)}개 붙임 ({self.level()} level) — "
+            f"탐색 X축과 요약에서 쓸 수 있습니다")
         self._show_preview(names)
 
     def _analyze(self) -> None:
@@ -200,7 +236,7 @@ class MetrologyDialog(QDialog):
         from etreport.ui.widgets.worker import run_in_background
         st = self.state
         if st.data is None or not st.met_columns:
-            self.lbl.setText("먼저 [불러오기]로 계측값을 붙이세요")
+            self.lbl.setText("먼저 [불러오기]로 조회한 뒤 [분석에 활용]을 누르세요")
             return
         et_items = [c for c in st.aliases() if c in st.data.columns] or [
             c for c in st.data.columns if c not in st.met_columns]
@@ -223,6 +259,22 @@ class MetrologyDialog(QDialog):
         self._show_table(top)
 
     # ── 표시 ─────────────────────────────────────────────────
+    def _met_wide(self):
+        """조회 원본(`self.met`)을 현재 level 규칙으로 (lot, wafer) × 계측 열로."""
+        from etreport.data import metrology as mt
+        if self.met is None or self.met.is_empty():
+            return None
+        return mt.to_wide(self.met, self.level())
+
+    def _show_met_preview(self) -> None:
+        """조회 결과 그 자체를 미리보기 — 분석 데이터에 붙이기 전 모습."""
+        wide = self._met_wide()
+        if wide is None or wide.is_empty():
+            self.table.setRowCount(0)
+            return
+        self._fill(wide.columns,
+                   wide.sort(["lot", "wafer"]).head(50).iter_rows())
+
     def _show_preview(self, names: list[str]) -> None:
         st = self.state
         if not names or st.data is None:

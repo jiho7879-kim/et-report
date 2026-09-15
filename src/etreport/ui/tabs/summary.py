@@ -1,4 +1,4 @@
-"""Summary 탭 — CAT1별 wafer 표.
+"""요약 탭 — CAT1별 wafer 표.
 
 표는 **[표 만들기]를 눌렀을 때만** 계산한다(보고 있어도 자동 계산하지 않는다).
 복사·xlsx는 화면과 같은 숫자를 써야 하므로 export.excel.build_table 하나만 쓴다.
@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -27,8 +27,10 @@ from PySide6.QtWidgets import (
 
 from etreport.model.specs import fmt_value
 from etreport.model.state import AppState, StateBus
-from etreport.ui.tabs.common import StaleMixin, fit_table, on_combo
-from etreport.ui.widgets.cards import Card, GhostButton
+from etreport.ui import theme
+from etreport.ui.actionbar import ActionItems
+from etreport.ui.tabs.common import StaleMixin, detach, fit_table, on_combo
+from etreport.ui.widgets.cards import Card, ChromeSection, GhostButton
 from etreport.ui.widgets.worker import run_in_background
 
 
@@ -47,14 +49,65 @@ class SummaryTab(StaleMixin, QWidget):
         self._collapsed: set[str] = set()      # 접어 둔 CAT1 (표를 다시 만들어도 유지)
         self._cards: dict[str, Card] = {}
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 10, 16, 14)
-        outer.setSpacing(10)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        bar = QHBoxLayout()
+        # 표마다 똑같이 반복되던 캡션(리포트 · 집계 · 제외 · 붉은 셀 설명)을
+        # 표 영역 **위 한 줄**로 합친다. 표가 다섯 장이면 같은 문장이 다섯 번
+        # 있었고, 그만큼 표 사이가 멀어졌다(설계 §3 탭별 정리).
+        self.lbl_caption = QLabel()
+        self.lbl_caption.setObjectName("hint")
+        self.lbl_caption.setContentsMargins(16, 8, 16, 4)
+        outer.addWidget(self.lbl_caption)
+
+        # 예전의 왼쪽 [도구] 스트립(2번째 칼럼)은 없앴다 — 주 동작과 내보내기는
+        # 하단 액션바, 집계 방식은 인스펙터 [표] 섹션으로 갔다(설계 §2 이동표).
+        # 위젯은 여기서 만들고 주소만 넘긴다: 버튼이 두 벌이 되면 dirty 표시와
+        # Ctrl+Enter가 갈린다.
         self.btn_build = QPushButton("표 만들기")
         self.btn_build.setToolTip("CAT1마다 wafer 표를 만듭니다 (Ctrl+Enter)")
         self.btn_build.clicked.connect(self.rebuild)
-        bar.addWidget(self.btn_build)
+        self.lbl_state = QLabel()
+        self.lbl_state.setObjectName("hint")
+        self.btn_export_all = GhostButton("전체 xlsx 내보내기")
+        self.btn_export_all.clicked.connect(lambda: self._export(None))
+        self._table_section = self._build_table_section()
+
+        # 흰 종이 시트 — 남은 폭 전체를 차지하고 표는 중앙에 둔다
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.host = QWidget()
+        self.vbox = QVBoxLayout(self.host)
+        self.vbox.setContentsMargins(0, 0, 0, 0)
+        self.vbox.setSpacing(14)
+        self.vbox.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        self.scroll.setWidget(self.host)
+        outer.addWidget(self.scroll, 1)
+        # QSS가 닿지 않는 뷰포트 배경만 토큰으로 칠한다 — 흰 종이 시트
+        vp = self.scroll.viewport()
+        pal = vp.palette()
+        pal.setColor(QPalette.Window, QColor(theme.TOKENS["PAPER"]))
+        vp.setPalette(pal)
+        vp.setAutoFillBackground(True)
+
+        for sig in (bus.exclusion_changed, bus.groups_changed,
+                    bus.data_changed, bus.report_changed):
+            sig.connect(self.mark_stale)
+        self.mark_stale()
+
+    # ── 워크스페이스에 넘기는 것 ─────────────────────────────
+    def action_items(self) -> ActionItems:
+        return ActionItems(primary=self.btn_build, status=self.lbl_state,
+                           extra=[self.btn_export_all])
+
+    def inspector_sections(self) -> list[QWidget]:
+        return [self._table_section]
+
+    def _build_table_section(self) -> ChromeSection:
+        """인스펙터 [표] — 집계 방식·Δ·접기. 데이터를 바꾸지 않고 **표현만**
+        바꾸므로 오른쪽이다(설계 §1 규칙 1)."""
+        sec = ChromeSection("표")
         self.agg = QComboBox()
         self.agg.addItems(["평균", "산포 (wafer 내)", "그룹별 평균",
                            "그룹별 wafer"])
@@ -62,40 +115,21 @@ class SummaryTab(StaleMixin, QWidget):
                             "그룹별 평균은 그룹마다 한 열,\n"
                             "그룹별 wafer는 wafer 열을 그룹으로 묶어 정렬합니다.")
         on_combo(self.agg, self.mark_stale)
-        bar.addWidget(self.agg)
+        sec.body.addWidget(self.agg)
         self.chk_delta = QCheckBox("Δ vs REF")
         self.chk_delta.toggled.connect(self.mark_stale)
-        bar.addWidget(self.chk_delta)
+        sec.body.addWidget(self.chk_delta)
         # CAT1 표는 하나가 화면을 다 먹는다 — 접어 두고 필요한 것만 편다
-        b_fold = GhostButton("모두 접기")
-        b_fold.clicked.connect(lambda: self._fold_all(True))
-        bar.addWidget(b_fold)
-        b_open = GhostButton("모두 펼치기")
-        b_open.clicked.connect(lambda: self._fold_all(False))
-        bar.addWidget(b_open)
-        bar.addStretch(1)
-        self.lbl_state = QLabel()
-        self.lbl_state.setObjectName("hint")
-        bar.addWidget(self.lbl_state)
-        b = GhostButton("전체 xlsx 내보내기")
-        b.clicked.connect(lambda: self._export(None))
-        bar.addWidget(b)
-        outer.addLayout(bar)
-
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setFrameShape(QFrame.NoFrame)
-        self.host = QWidget()
-        self.vbox = QVBoxLayout(self.host)
-        self.vbox.setSpacing(14)
-        self.vbox.setAlignment(Qt.AlignTop)
-        self.scroll.setWidget(self.host)
-        outer.addWidget(self.scroll, 1)
-
-        for sig in (bus.exclusion_changed, bus.groups_changed,
-                    bus.data_changed, bus.report_changed):
-            sig.connect(self.mark_stale)
-        self.mark_stale()
+        fold = QHBoxLayout()
+        fold.setContentsMargins(0, 0, 0, 0)
+        for text, on in (("모두 접기", True), ("모두 펼치기", False)):
+            b = GhostButton(text)
+            b.clicked.connect(lambda _c=False, v=on: self._fold_all(v))
+            fold.addWidget(b)
+        w = QWidget()
+        w.setLayout(fold)
+        sec.body.addWidget(w)
+        return sec
 
     # ── 접기 ─────────────────────────────────────────────────
     def _attach_collapse(self, card, cat1: str) -> None:
@@ -169,21 +203,19 @@ class SummaryTab(StaleMixin, QWidget):
         while self.vbox.count():
             it = self.vbox.takeAt(0)
             if it.widget():
-                it.widget().deleteLater()
+                detach(it.widget())
         self._cards.clear()          # 곧 파괴될 카드를 붙잡고 있지 않도록
         st = self.state
         if st.report is None or st.data is None:
-            lab = QLabel(
-                "Table 템플릿이 아직 없습니다.\n"
-                "왼쪽에서 Table 템플릿을 고른 뒤 [적용](F5)을 누르면 "
-                "CAT1마다 표가 한 장씩 만들어집니다."
-                if st.data is not None else
-                "아직 불러온 데이터가 없습니다.\n"
-                "왼쪽에서 DB를 고르고 [적용](F5)을 누르세요.")
+            # 문구는 `ui/guidance` 하나에서 온다(빈 상태와 가이드가 같은 말을
+            # 하도록 — 설계 §5).
+            from etreport.ui import guidance
+            lab = QLabel(guidance.empty_message(st, "table"))
             lab.setObjectName("emptyHint")
             lab.setAlignment(Qt.AlignCenter)
             self.vbox.addWidget(lab)
             self.lbl_state.setText("")
+            self.lbl_caption.setText("")
             return
 
         ws, ref, agg = self._stats()
@@ -248,17 +280,10 @@ class SummaryTab(StaleMixin, QWidget):
             fit_table(t)
             card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
             card.body.addWidget(t)
-            cap = QLabel(
-                f"{st.report.report} · "
-                f"{self.agg_label()}"
-                f" · 제외 {len(st.excluded)}점 반영"
-                f"{' · Δ = REF 대비' if delta else ''}"
-                " · 붉은 셀은 SPECLOW/SPECHIGH 이탈")
-            cap.setObjectName("hint")
-            card.body.addWidget(cap)
             self._attach_collapse(card, cat1)      # 내용을 다 넣은 뒤에
             self.vbox.addWidget(card)
 
+        self._set_caption(" · 붉은 셀은 SPECLOW/SPECHIGH 이탈")
         self.mark_fresh()
         self.lbl_state.setText(
             f"{len(st.report.table_names())}개 표 · {time.monotonic() - t0:.2f}초")
@@ -306,14 +331,19 @@ class SummaryTab(StaleMixin, QWidget):
             fit_table(t)
             card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
             card.body.addWidget(t)
-            cap = QLabel(opt.session_caption)
-            cap.setObjectName("hint")
-            card.body.addWidget(cap)
             self._attach_collapse(card, cat1)      # 내용을 다 넣은 뒤에
             self.vbox.addWidget(card)
+        self._set_caption()
         self.mark_fresh()
         self.lbl_state.setText(
             f"{len(st.report.table_names())}개 표 · {time.monotonic() - t0:.2f}초")
+
+    def _set_caption(self, extra: str = "") -> None:
+        """표 위 한 줄 — 문구는 `SummaryOptions.session_caption` 하나에서 온다.
+
+        복사·xlsx·PPT가 쓰는 문장과 같아야 화면과 출력이 같은 말을 한다.
+        """
+        self.lbl_caption.setText(self._options().session_caption + extra)
 
     def _copy(self, cat1: str) -> None:
         """화면 표와 같은 값을 클립보드로.

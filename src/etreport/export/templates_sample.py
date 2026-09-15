@@ -140,7 +140,7 @@ def table_sample() -> Sample:
         ("Report", "리포트 이름", "M2_ET", "plot 템플릿과 같은 값으로 맞춘다"),
         ("(표 종류)", "화면에서 고른다", "평균 / 산포 / 그룹별 평균 / 그룹별 wafer",
          "템플릿은 어떤 item을 어떤 계층으로 볼지만 정한다. 값의 종류와 열 구성은 "
-         "Summary 탭 콤보에서 고르고, xlsx·PPT가 같은 값을 쓴다"),
+         "요약 탭 콤보에서 고르고, xlsx·PPT가 같은 값을 쓴다"),
     ])
     return Sample("table_template", "table 템플릿", data, desc)
 

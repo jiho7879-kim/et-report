@@ -23,6 +23,7 @@ from etreport.data.reformatter import Reformatter
 from etreport.model.aggregate import group_representatives, wafer_stats
 from etreport.model.specs import GroupStyle, PlotSpec
 from etreport.render.ranges import compute_range, resolve_axes, resolve_log
+from etreport.ui.theme import TOKENS
 
 log = logging.getLogger(__name__)
 
@@ -87,6 +88,63 @@ def _lot_parts(df: pl.DataFrame, lot_split: bool, markers: dict[str, str],
         if not sub.is_empty():
             parts.append((sub, markers.get(lot, base), f"{st.name} ({lot})"))
     return parts or [(df, base, st.name)]
+
+
+#: 데이터 점 아티스트에 붙이는 표식(`point_xy`가 이것만 센다).
+POINT_GID = "etreport.points"
+
+#: 면이 없는 마커 — 테두리를 지우면 아무것도 안 보인다(`+`·`x` 등).
+_EDGE_ONLY = frozenset({"+", "x", "1", "2", "3", "4", "|", "_"})
+
+
+def points(ax, xs, ys, *, color: str, size: float, marker: str,
+           label: str | None = None, zorder: float = 3, alpha: float = 0.9,
+           hollow: bool = False):
+    """점 찍기 — **그룹 안에서 색·크기가 균일하므로 `Line2D`로 그린다**.
+
+    `ax.scatter`(PathCollection)는 점마다 색·크기가 다를 수 있는 자료구조라
+    그만큼 무겁다. 여기서는 그룹 하나가 한 색·한 크기라 `plot(linestyle="none")`
+    이 같은 그림을 훨씬 싸게 그린다 — 리포트 미리보기는 이 경로가 슬롯 6개에
+    동시에 걸린다. **점은 하나도 버리지 않는다**: 샘플링·decimation은 쓰지
+    않는다(이상점을 찾는 화면에서 점을 지우면 그림이 거짓말을 한다).
+
+    크기 환산에 주의: scatter의 `s`는 **면적**(pt²), plot의 `markersize`는
+    **지름**(pt)이라 `markersize = sqrt(s)`다. 지금까지 `s=size**2`였으므로
+    `markersize = size`가 예전과 같은 그림이다(설계 §8 리스크).
+    """
+    kw = {"linestyle": "none", "marker": marker, "markersize": size,
+          "alpha": alpha, "zorder": zorder}
+    if hollow:
+        kw["markerfacecolor"] = "none"
+        kw["markeredgecolor"] = color
+        kw["markeredgewidth"] = 0.9
+    else:
+        kw["color"] = color
+        if marker not in _EDGE_ONLY:
+            kw["markeredgewidth"] = 0
+    if label:
+        kw["label"] = label
+    art = ax.plot(xs, ys, **kw)[0]
+    # 데이터 점이라고 표시해 둔다 — 타깃(×)·규격선처럼 `linestyle="none"`인
+    # 주석 아티스트와 섞이면 세는 쪽이 그것들까지 점으로 센다.
+    art.set_gid(POINT_GID)
+    return art
+
+
+def point_xy(ax) -> list[tuple[float, float]]:
+    """축에 찍힌 점 좌표 — `Line2D`와 `PathCollection` 양쪽에서 모은다.
+
+    점을 무엇으로 그렸는지는 성능 문제이지 계약이 아니다. 세는 쪽(테스트·진단)이
+    두 자료구조를 각각 알 필요가 없도록 여기서 한 번에 돌려준다.
+    """
+    out: list[tuple[float, float]] = []
+    for line in ax.lines:
+        if line.get_gid() == POINT_GID:
+            out += [(float(x), float(y))
+                    for x, y in zip(line.get_xdata(), line.get_ydata())]
+    for coll in ax.collections:
+        out += [(float(x), float(y)) for x, y in coll.get_offsets()]
+    return out
 
 
 def render(spec: PlotSpec,
@@ -155,18 +213,17 @@ def render(spec: PlotSpec,
             for ax_x, ax_y in pairs:
                 if ax_x not in sub.columns or ax_y not in sub.columns:
                     continue
-                ax.scatter(sub[ax_x], sub[ax_y],
-                           s=st.size ** 2, c=st.color, marker=mark,
-                           linewidths=0, alpha=0.9, zorder=3,
-                           label=label if (ax_x, ax_y) == pairs[0] else None)
+                points(ax, sub[ax_x], sub[ax_y], color=st.color,
+                       size=st.size, marker=mark,
+                       label=label if (ax_x, ax_y) == pairs[0] else None)
 
     # 제외된 포인트 — 회색 빈 심볼로 남긴다(사라지지 않게)
     if excluded is not None and not excluded.is_empty():
         for ax_x, ax_y in pairs:
             if ax_x in excluded.columns and ax_y in excluded.columns:
-                ax.scatter(excluded[ax_x], excluded[ax_y], s=26,
-                           facecolors="none", edgecolors="#c7c7cc",
-                           linewidths=0.9, zorder=2.5)
+                points(ax, excluded[ax_x], excluded[ax_y], color="#c7c7cc",
+                       size=26 ** 0.5, marker="o", zorder=2.5, alpha=1.0,
+                       hollow=True)
 
     # 규격 — 십자로 삐져나온 선 대신 **규격 창(박스)**을 빨간 실선으로.
     # 한쪽 규격이 없으면 그 변은 축 끝까지 열어 둔다(합집합, 확정 사양).
@@ -270,9 +327,8 @@ def _scatter_aggregate(ax, df: pl.DataFrame, pairs, st: GroupStyle,
                 ys.append(y)
         if not xs:
             continue
-        ax.scatter(xs, ys, s=st.size ** 2, c=st.color, marker=mark,
-                   linewidths=0, alpha=0.9, zorder=3,
-                   label=name if (ax_x, ax_y) == pairs[0] else None)
+        points(ax, xs, ys, color=st.color, size=st.size, marker=mark,
+               label=name if (ax_x, ax_y) == pairs[0] else None)
 
 
 def _render_trend(spec: PlotSpec,
@@ -515,7 +571,7 @@ def _render_box(spec: PlotSpec,
                         flierprops={"marker": ".", "markersize": 3,
                                     "markerfacecolor": color,
                                     "markeredgecolor": "none", "alpha": 0.6},
-                        medianprops={"color": "#12161B", "linewidth": 1.1},
+                        medianprops={"color": TOKENS["TEXT"], "linewidth": 1.1},
                         whiskerprops={"color": color, "linewidth": 0.9},
                         capprops={"color": color, "linewidth": 0.9})
         for patch in bp["boxes"]:

@@ -184,7 +184,7 @@ def sections(shots: dict[str, Path] | None = None) -> list[Section]:
                   "그림이 뜻을 잃기 때문입니다. 그 값으로 나누고 싶다면 fab tracking에서",
                   "조건 컬럼으로 뽑아 오는 것이 맞는 길입니다."]),
         Section(
-            "Summary — 표",
+            "요약 — 표",
             ["[표 만들기](Ctrl+Enter)를 누르면 CAT1마다 카드가 하나씩 만들어집니다.",
              "표가 화면을 다 먹으면 카드 제목 왼쪽 ▾로 접어 두고 필요한 것만 펴세요.",
              "접기는 다시 계산하지 않고 보이기만 바꿉니다.",
@@ -199,7 +199,7 @@ def sections(shots: dict[str, Path] | None = None) -> list[Section]:
             tail=["규격(SPECLOW·SPECHIGH)을 벗어난 셀은 붉게 나옵니다.",
                   "[복사]는 화면과 똑같은 값을 TSV로 클립보드에 넣어 주니 메일이나 슬랙에",
                   "그대로 붙이면 됩니다. [xlsx]는 엑셀 파일로 저장합니다(사내 PC 전용)."],
-            shot=s.get("summary"), caption="Summary — 그룹별 평균 표"),
+            shot=s.get("summary"), caption="요약 — 그룹별 평균 표"),
         Section(
             "리포트 구성 — PPT 만들기",
             ["슬롯을 끌어다 놓아 자리를 바꾸고, 슬롯을 고르면 오른쪽에서 제목·X·Y·",

@@ -2,7 +2,8 @@
 
 적재된 DuckDB를 **읽기 전용**으로 열고 자유 SQL을 돌린다. 기본 적재 결과와
 별개로, 필요한 조건만 뽑아 다른 도구(Spotfire 등)로 넘기기 위한 창이다.
-SBDF는 사내에 라이브러리가 있을 때만 활성화되고, 없으면 CSV/parquet로 안내한다.
+SBDF는 공식 spotfire 패키지가 있으면 그것을, 없으면 사내 라이브러리를 쓴다.
+둘 다 없으면 CSV/parquet으로 안내한다(import_sbdf — exporting.py).
 """
 from __future__ import annotations
 
@@ -26,11 +27,11 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from etreport.data.exporting import SBDF_WARN_ROWS, copy_to, import_sbdf
+
 log = logging.getLogger(__name__)
 
 PREVIEW_ROWS = 200
-#: 이 행 수를 넘으면 SBDF(메모리 경유) 저장 전에 한 번 묻는다
-SBDF_WARN_ROWS = 2_000_000
 
 SNIPPETS = {
     "전체": "SELECT * FROM et_data",
@@ -52,49 +53,22 @@ def _sub(sql: str) -> str:
 
 
 def preview_query(db_path: str, sql: str,
-                  rows: int = PREVIEW_ROWS) -> tuple[pl.DataFrame, int]:
-    """(미리보기 프레임, 전체 행 수).
+                  rows: int = PREVIEW_ROWS) -> tuple[pl.DataFrame, int | None]:
+    """(미리보기 프레임, 전체 행 수 또는 아직 계산하지 않음).
 
     **결과 전체를 파이썬으로 가져오지 않는다.** 예전에는 `con.execute(sql).pl()`로
     전부 실체화해서, 조건을 안 건 조회 하나에
     `Out of Memory Error: Arrow buffer failed to allocate`로 죽었다. 화면에
-    필요한 것은 200행뿐이고 저장은 DuckDB가 파일로 직접 흘려보내므로
-    (아래 `copy_to`) 전체를 메모리에 올릴 이유가 없다.
+    필요한 것은 200행뿐이다. 전체 행 수를 세기 위해 같은 무거운 SQL을 한 번 더
+    실행하지 않는다. 결과 수는 미리보기보다 많은지만 표시한다.
     """
     from etreport.data.loader import open_readonly
     con = open_readonly(db_path)
     try:
         head = con.execute(f"{_sub(sql)} LIMIT {int(rows)}").pl()
-        got = con.execute(f"SELECT count(*) FROM (\n{sql}\n)").fetchone()
-        return head, int(got[0]) if got else head.height
+        return head, None
     finally:
         con.close()
-
-
-def copy_to(db_path: str, sql: str, out: str, fmt: str) -> str:
-    """조회 결과를 DuckDB가 **파일로 직접** 쓰게 한다 (메모리 경유 없음).
-
-    fmt는 "csv" 또는 "parquet". CSV는 엑셀에서 한글이 깨지지 않도록 BOM을
-    앞에 붙인다 — DuckDB가 다 쓴 뒤 3바이트만 앞에 이어 붙인다.
-    """
-    from etreport.data.loader import open_readonly
-    opts = ("FORMAT CSV, HEADER" if fmt == "csv" else "FORMAT PARQUET")
-    target = Path(out)
-    tmp = target.with_name(target.name + ".part") if fmt == "csv" else target
-    con = open_readonly(db_path)
-    try:
-        con.execute(f"COPY (\n{sql}\n) TO '{str(tmp).replace(chr(39), chr(39) * 2)}'"
-                    f" ({opts})")
-    finally:
-        con.close()
-    if fmt == "csv":
-        with target.open("wb") as dst:
-            dst.write(b"\xef\xbb\xbf")
-            with tmp.open("rb") as src:
-                while chunk := src.read(1 << 20):
-                    dst.write(chunk)
-        tmp.unlink(missing_ok=True)
-    return out
 
 
 class SqlExportDialog(QDialog):
@@ -103,7 +77,7 @@ class SqlExportDialog(QDialog):
         self.db_path = db_path
         self.table = table or "et_data"
         self.df: pl.DataFrame | None = None      # 미리보기(최대 PREVIEW_ROWS행)
-        self.n_rows = 0                          # 조회 결과 전체 행 수
+        self.n_rows: int | None = None            # 필요할 때만 계산하는 전체 행 수
 
         self.setWindowTitle("SQL 조회 · 내보내기")
         self.resize(980, 720)
@@ -197,9 +171,11 @@ class SqlExportDialog(QDialog):
             self.lbl_stat.setText("실행 실패")
             return
         el = time.monotonic() - t0
+        count = (f"{self.n_rows:,}행" if self.n_rows is not None
+                 else (f"{self.df.height}+행" if self.df.height == PREVIEW_ROWS
+                       else f"{self.df.height}행"))
         self.lbl_stat.setText(
-            f"{self.n_rows:,}행 × {self.df.width}열 · {el:.2f}초"
-            f" · 미리보기 {self.df.height}행")
+            f"{count} × {self.df.width}열 · {el:.2f}초 · 미리보기 {self.df.height}행")
         self._fill_preview()
 
     def _fill_preview(self) -> None:
@@ -255,9 +231,8 @@ class SqlExportDialog(QDialog):
     def _save_sbdf(self) -> None:
         if not self._ready():
             return
-        try:
-            import sbdf  # 사내 라이브러리
-        except ImportError:
+        sbdf = import_sbdf()
+        if sbdf is None:
             QMessageBox.information(
                 self, "SBDF",
                 "sbdf 라이브러리를 찾을 수 없습니다.\n\n"
@@ -268,15 +243,26 @@ class SqlExportDialog(QDialog):
                                            "SBDF (*.sbdf)")
         if not p:
             return
-        # SBDF만은 pandas 프레임이 필요해 전체를 메모리에 올린다 — 큰 결과는
-        # 미리 알린다(여기서 막지는 않는다).
+        # SBDF는 pandas 전체 프레임을 요구한다. 행 수가 아직 없다면 이 저장
+        # 경로에서만 세어, 미리보기 때 SQL을 두 번 돌리지 않는다.
+        from etreport.data.loader import open_readonly
+        try:
+            con = open_readonly(self.db_path)
+            try:
+                got = con.execute(
+                    f"SELECT count(*) FROM (\n{self.sql_text()}\n)").fetchone()
+                self.n_rows = int(got[0]) if got else 0
+            finally:
+                con.close()
+        except Exception as e:                       # noqa: BLE001
+            QMessageBox.critical(self, "SBDF 저장 실패", str(e))
+            return
         if self.n_rows > SBDF_WARN_ROWS and QMessageBox.question(
                 self, "SBDF 저장",
                 f"{self.n_rows:,}행을 한 번에 메모리로 올립니다.\n"
                 f"parquet으로 저장하면 메모리를 쓰지 않습니다.\n\n계속할까요?"
         ) != QMessageBox.Yes:
             return
-        from etreport.data.loader import open_readonly
         try:
             con = open_readonly(self.db_path)
             try:

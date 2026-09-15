@@ -1,7 +1,7 @@
 """사용자 요청 3건 (2026-08-13, 2차).
 
 1 plot별 점 표시(site/avg/med/std)를 탐색·리포트에서 고른다 ·
-2 PPT 뒤쪽에 그룹별 평균 표 페이지 · 3 Summary에 '그룹별 wafer' 표
+2 PPT 뒤쪽에 그룹별 평균 표 페이지 · 3 요약에 '그룹별 wafer' 표
 """
 from __future__ import annotations
 
@@ -75,17 +75,18 @@ def test_explore_point_combo_sets_mode(qapp, demo_state, idx, mode):
 def test_med_draws_one_point_per_wafer(qapp, demo_state):
     """★ med은 wafer마다 한 점 — 측정점 그대로(site)보다 훨씬 적다."""
     from etreport.model.state import StateBus
+    from etreport.render import mpl_renderer
     from etreport.ui.tabs.explore import ExploreTab
 
     tab = ExploreTab(demo_state, StateBus())
     tab.redraw()
-    site = sum(len(c.get_offsets())
-               for c in tab.canvas.figure.axes[0].collections)
+    # 점을 무엇으로 그렸는지는 성능 문제라 렌더러의 `point_xy`로 센다
+    site = len(mpl_renderer.point_xy(tab.canvas.figure.axes[0]))
 
     tab.cmb_point.setCurrentIndex(2)               # wafer 중앙값
     qt_until(lambda: demo_state.explore.mode == "med")
-    med = sum(len(c.get_offsets())
-              for c in tab.canvas.figure.axes[0].collections)
+    tab.redraw()                       # [그리기] — 지연 규약상 버튼으로 그린다
+    med = len(mpl_renderer.point_xy(tab.canvas.figure.axes[0]))
 
     n_wafer = demo_state.data.select(["lot", "wafer"]).unique().height
     assert med == n_wafer < site

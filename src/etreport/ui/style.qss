@@ -1,13 +1,14 @@
-/* ET Report — 계측기 콘솔 테마.
+/* ET Report — 라이트 크롬 테마.
  *
  * 값은 전부 ui/theme.py의 TOKENS에서 온다(퍼센트로 감싼 자리). 색을 여기 직접 적지
  * 말 것 — 대비 검사(tests/test_theme.py)가 토큰 표만 본다.
  *
  * 두 영역으로 나뉜다:
- *   크롬(#topbar·#dock)   무채색 그래파이트. 도구·상태.
+ *   크롬(#topbar·#dock)   밝은 무채색(라이트 크롬). 도구·상태.
  *   측정면(카드·표·캔버스) 종이 흰색. 데이터.
- * 그래서 **전역 QWidget 배경 규칙을 두지 않는다** — 그 규칙이 있으면 도크 안의
- * 모든 자식 위젯이 밝은 회색으로 칠해져 어두운 도크가 얼룩진다. 배경은
+ * 둘 사이 경계는 어둠이 아니라 hairline(#topbar border-bottom, #dock
+ * border-right)과 표면 명도다. 그래서 **전역 QWidget 배경 규칙을 두지 않는다** —
+ * 그 규칙이 있으면 모든 자식 위젯이 한 색으로 칠해져 위계가 사라진다. 배경은
  * QPalette와 이름 있는 표면에만 준다(이름 없는 컨테이너는 기본이 투명이다).
  */
 
@@ -15,7 +16,7 @@
 QWidget { font-family:%UI_FONT%; font-size:%FS_BASE%; color:%TEXT%; }
 QMainWindow, QDialog { background:%CANVAS%; }
 QLabel, QCheckBox, QRadioButton { background:transparent; }
-QToolTip { background:%INK%; color:%INK_TEXT%; border:1px solid %INK_LINE%;
+QToolTip { background:%PAPER%; color:%TEXT%; border:1px solid %RULE_2%;
            border-radius:%RADIUS%; padding:6px 9px; font-size:%FS_SM%; }
 
 /* ── 상단바 (크롬) ────────────────────────────────────────────────── */
@@ -27,15 +28,18 @@ QToolTip { background:%INK%; color:%INK_TEXT%; border:1px solid %INK_LINE%;
                                      letter-spacing:0.6px; }
 #topbar #logoAccent { color:%ACC_INK%; }
 
-#wsButton { background:transparent; color:%INK_MUTED%; border:none;
+/* 기본 테두리를 1px 투명으로 깔고 :focus에서 색만 바꾼다 — 크기가 튀지 않고,
+   배경을 바꾸지 않아 hover(INK_3)와 구분된다(QPushButton 포커스와 같은 언어). */
+#wsButton { background:transparent; color:%INK_MUTED%; border:1px solid transparent;
             border-radius:%RADIUS%; padding:7px 16px; font-weight:600; }
 #wsButton:hover   { background:%INK_3%; color:%INK_TEXT%; }
 #wsButton:checked { background:%INK_3%; color:%ACC_INK%; }
-#wsButton:focus   { background:%INK_3%; color:%INK_TEXT%; }
+#wsButton:focus   { border:1px solid %ACC_INK%; }
 
-#menuButton { background:transparent; color:%INK_MUTED%; border:none;
+#menuButton { background:transparent; color:%INK_MUTED%; border:1px solid transparent;
               border-radius:%RADIUS%; padding:6px 12px; font-weight:500; }
 #menuButton:hover, #menuButton:pressed { background:%INK_3%; color:%INK_TEXT%; }
+#menuButton:focus { border:1px solid %ACC_INK%; }
 #menuButton::menu-indicator { image:none; width:0; }
 
 /* 상태 레일 — 지금 무엇이 물려 있고 계산이 최신인지 한 줄로 */
@@ -49,10 +53,35 @@ QToolTip { background:%INK%; color:%INK_TEXT%; border:1px solid %INK_LINE%;
 /* 상단바 오른쪽 끝의 보조 글자(만든 사람) — 읽히되 눈에 걸리지 않게 */
 #railMuted { font-size:%FS_MICRO%; color:%INK_MUTED%; }
 
-/* ── 도크 (크롬) ──────────────────────────────────────────────────── */
-#dockScroll, #dock { background:%INK%; border:none;
-                     border-right:1px solid %INK_LINE%; }
-#dock QLabel { color:%INK_TEXT%; }
+/* ── 왼쪽 소스 레일 (크롬) ────────────────────────────────────────── */
+/* #sourceRail = 레일 전체(스크롤 + 하단 고정 블록), #dockScroll·#dock = 그 안의
+   스크롤 영역과 내용. 세로 경계선은 **레일 바깥면에만** 준다 — 안쪽에도 주면
+   스크롤할 때 선이 두 줄로 보인다. */
+#sourceRail { background:%INK%; border:none;
+              border-right:1px solid %INK_LINE%; }
+#dockScroll, #dock { background:%INK%; border:none; }
+/* [적용]이 사는 하단 고정 블록 — 레일과 같은 면이되 목록과 hairline으로 갈린다 */
+#railFooter { background:%INK%; }
+#railFooter QLabel { color:%INK_TEXT%; }
+#railFooter #hint { color:%INK_MUTED%; }
+#railFooter QPushButton[ghost="true"] { background:%INK_2%; color:%INK_TEXT%;
+                                        border:1px solid %INK_LINE%; }
+#railFooter QPushButton[ghost="true"]:hover { background:%INK_3%;
+                                              border-color:%ACC_INK%; }
+#railFooter QPushButton[ghost="true"]:disabled { background:%INK_2%;
+                                                 color:%INK_MUTED%;
+                                                 border-color:%INK_LINE%; }
+/* 프리셋 옆 `⋯` — 콤보와 같은 높이의 잉크 입력면(버튼처럼 튀지 않게) */
+#railMenuButton { background:%INK_2%; color:%INK_TEXT%;
+                  border:1px solid %INK_LINE%; border-radius:%RADIUS%;
+                  padding:4px 8px; font-weight:700; }
+#railMenuButton:hover { background:%INK_3%; border-color:%ACC_INK%; }
+#railMenuButton:focus { border-color:%ACC_INK%; }
+#railMenuButton::menu-indicator { image:none; width:0; }
+/* QLabel만 크롬 글자색으로 돌리면 **체크박스 라벨이 보이지 않는다** —
+   QCheckBox는 QLabel이 아니라서 전역 `QWidget { color:%TEXT% }`(측정면용
+   먹색)를 그대로 물려받아 어두운 도크 위에 어두운 글자가 찍혔다. */
+#dock QLabel, #dock QCheckBox, #dock QRadioButton { color:%INK_TEXT%; }
 #dock #sectionLabel { color:%INK_MUTED%; }
 #dock #hint, #dock #cardSub { color:%INK_MUTED%; }
 #dock QPushButton[ghost="true"] { background:%INK_2%; color:%INK_TEXT%;
@@ -65,7 +94,8 @@ QToolTip { background:%INK%; color:%INK_TEXT%; border:1px solid %INK_LINE%;
                                            border-color:%INK_LINE%; }
 #dock QComboBox, #dock QLineEdit, #dock QAbstractSpinBox {
   background:%INK_2%; color:%INK_TEXT%; border:1px solid %INK_LINE%; }
-#dock QComboBox:focus, #dock QLineEdit:focus { border-color:%ACC_INK%; }
+#dock QComboBox:focus, #dock QLineEdit:focus { border:2px solid %ACC_INK%;
+                                               padding:5px 9px; }
 #dock QComboBox:disabled, #dock QLineEdit:disabled { color:%INK_MUTED%; }
 
 /* 파일 행 — 라벨 열 + 값(모노). 공백 문자로 맞추지 않는다 */
@@ -74,6 +104,22 @@ QToolTip { background:%INK%; color:%INK_TEXT%; border:1px solid %INK_LINE%;
 #fileRow:hover { background:%INK_3%; border-color:%ACC_INK%; }
 #fileRow:focus { border-color:%ACC_INK%; }
 #fileLabel { color:%INK_MUTED%; font-size:%FS_SM%; font-weight:600; }
+/* ●필수 / ○선택 — 색만으로 알리지 않는다(모양이 이미 다르고 툴팁이 붙는다) */
+#fileNeed { font-size:%FS_MICRO%; color:%INK_MUTED%; }
+#fileRow[need="true"] #fileNeed { color:%ACC_INK%; }
+
+/* ── 입력 가이드 (설계 §5) ────────────────────────────────────────── */
+/* 층 1 — 비어 있는 필수 입력: 왼쪽 액센트 바. 라벨의 `*`·툴팁과 **함께** 뜬다
+   (색만으로 알리지 않는다는 규칙은 dirty 표시와 같다). 규칙이 속성 하나라
+   같은 속성을 단 위젯은 어느 창에서든 자동으로 같은 표시를 받는다. */
+#fileRow[needs="true"] { border-left:3px solid %WARN_INK%; }
+QLineEdit[needs="true"], QComboBox[needs="true"], QAbstractSpinBox[needs="true"],
+QPushButton[needs="true"] { border-left:3px solid %WARN_INK%; }
+/* 층 2 — 가이드 모드가 짚는 **한 곳**: 액센트 테두리 + 밝은 표면 */
+#fileRow[guide="true"], QPushButton[guide="true"] {
+  border:2px solid %ACC_INK%; background:%INK_3%; }
+QLineEdit[guide="true"], QComboBox[guide="true"] {
+  border:2px solid %ACC_INK%; }
 #fileValue { color:%INK_TEXT%; font-family:%MONO_FONT%; font-size:%FS_SM%; }
 #fileValue[empty="true"] { color:%INK_MUTED%; }
 
@@ -87,14 +133,131 @@ QToolTip { background:%INK%; color:%INK_TEXT%; border:1px solid %INK_LINE%;
 #dock #bigNum[zero="true"] { color:%INK_MUTED%; }
 #dock #warn { color:%WARN_INK%; }
 
+/* ── 새 크롬 표면 (리디자인 기반) ─────────────────────────────────── */
+/* 도크와 같은 크롬 언어를 5개 표면에 확장한다 — 흰 종이(측정면)가 아닌
+   조작면은 전부 잉크 크롬 하나로 통일한다. */
+#console, #probePanel, #toolStrip, #pageStrip, #inspector, #inspectorScroll,
+#actionBar {
+  background:%INK%; border:none; }
+#console { border-top:1px solid %INK_LINE%; }          /* 하단 도크 — 종이와 만나는 위 */
+/* 오른쪽 패널 — 선은 **스크롤 영역에만** 준다. 안쪽 내용 위젯(#inspector)에도
+   주면 스크롤하는 동안 선이 두 줄로 보인다(도크가 #dockScroll에 주는 것과 같다). */
+#probePanel, #inspectorScroll { border-left:1px solid %INK_LINE%; }
+#toolStrip { border-right:1px solid %INK_LINE%; }               /* 왼쪽 스트립 */
+/* 액션바 — 화면 맨 아래 한 줄. 종이(측정면)와 만나는 위에 hairline */
+#actionBar { border-top:1px solid %INK_LINE%; }
+
+/* 크롬 글자 — QLabel만 돌리면 체크박스 라벨이 사라진다(도크와 같은 이유) */
+#console QLabel, #console QCheckBox, #console QRadioButton,
+#probePanel QLabel, #probePanel QCheckBox, #probePanel QRadioButton,
+#toolStrip QLabel, #toolStrip QCheckBox, #toolStrip QRadioButton,
+#pageStrip QLabel, #pageStrip QCheckBox, #pageStrip QRadioButton,
+#inspector QLabel, #inspector QCheckBox, #inspector QRadioButton,
+#actionBar QLabel, #actionBar QCheckBox, #actionBar QRadioButton {
+  color:%INK_TEXT%; }
+#console #sectionLabel, #probePanel #sectionLabel, #toolStrip #sectionLabel,
+#pageStrip #sectionLabel, #inspector #sectionLabel,
+#actionBar #sectionLabel { color:%INK_MUTED%; }
+#console #hint, #console #cardSub, #probePanel #hint, #probePanel #cardSub,
+#toolStrip #hint, #toolStrip #cardSub, #pageStrip #hint, #pageStrip #cardSub,
+#inspector #hint, #inspector #cardSub,
+#actionBar #hint, #actionBar #cardSub { color:%INK_MUTED%; }
+
+/* 고스트 버튼 — 크롬 위에서는 잉크 계열 표면 */
+#console QPushButton[ghost="true"], #probePanel QPushButton[ghost="true"],
+#toolStrip QPushButton[ghost="true"], #pageStrip QPushButton[ghost="true"],
+#inspector QPushButton[ghost="true"],
+#actionBar QPushButton[ghost="true"] { background:%INK_2%; color:%INK_TEXT%;
+  border:1px solid %INK_LINE%; }
+#console QPushButton[ghost="true"]:hover, #probePanel QPushButton[ghost="true"]:hover,
+#toolStrip QPushButton[ghost="true"]:hover, #pageStrip QPushButton[ghost="true"]:hover,
+#inspector QPushButton[ghost="true"]:hover,
+#actionBar QPushButton[ghost="true"]:hover { background:%INK_3%;
+  border-color:%ACC_INK%; }
+#console QPushButton[ghost="true"]:focus, #probePanel QPushButton[ghost="true"]:focus,
+#toolStrip QPushButton[ghost="true"]:focus, #pageStrip QPushButton[ghost="true"]:focus,
+#inspector QPushButton[ghost="true"]:focus,
+#actionBar QPushButton[ghost="true"]:focus { background:%INK_3%;
+  border-color:%ACC_INK%; }
+#console QPushButton[ghost="true"]:disabled, #probePanel QPushButton[ghost="true"]:disabled,
+#toolStrip QPushButton[ghost="true"]:disabled, #pageStrip QPushButton[ghost="true"]:disabled,
+#inspector QPushButton[ghost="true"]:disabled,
+#actionBar QPushButton[ghost="true"]:disabled { background:%INK_2%; color:%INK_MUTED%;
+  border-color:%INK_LINE%; }
+
+/* 입력 — 크롬 위에서는 잉크 입력면 */
+#console QComboBox, #console QLineEdit, #console QAbstractSpinBox,
+#probePanel QComboBox, #probePanel QLineEdit, #probePanel QAbstractSpinBox,
+#toolStrip QComboBox, #toolStrip QLineEdit, #toolStrip QAbstractSpinBox,
+#pageStrip QComboBox, #pageStrip QLineEdit, #pageStrip QAbstractSpinBox,
+#inspector QComboBox, #inspector QLineEdit, #inspector QAbstractSpinBox,
+#actionBar QComboBox, #actionBar QLineEdit, #actionBar QAbstractSpinBox {
+  background:%INK_2%; color:%INK_TEXT%; border:1px solid %INK_LINE%; }
+#console QComboBox:focus, #console QLineEdit:focus,
+#probePanel QComboBox:focus, #probePanel QLineEdit:focus,
+#toolStrip QComboBox:focus, #toolStrip QLineEdit:focus,
+#pageStrip QComboBox:focus, #pageStrip QLineEdit:focus,
+#actionBar QComboBox:focus, #actionBar QLineEdit:focus,
+#inspector QComboBox:focus, #inspector QLineEdit:focus { border:2px solid %ACC_INK%;
+                                                         padding:5px 9px; }
+#console QComboBox:disabled, #console QLineEdit:disabled,
+#probePanel QComboBox:disabled, #probePanel QLineEdit:disabled,
+#toolStrip QComboBox:disabled, #toolStrip QLineEdit:disabled,
+#pageStrip QComboBox:disabled, #pageStrip QLineEdit:disabled,
+#actionBar QComboBox:disabled, #actionBar QLineEdit:disabled,
+#inspector QComboBox:disabled, #inspector QLineEdit:disabled { color:%INK_MUTED%; }
+
+/* 콤보 화살표 — 크롬 위에서는 잉크 화살표(한 줄에 하나) */
+#console QComboBox::down-arrow, #console QDateEdit::down-arrow, #probePanel QComboBox::down-arrow, #probePanel QDateEdit::down-arrow, #toolStrip QComboBox::down-arrow, #toolStrip QDateEdit::down-arrow, #pageStrip QComboBox::down-arrow, #pageStrip QDateEdit::down-arrow, #inspector QComboBox::down-arrow, #inspector QDateEdit::down-arrow, #actionBar QComboBox::down-arrow, #actionBar QDateEdit::down-arrow { image:url("%ICONS%/chevron-ink.svg"); }
+
+/* 체크박스 — 크롬 위에서는 잉크 표면 */
+#console QCheckBox::indicator, #probePanel QCheckBox::indicator,
+#toolStrip QCheckBox::indicator, #pageStrip QCheckBox::indicator,
+#inspector QCheckBox::indicator,
+#actionBar QCheckBox::indicator { background:%INK_2%; border-color:%INK_LINE%; }
+#console QCheckBox::indicator:checked, #probePanel QCheckBox::indicator:checked,
+#toolStrip QCheckBox::indicator:checked, #pageStrip QCheckBox::indicator:checked,
+#inspector QCheckBox::indicator:checked,
+#actionBar QCheckBox::indicator:checked { background:%ACC%; border-color:%ACC%; }
+
+/* console 로그 — 크롬 위에서는 잉크 로그면 */
+#console #logBox { background:%INK_2%; color:%INK_TEXT%; border-color:%INK_LINE%; }
+
+/* pageStrip — 가로 페이지 칩. 브라우저 탭 관용구라 고른 칩만 채운다. */
+#pageStrip { border:none; border-bottom:1px solid %INK_LINE%; }
+#pageStripScroll { background:transparent; border:none; }
+#pageChip { background:%INK_2%; color:%INK_MUTED%; border:1px solid %INK_LINE%;
+            border-radius:%RADIUS%; padding:3px 10px; font-size:%FS_SM%; }
+#pageChip:hover { background:%INK_3%; color:%INK_TEXT%; }
+#pageChip:checked { background:%INK_3%; color:%ACC_INK%; font-weight:600;
+                    border-color:%ACC_INK%; }
+#pageChip:focus { border-color:%ACC_INK%; }
+#pageNav { background:%INK_2%; color:%INK_TEXT%; border:1px solid %INK_LINE%;
+           border-radius:%RADIUS%; padding:2px 0; }
+#pageNav:hover { background:%INK_3%; border-color:%ACC_INK%; }
+#pageNav:disabled { color:%INK_MUTED%; }
+
+/* sectionGroup — 데이터 화면의 조작 패널(설계 calm-accent-violet §5).
+   카드가 아닌 크롬 '올린 표면': INK_2(크롬 입력면과 같은 흰색) + hairline으로
+   종이 측정면과 구분된다. 헤더는 패널 첫 줄이라 전역 #sectionLabel의
+   위 여백(묶음 경계용)이 필요 없고, 아래 .body의 섹션 라벨(SQL 미리보기 등)은
+   그대로 둔다. */
+#sectionGroup { background:%INK_2%; border:1px solid %INK_LINE%;
+                border-radius:%RADIUS_LG%; }
+#sectionGroup #sectionHead #sectionLabel { margin-top:0; }
+
 /* ── 카드 · 구조 (측정면) ─────────────────────────────────────────── */
 #card { background:%PAPER%; border:1px solid %RULE%;
         border-radius:%RADIUS_LG%; }
-#cardTitle { font-size:%FS_LG%; font-weight:600; }
+/* 제목은 크기만이 아니라 자간으로도 무게를 만든다 — 큰 글자에 기본 자간을
+   두면 헐거워 보인다(작은 라벨은 반대로 벌린다). */
+#cardTitle { font-size:%FS_LG%; font-weight:600; letter-spacing:-0.2px; }
 #cardSub, #hint { color:%MUTED%; font-size:%FS_SM%; }
 #emptyHint { color:%MUTED%; font-size:%FS_SM%; }
+/* 섹션 라벨 위 여백이 곧 묶음의 경계다. 간격이 균일하면 어디서 항목이
+   끊기는지 읽히지 않아 도크가 위젯을 쌓아 둔 벽처럼 보인다. */
 #sectionLabel { color:%MUTED%; font-size:%FS_MICRO%; font-weight:700;
-                letter-spacing:1.2px; margin-top:8px; }
+                letter-spacing:0.9px; margin-top:16px; margin-bottom:2px; }
 #hline { color:%RULE%; }
 #warn { color:%WARN_TEXT%; font-size:%FS_SM%; }
 #warnBox { background:%WARN_SOFT%; color:%WARN_TEXT%;
@@ -109,7 +272,7 @@ QToolTip { background:%INK%; color:%INK_TEXT%; border:1px solid %INK_LINE%;
 /* ── 버튼 ─────────────────────────────────────────────────────────── */
 /* 기본 테두리를 2px 투명으로 두고 포커스에서 색만 바꾼다 — 크기가 튀지 않는다 */
 QPushButton { background:%ACC%; color:%PAPER%; border:2px solid transparent;
-              border-radius:%RADIUS%; padding:5px 16px; font-weight:600;
+              border-radius:%RADIUS%; padding:6px 18px; font-weight:600;
               min-height:20px; }
 QPushButton:hover    { background:%ACC_H%; }
 QPushButton:pressed  { background:%ACC_H%; padding-top:6px; padding-bottom:4px; }
@@ -131,6 +294,16 @@ QPushButton[ghost="true"]:pressed  { background:%ACC_SOFT%; }
 QPushButton[ghost="true"]:disabled { background:%FIELD%; color:%DIM%;
                                      border-color:%RULE%; }
 
+/* 위험 동작(설계 §4) — ERR 계열만 쓴다. 새 신호색을 만들지 않는다. danger에는
+   ghost를 걸지 않는다 — 둘을 함께 걸면 두 규칙이 같은 위젯에 매치된다. */
+QPushButton[danger="true"] { background:%INK_2%; color:%ERR%; font-weight:600;
+                             border:1px solid %ERR%; border-radius:%RADIUS%;
+                             padding:6px 12px; min-height:20px; }
+QPushButton[danger="true"]:hover, QPushButton[danger="true"]:pressed { background:%ERR_SOFT%; }
+QPushButton[danger="true"]:focus { border:2px solid %ERR%; padding:5px 11px; }
+QPushButton[danger="true"]:disabled { background:%INK_2%; color:%INK_MUTED%;
+                                      border-color:%INK_LINE%; }
+
 /* 카드 제목 왼쪽의 ▾/▸ — 버튼이 아니라 글머리처럼 보여야 한다 */
 #collapseToggle { background:transparent; color:%MUTED%; border:none;
                   padding:0; font-weight:700; font-size:%FS_SM%; }
@@ -148,11 +321,14 @@ QPushButton[ghost="true"]:disabled { background:%FIELD%; color:%DIM%;
 /* ── 입력 ─────────────────────────────────────────────────────────── */
 QComboBox, QLineEdit, QDateEdit, QPlainTextEdit, QTextEdit, QAbstractSpinBox {
   background:%PAPER%; border:1px solid %RULE_2%; border-radius:%RADIUS%;
-  padding:5px 9px; selection-background-color:%ACC%;
+  padding:6px 10px; selection-background-color:%ACC%;
   selection-color:%PAPER%; min-height:20px; }
 QComboBox:hover, QLineEdit:hover, QDateEdit:hover { border-color:%DIM%; }
+/* 포커스는 1px 테두리로는 흐릿하다 — 2px 링으로 굵히고 패딩을 1px 줄여
+   내용이 밀리지 않게 한다(설계 calm-accent-violet §3). */
 QComboBox:focus, QLineEdit:focus, QDateEdit:focus,
-QPlainTextEdit:focus, QAbstractSpinBox:focus { border-color:%ACC%; }
+QPlainTextEdit:focus, QAbstractSpinBox:focus { border:2px solid %ACC%;
+                                                padding:5px 9px; }
 QComboBox:disabled, QLineEdit:disabled, QAbstractSpinBox:disabled {
   background:%FIELD%; color:%DIM%; }
 QLineEdit[readOnly="true"] { background:%FIELD%; }
@@ -191,6 +367,15 @@ QRadioButton::indicator:checked { border:4px solid %ACC%; background:%PAPER%; }
 #dock QCheckBox::indicator { background:%INK_2%; border-color:%INK_LINE%; }
 #dock QCheckBox::indicator:checked { background:%ACC%; border-color:%ACC%; }
 
+/* indicator 포커스 링(설계 §3) — 블록 끝에 두어 checked(배경 채움·4px 내부 링)와
+   겹치면 focus 쪽이 우선한다. 키보드로 어느 항목에 있는지 1px로는 흐릿하다. */
+QCheckBox::indicator:focus, QRadioButton::indicator:focus { border:2px solid %ACC%; }
+QRadioButton::indicator:hover { border-color:%ACC%; }
+#dock QCheckBox::indicator:focus { border:2px solid %ACC_INK%; }
+#console QCheckBox::indicator:focus, #probePanel QCheckBox::indicator:focus,
+#toolStrip QCheckBox::indicator:focus, #pageStrip QCheckBox::indicator:focus,
+#inspector QCheckBox::indicator:focus { border:2px solid %ACC_INK%; }
+
 /* ── 메뉴 ─────────────────────────────────────────────────────────── */
 QMenuBar { background:%INK%; color:%INK_TEXT%; }
 QMenuBar::item { background:transparent; padding:6px 12px; }
@@ -202,12 +387,15 @@ QMenu::item:selected { background:%ACC_SOFT%; color:%ACC%; }
 QMenu::separator { height:1px; background:%RULE%; margin:5px 8px; }
 
 /* ── 탭 ───────────────────────────────────────────────────────────── */
-QTabWidget::pane { border:none; background:%CANVAS%; }
+/* 탭 줄 아래 실선이 선택 밑줄의 '바닥'이 된다 — 없으면 틸 밑줄 하나가
+   허공에 떠서 무엇을 가리키는 표시인지 읽히지 않는다. */
+QTabWidget::pane { border:none; border-top:1px solid %RULE%;
+                   background:%CANVAS%; }
 QTabBar { background:transparent; }
 QTabBar::tab { background:transparent; color:%MUTED%; padding:9px 18px;
                margin:6px 2px 0 2px; border:none;
                border-bottom:2px solid transparent; font-weight:500; }
-QTabBar::tab:hover { color:%TEXT%; }
+QTabBar::tab:hover { color:%TEXT%; border-bottom:2px solid %RULE_2%; }
 QTabBar::tab:selected { color:%TEXT%; font-weight:600;
                         border-bottom:2px solid %ACC%; }
 QTabBar::tab:focus { color:%ACC%; }
@@ -245,7 +433,7 @@ QScrollBar::handle:hover { background:%DIM%; }
 QScrollBar::add-line, QScrollBar::sub-line { height:0; width:0; border:none;
                                              background:transparent; }
 QScrollBar::add-page, QScrollBar::sub-page { background:transparent; }
-#dockScroll QScrollBar::handle:vertical { background:%INK_3%; }
+#dockScroll QScrollBar::handle:vertical { background:%RULE_2%; }
 #dockScroll QScrollBar::handle:hover { background:%INK_MUTED%; }
 
 QScrollArea { border:none; background:transparent; }
@@ -258,7 +446,7 @@ QScrollArea { border:none; background:transparent; }
 QProgressBar { background:%RULE%; border:none; border-radius:3px; }
 QProgressBar::chunk { background:%ACC%; border-radius:3px; }
 #logBox { font-family:%MONO_FONT%; font-size:%FS_SM%;
-          background:%INK_2%; color:%INK_TEXT%; border:1px solid %INK_LINE%;
+          background:%PAPER%; color:%TEXT%; border:1px solid %RULE_2%;
           border-radius:%RADIUS%; padding:8px 10px;
           selection-background-color:%ACC%; }
 #sqlBox { font-family:%MONO_FONT%; font-size:%FS_NUM%;
@@ -270,9 +458,9 @@ QProgressBar::chunk { background:%ACC%; border-radius:3px; }
 #typeBadge[kind="ts"]  { background:%OK_SOFT%;  color:%OK%; }
 
 /* 비모달 알림 — 확인만 받는 모달을 대신한다 */
-#toast { background:%INK%; color:%INK_TEXT%; border:1px solid %INK_LINE%;
+#toast { background:%PAPER%; color:%TEXT%; border:1px solid %RULE_2%;
          border-radius:%RADIUS_LG%; padding:10px 16px; font-size:%FS_SM%; }
-#toast QLabel { color:%INK_TEXT%; }
+#toast QLabel { color:%TEXT%; }
 
 /* ── 리포트 슬롯 ──────────────────────────────────────────────────── */
 #slide { background:%PAPER%; border:1px solid %RULE%;

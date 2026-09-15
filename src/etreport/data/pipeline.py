@@ -156,6 +156,11 @@ def run(preset, d_from: date, d_to: date, catalog,
         store.close()
     on_log(f"적재 완료 — {res.rows:,}행 · {time.monotonic() - t:.1f}초")
 
+    # 4.5) 저장 옵션 — 적재 결과를 CSV/SBDF로 내보낸다 (스케줄러도 이 훅을 탄다)
+    if preset.save_csv or preset.save_sbdf:
+        from etreport.data.exporting import save_wide
+        save_wide(preset, on_log=on_log)
+
     # 5) 뒷정리 — staging은 놔두면 하루 수십 MB씩 쌓인다
     gone = cleanup_staging()
     if gone:

@@ -48,6 +48,7 @@ HELP_TEXT = """파일 4종은 이렇게 맞물립니다.
 SHORTCUT_TEXT = """화면
   Ctrl+1 / Ctrl+2     데이터 · 분석 화면
   F1                  사용 설명서
+  F2                  가이드 모드 (다음에 채울 곳을 짚어 준다)
 
 데이터 화면
   F5                  추출하고 적재
@@ -56,7 +57,9 @@ SHORTCUT_TEXT = """화면
 분석 화면
   F5                  적용 (고른 파일을 읽고 검증)
   Ctrl+Enter          보고 있는 탭의 [그리기]·[표 만들기]·[미리보기]
-  Ctrl+Z              제외한 점 되돌리기"""
+  Ctrl+Z              제외한 점 되돌리기
+  F9                  왼쪽 소스 레일 접기·펴기
+  F10                 오른쪽 인스펙터 접기·펴기"""
 
 
 class MainWindow(QMainWindow):
@@ -104,6 +107,15 @@ class MainWindow(QMainWindow):
         self.menu_host.setSpacing(2)
         h.addLayout(self.menu_host)
         h.addStretch(1)
+        # 가이드 모드 — 다음에 채울 한 곳을 짚어 준다(F2와 같은 동작, 설계 §5)
+        self.btn_guide = QPushButton("?")
+        self.btn_guide.setObjectName("wsButton")
+        self.btn_guide.setCheckable(True)
+        self.btn_guide.setCursor(Qt.PointingHandCursor)
+        self.btn_guide.setToolTip("다음에 채울 곳을 짚어 줍니다 (F2)")
+        self.btn_guide.clicked.connect(self._toggle_guide)
+        h.addWidget(self.btn_guide)
+        h.addSpacing(6)
         h.addWidget(self._build_rail())
         # 만든 사람 — 크롬 위 보조 글자로 조용히. 문의처가 화면에 있어야 현장에서
         # 버그를 어디로 보낼지 찾지 않는다.
@@ -196,6 +208,23 @@ class MainWindow(QMainWindow):
         m.addAction("4종 한 파일로 저장…").triggered.connect(
             lambda: self._save_sample(None))
 
+        # [도구] — 지금 보는 분석을 **바꾸지 않는** 파일·DB 유틸리티(설계 §2
+        # 이동표). 예전에는 도크 맨 아래 접힌 절에 있어 사실상 미발견 기능이었다.
+        # 분석 프레임에 컬럼을 붙이는 계측·fab tracking은 여기 두지 않는다 —
+        # 그것들은 그릴 수 있는 것 자체를 바꾸므로 소스 레일 [추가 소스]다.
+        t = self.menuBar().addMenu("도구")
+        t.addAction("S3 저장소…").triggered.connect(
+            lambda: self.anal_ws._open_s3())
+        t.addAction("SQL 조회 · 내보내기…").triggered.connect(
+            lambda: self.anal_ws._open_sql())
+        t.addSeparator()
+        self.act_cache = t.addAction("Excel 캐시 비우기")
+        self.act_cache.setToolTip(
+            "Excel 읽기 결과를 로컬에 캐시합니다.\n"
+            "누르면 캐시를 비우고 다음에 Excel에서 새로 읽습니다.")
+        self.act_cache.triggered.connect(lambda: self.anal_ws._clear_cache())
+        t.aboutToShow.connect(self._refresh_cache_action)
+
         h = self.menuBar().addMenu("도움말")
         act = h.addAction("사용 설명서 (PDF)")
         act.setShortcut(QKeySequence("F1"))
@@ -205,7 +234,7 @@ class MainWindow(QMainWindow):
         h.addAction("버전 · 빌드 정보").triggered.connect(self._show_build_info)
 
         self.menuBar().setVisible(False)
-        for menu in (m, h):
+        for menu in (m, t, h):
             b = QToolButton()
             b.setObjectName("menuButton")
             b.setText(menu.title())
@@ -213,6 +242,25 @@ class MainWindow(QMainWindow):
             b.setPopupMode(QToolButton.InstantPopup)
             b.setCursor(Qt.PointingHandCursor)
             self.menu_host.addWidget(b)
+
+    def _toggle_guide(self) -> None:
+        """가이드 모드는 분석 화면의 것이다 — 버튼 상태를 그 결과에 맞춘다."""
+        on = self.anal_ws.toggle_guide()
+        self.btn_guide.setChecked(on)
+        if on:
+            self._switch(1)
+
+    def _refresh_cache_action(self) -> str:
+        """캐시 크기는 **열 때 센다** — 메뉴는 늘 떠 있지 않으니 그때가 가장 싸다."""
+        try:
+            from etreport.data.xlio import cache_stats
+            n, size = cache_stats()
+            text = (f"Excel 캐시 비우기   {n}개 · {size / 1024:.0f} KB" if n
+                    else "Excel 캐시 비우기   (비어 있음)")
+        except Exception:                             # noqa: BLE001
+            text = "Excel 캐시 비우기"
+        self.act_cache.setText(text)
+        return text
 
     def _build_shortcuts(self) -> None:
         """창 전역 단축키. 화면 안 동작(그리기·적용)은 각 화면이 갖는다."""

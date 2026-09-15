@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -29,6 +30,7 @@ from etreport.model.specs import (
     POINT_MODES,
 )
 from etreport.model.state import AppState, StateBus
+from etreport.ui.actionbar import ActionItems
 from etreport.ui.tabs.common import StaleMixin, on_combo
 from etreport.ui.widgets.autocomplete import AutoCompleteEdit
 from etreport.ui.widgets.cards import Card, GhostButton, row
@@ -43,38 +45,66 @@ class ExploreTab(StaleMixin, QWidget):
     def __init__(self, state: AppState, bus: StateBus, parent=None) -> None:
         super().__init__(parent)
         self.state, self.bus = state, bus
-        lay = QHBoxLayout(self)
+        lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 10, 16, 14)
-        lay.setSpacing(12)
+        lay.setSpacing(8)
 
-        left = QVBoxLayout()
+        # 캔버스 위에 남는 것은 제외/복원 토글 하나다 — [그리기]·[＋ 리포트에
+        # 추가]·포인트 수는 하단 액션바가 갖는다(설계 §1 규칙 3). 여기서 만들고
+        # 주소만 넘긴다: 버튼을 액션바에서 새로 만들면 dirty 표시가 두 벌이 된다.
         bar = QHBoxLayout()
         self.mode = QComboBox()
         self.mode.addItems(["클릭 → 제외", "클릭 → 복원"])
+        self.mode.setToolTip("캔버스의 점을 클릭했을 때 무엇을 할지")
         bar.addWidget(self.mode)
-        b = GhostButton("＋ 리포트에 추가")
-        b.clicked.connect(self._add_to_report)
-        bar.addWidget(b)
+        bar.addStretch(1)
+        lay.addLayout(bar)
+
         self.btn_draw = QPushButton("그리기")
         self.btn_draw.setToolTip("고른 축으로 다시 그립니다 (Ctrl+Enter)")
         self.btn_draw.clicked.connect(self.redraw)
-        bar.addWidget(self.btn_draw)
-        bar.addStretch(1)
         self.lbl_info = QLabel()
         self.lbl_info.setObjectName("hint")
-        bar.addWidget(self.lbl_info)
-        left.addLayout(bar)
+        self.btn_add = GhostButton("＋ 리포트에 추가")
+        self.btn_add.clicked.connect(self._add_to_report)
         self._stale = True
 
+        # 캔버스와 빈 상태를 겹쳐 두고 갈아 끼운다 — 아무것도 안 물린 상태에서
+        # 빈 회색 캔버스만 보이면 무엇을 눌러야 하는지 알 수 없다(설계 §0 G).
         self.canvas = PlotCanvas(state)
         self.canvas.on_pick = self._pick
-        left.addWidget(self.canvas, 1)
-        lw = QWidget()
-        lw.setLayout(left)
-        lay.addWidget(lw, 1)
+        self.empty = QLabel()
+        self.empty.setObjectName("emptyHint")
+        self.empty.setAlignment(Qt.AlignCenter)
+        self.empty.setWordWrap(True)
+        self.body = QStackedWidget()
+        self.body.addWidget(self.canvas)
+        self.body.addWidget(self.empty)
+        lay.addWidget(self.body, 1)
 
-        side = QVBoxLayout()
+        # ── 인스펙터 섹션 — 패널은 워크스페이스가 하나만 소유한다 ──
+        # 카드 위젯은 그대로 쓰되 objectName을 바꿔 `#card` 흰 배경을 벗는다.
+        self._sections = [self._axis_card(), self._scale_card()]
+
+        bus.groups_changed.connect(self._groups_changed)
+        for sig in (bus.data_changed, bus.explore_changed):
+            sig.connect(self.mark_stale)
+        bus.exclusion_changed.connect(self._on_exclusion)
+        self.mark_stale()
+
+    # ── 워크스페이스에 넘기는 것 ─────────────────────────────
+    def action_items(self) -> ActionItems:
+        return ActionItems(primary=self.btn_draw, status=self.lbl_info,
+                           extra=[self.btn_add])
+
+    def inspector_sections(self) -> list[QWidget]:
+        return self._sections
+
+    # ── 축 카드 ──────────────────────────────────────────────
+    def _axis_card(self) -> Card:
+        state = self.state
         card = Card("축")
+        card.setObjectName("probeSection")
         # plot 종류 — 템플릿의 Type 열과 같은 값(model/specs.PLOT_TYPES).
         # 종류를 바꾸면 X가 뜻하는 것이 달라지므로(item ↔ 범주 ↔ 기하) 자동완성
         # 후보와 안내 문구도 함께 바뀐다.
@@ -116,24 +146,12 @@ class ExploreTab(StaleMixin, QWidget):
         card.body.addWidget(self.lbl_hint)
         self._sync_hint()
         card.body.addSpacing(4)
-        side.addWidget(card)
-        side.addWidget(self._scale_card())
-        side.addWidget(self._style_card())
-        side.addStretch(1)
-        sw = QWidget()
-        sw.setFixedWidth(276)
-        sw.setLayout(side)
-        lay.addWidget(sw)
-
-        bus.groups_changed.connect(self._groups_changed)
-        for sig in (bus.data_changed, bus.explore_changed):
-            sig.connect(self.mark_stale)
-        bus.exclusion_changed.connect(self._on_exclusion)
-        self.mark_stale()
+        return card
 
     # ── 스케일 · 범위 카드 (§5.2) ────────────────────────────
     def _scale_card(self) -> Card:
         card = Card("스케일 · 범위")
+        card.setObjectName("probeSection")
         self.cmb_scale: dict[str, QComboBox] = {}
         self.ed_range: dict[str, QLineEdit] = {}
         for axis in ("x", "y"):
@@ -157,6 +175,9 @@ class ExploreTab(StaleMixin, QWidget):
                 ed.editingFinished.connect(self._range_edited)
                 self.ed_range[name] = ed
             h = QHBoxLayout()
+            # 기본 여백(9px)을 지우지 않으면 이 줄만 위의 스케일 콤보보다
+            # 안쪽으로 들어가 카드 안에서 왼쪽 선이 두 개가 된다.
+            h.setContentsMargins(0, 0, 0, 0)
             h.addWidget(QLabel(axis.upper()))
             h.addWidget(lo, 1)
             h.addWidget(hi, 1)
@@ -169,7 +190,7 @@ class ExploreTab(StaleMixin, QWidget):
     def _scale_changed(self, axis: str) -> None:
         mode = ("auto", "log", "linear")[self.cmb_scale[axis].currentIndex()]
         setattr(self.state.explore, f"log{axis}_mode", mode)
-        self.redraw()
+        self.mark_stale()
 
     def _manual_toggled(self, on: bool) -> None:
         st = self.state
@@ -181,7 +202,7 @@ class ExploreTab(StaleMixin, QWidget):
                 st.explore.__dict__[f"{axis}min"] = lo
                 st.explore.__dict__[f"{axis}max"] = hi
         self._sync_range_inputs()
-        self.redraw()
+        self.mark_stale()
 
     def _current_limits(self) -> dict[str, tuple[float, float]]:
         """캔버스가 **실제로 쓴** 축 범위. 규칙을 두 곳에 두지 않기 위해
@@ -210,33 +231,12 @@ class ExploreTab(StaleMixin, QWidget):
             except ValueError:
                 ed.setText("")           # 숫자가 아니면 비운다(자동으로 되돌림)
                 setattr(st, name, None)
-        self.redraw()
+        self.mark_stale()
 
-    # ── 그룹 스타일 카드 (§5.2) — 리포트 탭과 같은 위젯을 쓴다 ──
-    def _style_card(self) -> Card:
-        from etreport.ui.widgets.style_card import GroupStyleCard
-        card = GroupStyleCard(self.state, self.bus, on_changed=self.redraw)
-        # 예전 속성 이름을 그대로 노출 — 이 탭의 다른 코드·테스트가 쓴다
-        self.cmb_group = card.cmb_group
-        self.cmb_symbol = card.cmb_symbol
-        self.cmb_size = card.cmb_size
-        self.chk_ref = card.chk_ref
-        self.btn_color = card.btn_color
-        self._style = card
-        return card
-
-    def _fill_groups(self) -> None:
-        self._style.fill_groups()
-
-    def _style_to_controls(self) -> None:
-        self._style.to_controls()
-
-    def _style_from_controls(self) -> None:
-        self._style.from_controls()
-
-    def _pick_color(self) -> None:
-        self._style._pick_color()
-
+    # ── 그룹 ─────────────────────────────────────────────────
+    # 그룹 스타일 카드는 여기 없다. 보이기·색·심볼·REF·편집은 인스펙터 공용
+    # `[그룹]` 섹션 하나가 갖는다(`ui/widgets/group_section.py`, 설계 §1 규칙 2) —
+    # 예전에는 탐색과 리포트에 한 벌씩 있어 같은 개념이 두 화면에 복제됐다.
     def _groups_changed(self) -> None:
         """그룹 토글·편집은 즉시 반영(확정 §3). 목록 갱신은 카드가 스스로 한다."""
         self.refresh_if_visible()
@@ -254,14 +254,14 @@ class ExploreTab(StaleMixin, QWidget):
         st.explore.x = self.ed_x.text()
         st.explore.y = self.ed_y.text()
         self._sync_type()
-        self.redraw()
+        self.mark_stale()
 
     def _point_changed(self) -> None:
         """점 표시 레벨(site/avg/med/std) — 템플릿의 Mode 열과 같은 값이다."""
         i = self.cmb_point.currentIndex()
         self.state.explore.mode = POINT_MODES[i] if 0 <= i < len(POINT_MODES) \
             else "site"
-        self.redraw()
+        self.mark_stale()
 
     # ── plot 종류 ────────────────────────────────────────────
     def _x_items(self) -> list[str]:
@@ -309,7 +309,7 @@ class ExploreTab(StaleMixin, QWidget):
         st.explore.type = typ
         self.ed_x.setText(st.explore.x)
         self._sync_hint()
-        self.redraw()
+        self.mark_stale()
 
     def _sync_hint(self) -> None:
         """종류별 안내 — X가 무엇인지가 종류마다 달라서 한 문장으로 못 적는다."""
@@ -394,12 +394,16 @@ class ExploreTab(StaleMixin, QWidget):
         st = self.state
         self.mark_fresh()
         if st.data is None:
-            self.lbl_info.setText(
-                "불러온 데이터가 없습니다 — 왼쪽에서 DB를 고르고 "
-                "[적용](F5)을 누르거나, [데이터] 화면에서 추출하세요")
+            # 문구는 `ui/guidance` 하나에서 온다 — 빈 상태와 가이드가 다른 말을
+            # 하면 사용자가 둘 중 무엇을 믿어야 할지 모른다(설계 §5).
+            from etreport.ui import guidance
+            self.empty.setText(guidance.empty_message(st, "plot"))
+            self.body.setCurrentWidget(self.empty)
+            self.lbl_info.setText("데이터 없음")
             self.canvas.figure.clear()
             self.canvas.draw_idle()
             return
+        self.body.setCurrentWidget(self.canvas)
         if not st.explore.x and st.data.width > len(RESERVED):
             items = item_columns(st.data)
             st.explore.x, st.explore.y = items[0], items[min(1, len(items) - 1)]

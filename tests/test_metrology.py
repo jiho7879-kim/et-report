@@ -9,10 +9,14 @@
 """
 from __future__ import annotations
 
+import os
+
 import polars as pl
 import pytest
 
 from etreport.data import metrology as mt
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 ROW = {"root_lot_id": "PA100", "wafer_id": "01", "step_id": "M1",
        "item_id": "CD_A", "subitem_id": "SITE1", "fab_value": 10.0,
@@ -21,6 +25,17 @@ ROW = {"root_lot_id": "PA100", "wafer_id": "01", "step_id": "M1",
 
 def _met(rows: list[dict]) -> pl.DataFrame:
     return pl.DataFrame([{**ROW, **r} for r in rows])
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    try:
+        from PySide6.QtWidgets import QApplication
+    except ImportError:                                # pragma: no cover
+        pytest.skip("PySide6 없음")
+    app = QApplication.instance() or QApplication([])
+    yield app
+    app.processEvents()
 
 
 # ── SQL ──────────────────────────────────────────────────────
@@ -189,3 +204,70 @@ def test_parse_pasted_pairs():
     text = "step_id\titem_id\nM1\tCD_A\nM5\tTHK_B\n\nM7,DEPTH_C"
     assert mt.parse_pairs(text) == [("M1", "CD_A"), ("M5", "THK_B"),
                                     ("M7", "DEPTH_C")]
+
+
+# ── 대화창 흐름: [불러오기]는 조회만, [분석에 활용]으로 붙인다 ─────
+def _dialog(qapp):
+    """offscreen으로 계측 대화창을 조립 — state.data만 담고 나머지는 비운다.
+
+    ① 계약: **버튼을 누르기 전에는 결과만 조회한 상태**다. 즉 `_load_done`이
+    `state.data`에 붙이면 안 되고, `_use`를 눌렀을 때만 붙어야 한다.
+    """
+    from etreport.model.state import AppState
+    from etreport.ui.widgets.metrology_dialog import MetrologyDialog
+
+    state = AppState()
+    state.data = _et()
+    dlg = MetrologyDialog(state, None)
+    return dlg, state
+
+
+def test_load_done_does_not_attach_yet(qapp):
+    """조회 완료(로드)만으로는 `met_columns`에 안 붙는다 — 조회 상태를 유지."""
+    dlg, state = _dialog(qapp)
+    met = _met([{"wafer_id": "01", "subitem_id": "Q2", "fab_value": 10.0},
+                {"wafer_id": "02", "subitem_id": "Q2", "fab_value": 20.0}])
+
+    dlg._load_done(met, n_lots=1)
+
+    assert dlg.btn_use.isEnabled()
+    assert state.met_columns == []
+    assert "M1::CD_A" not in state.data.columns
+
+
+def test_use_attaches_to_data(qapp):
+    """[분석에 활용]을 누르면 그제서야 분석 프레임에 붙는다."""
+    dlg, state = _dialog(qapp)
+    dlg._load_done(_met([{"wafer_id": "01", "subitem_id": "Q2", "fab_value": 10.0},
+                         {"wafer_id": "02", "subitem_id": "Q2", "fab_value": 20.0}]),
+                   n_lots=1)
+
+    dlg._use()
+
+    assert state.met_columns == ["M1::CD_A"]
+    assert state.data["M1::CD_A"].to_list() == [10.0, 10.0, 20.0, 20.0]
+
+
+def test_use_without_load_is_guarded(qapp):
+    """조회 전 [분석에 활용]을 누르면 안내만 하고 건드리지 않는다."""
+    dlg, state = _dialog(qapp)
+
+    dlg._use()
+
+    assert state.met_columns == []
+    assert "조회" in dlg.lbl.text()
+
+
+def test_use_skips_when_names_exist(qapp):
+    """이미 붙은 계측 열이면 새로 붙이지 않고 안내만 한다."""
+    dlg, state = _dialog(qapp)
+    met = _met([{"wafer_id": "01", "item_id": "Vt", "step_id": "",
+                 "subitem_id": "Q2"}])
+    dlg._load_done(met, n_lots=1)
+
+    dlg._use()
+    before = state.data.width
+    dlg._use()
+
+    assert state.data.width == before
+    assert dlg.btn_use.isEnabled()

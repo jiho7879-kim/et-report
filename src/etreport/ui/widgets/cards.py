@@ -22,6 +22,17 @@ class Card(QFrame):
     def __init__(self, title: str = "", sub: str = "", parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("card")
+        # 상시 그림자(설계 calm-accent-violet §2) — 카드가 측정면 위에서 한 단계
+        # 떠 도크와 구분된다. GhostButton과 달리 카드는 불투명 배경 + QSS
+        # border-radius라 원본 알파가 둥근 모서리를 따라간다(버튼 함정은 투명
+        # 배경 때문에 사각 실루엣이 그림자로 남는 것). 애니메이션 없이 blur 14·
+        # y 2·알파 30으로 상시 켠다 — 캡처에서 얼룩이 확인되면 설계 Stop
+        # conditions에 따라 이 블록을 버린다.
+        self._shadow = QGraphicsDropShadowEffect(self)
+        self._shadow.setBlurRadius(14)
+        self._shadow.setYOffset(2)
+        self._shadow.setColor(QColor(0, 0, 0, 30))
+        self.setGraphicsEffect(self._shadow)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(18, 16, 18, 16)
         outer.setSpacing(10)
@@ -54,7 +65,7 @@ class Card(QFrame):
     def make_collapsible(self, collapsed: bool = False) -> QPushButton:
         """제목 왼쪽에 ▾/▸ 토글을 붙인다. 만든 버튼을 돌려준다.
 
-        Summary의 CAT1 표는 하나가 화면을 다 먹어서, 여러 CAT1을 비교하려면
+        요약의 CAT1 표는 하나가 화면을 다 먹어서, 여러 CAT1을 비교하려면
         계속 스크롤해야 했다. 접어 두면 필요한 표만 펼쳐 볼 수 있다.
         표 자체는 그대로 두고 **보이기만** 바꾸므로 다시 계산하지 않는다.
         """
@@ -137,6 +148,36 @@ class CollapsibleSection(QWidget):
         self.set_collapsed(self.toggle.isChecked())
 
 
+class ChromeSection(QWidget):
+    """크롬 위에 놓이는 조작면 묶음 — 제목(#sectionLabel) + `.body`.
+
+    Card가 아니므로 `#card` 흰 배경이 크롬 위에 뜨지 않는다. 인스펙터·데이터
+    화면이 같은 관용구를 쓴다(예전에는 report.py와 data_ws.py가 같은 클래스를
+    각자 갖고 있었다).
+    """
+
+    def __init__(self, title: str = "", parent=None) -> None:
+        super().__init__(parent)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(8)
+        head = QHBoxLayout()
+        self._title = QLabel(title)
+        self._title.setObjectName("sectionLabel")
+        head.addWidget(self._title)
+        head.addStretch(1)
+        self.head = head
+        v.addLayout(head)
+        self.body = v
+
+    def setTitle(self, text: str) -> None:
+        self._title.setText(text)
+
+    # Card와 같은 이름도 받아 둔다 — 두 위젯을 섞어 쓰는 자리(인스펙터)에서
+    # 호출하는 쪽이 어느 클래스인지 따지지 않게.
+    set_title = setTitle
+
+
 class GhostButton(QPushButton):
     """투명 배경 보조 버튼. hover 시 미세 리프트(그림자+상승) 효과."""
 
@@ -200,13 +241,6 @@ class GhostButton(QPushButton):
             self._anim_blur.finished.disconnect(self._shadow_off)
         if not self.underMouse():
             self._shadow.setEnabled(False)
-
-
-def hline() -> QFrame:
-    f = QFrame()
-    f.setFrameShape(QFrame.HLine)
-    f.setObjectName("hline")
-    return f
 
 
 def row(*widgets, stretch_at: int | None = None) -> QWidget:

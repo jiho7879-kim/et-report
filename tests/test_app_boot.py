@@ -54,8 +54,15 @@ def test_debug_level_does_not_pull_in_matplotlib_chatter(appdata, clean_logging)
     assert logging.getLogger("matplotlib").getEffectiveLevel() >= logging.WARNING
 
 
-def test_excepthook_logs_and_does_not_raise(appdata, clean_logging, caplog):
-    """QApplication이 없어도(=창 뜨기 전) 훅이 조용히 로그만 남긴다."""
+def test_excepthook_logs_and_does_not_raise(appdata, clean_logging, caplog,
+                                            no_modal_dialogs):
+    """훅은 언제나 로그를 남기고, 예외를 다시 던지지 않는다.
+
+    `no_modal_dialogs`가 필요한 이유: 창이 떠 있으면(= 앞선 테스트 파일이
+    QApplication을 만들어 두면) 훅이 알림 창을 띄우고, 모달은 headless에서
+    영영 돌아오지 않는다. 이 파일만 놓고 돌리면 드러나지 않는 함정이라 픽스처로
+    막아 둔다.
+    """
     log = logging.getLogger("etreport.test")
     boot._install_excepthook(log)
 
@@ -68,6 +75,29 @@ def test_excepthook_logs_and_does_not_raise(appdata, clean_logging, caplog):
 
     assert sum("일부러 낸 오류" in r.message + str(r.exc_info[1])
                for r in caplog.records) == 2
+
+
+def test_excepthook_alerts_only_once_per_error(appdata, clean_logging,
+                                               no_modal_dialogs, monkeypatch):
+    """창이 떠 있으면 알리되 **같은 오류는 한 번만** — paint 이벤트처럼 반복되는
+    예외에 모달이 쌓이면 앱을 손으로 닫을 수도 없다.
+
+    실제 QApplication을 만들지 않고 '창이 떠 있다'만 흉내 낸다 — 이 파일은
+    부팅 로직을 보는 자리라 창을 띄우면 그때부터 파일 순서에 얽힌다.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    monkeypatch.setattr(QApplication, "instance", staticmethod(lambda: object()))
+    boot._install_excepthook(logging.getLogger("etreport.test"))
+    for _ in range(3):
+        try:
+            raise ValueError("반복되는 오류")
+        except ValueError:
+            sys.excepthook(*sys.exc_info())
+
+    alerts = [x for x in no_modal_dialogs if x[0] == "warning"]
+    assert len(alerts) == 1
+    assert "반복되는 오류" in alerts[0][2]
 
 
 def test_keyboard_interrupt_passes_through(appdata, clean_logging):

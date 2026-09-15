@@ -9,9 +9,11 @@ UNIT·SPECLOW·SPECHIGH·TARGET.
 
 수식 문법: ``{ALIAS}`` 참조, 사칙연산, 그리고 화이트리스트 함수만.
 eval()은 쓰지 않는다 — ast로 파싱해 직접 걷는다.
-``Std({A},{B},...)`` 는 인자들을 각각 하나의 포인트로 보는 산포:
-키 8개(root_lot~total_site_cnt) 단위, 엑셀 STDEV와 같은 표본표준편차(n-1),
-NULL 인자는 빼고 계산한다.
+``Std({A},{B},...)`` 는 그룹 표본표준편차(n-1, 엑셀 STDEV와 같은 값)다:
+(root_lot_id, wafer_id, step_id, step_seq, temperature) 5키로 묶어 인자들을
+그룹 안의 포인트들로 보고 한 번에 계산하고, 그룹의 모든 chip에 같은 값을
+채운다(broadcast). NULL 인자는 빼고, 유효값이 2개 미만이면 NULL.
+5키 컬럼이 데이터에 없으면 예전처럼 행 단위(수평) 산포로 계산한다.
 """
 from __future__ import annotations
 
@@ -31,6 +33,18 @@ COLUMNS = [
 log = logging.getLogger(__name__)
 
 _REF = re.compile(r"\{([^{}]+)\}")
+
+# Std() 그룹 표본표준편차의 묶음 키 (요청 ⑤ 확정 사양).
+STD_KEYS = ("root_lot_id", "wafer_id", "step_id", "step_seq", "temperature")
+
+# 순수 인자(전부 {ALIAS})를 가진 Std 호출만 rewrite 대상 — 인자에 함수·식이
+# 섞인 Std(Abs({A}),{B}) 같은 복합 호출은 패턴에 맞지 않아 예전 행 단위
+# 수평 산포로 남는다.
+_STD_CALL = re.compile(
+    r"(?<![A-Za-z0-9_])Std\s*\(\s*"
+    r"(\{[^{}]+\}(?:\s*,\s*\{[^{}]+\})*)\s*\)",
+    re.IGNORECASE,
+)
 
 
 def _norm_header(name: str) -> str:
@@ -482,6 +496,55 @@ def _compile_expr(src: str, available: set[str]) -> pl.Expr | None:
     return pl.when(expr.is_finite()).then(expr).otherwise(None)
 
 
+# ── Std 그룹 표본표준편차 (요청 ⑤) ───────────────────────────
+def _std_needs(formula: str, wide_cols: set[str]) -> list[list[str]]:
+    """수식에서 그룹 std로 바꿀 순수 Std 호출들의 인자 목록(매치 순서대로).
+
+    5키가 wide에 없거나, 순수 Std 호출 중 인자가 하나라도 wide에 없으면
+    []를 돌려 수식을 그대로 둔다 — 일부만 골라 바꾸면 미측정 참조 폴백의
+    의미가 조용히 달라진다(전부 또는 무).
+    """
+    if not all(k in wide_cols for k in STD_KEYS):
+        return []
+    calls: list[list[str]] = []
+    for m in _STD_CALL.finditer(formula):
+        args = [a.strip().strip("{}") for a in m.group(1).split(",")]
+        if not all(a in wide_cols for a in args):
+            return []
+        calls.append(args)
+    return calls
+
+
+def _std_name(taken: set[str]) -> str:
+    i = 0
+    while f"__std{i}" in taken:
+        i += 1
+    return f"__std{i}"
+
+
+def _std_scaffold(wide: pl.DataFrame, args: list[str], name: str) -> pl.DataFrame:
+    """인자들을 STD_KEYS 그룹으로 묶어 표본 std(n-1)를 만들고 wide에 붙인다. (⑤)
+
+    polars std는 NaN을 null처럼 취급하지 않으므로 행 단위 엔진(_std_sample)과
+    값을 맞추려면 먼저 fill_nan(None)으로 없애야 한다. group_by std는 NULL
+    무시·유효값<2면 NULL이라 _std_sample과 같은 의미다.
+    """
+    melt = (
+        wide.select([*STD_KEYS, *args])
+        .with_columns([pl.col(a).fill_nan(None) for a in args])
+        .unpivot(index=list(STD_KEYS), on=args,
+                 variable_name="__var", value_name="__val")
+    )
+    agg = melt.group_by(STD_KEYS).agg(pl.col("__val").std())
+    return wide.join(agg.rename({"__val": name}), on=list(STD_KEYS), how="left")
+
+
+def _std_substitute(formula: str, names: list[str]) -> str:
+    """순수 Std 호출을 {__stdN} 참조로 바꾼 수식 (인자 목록 순서대로)."""
+    it = iter(names)
+    return _STD_CALL.sub(lambda m: "{" + next(it) + "}", formula)
+
+
 # ── 적용 (long → long, 피벗 전) ───────────────────────────────
 def apply(rf: Reformatter, df: pl.DataFrame,
           on_progress=None) -> pl.DataFrame:
@@ -525,15 +588,40 @@ def apply(rf: Reformatter, df: pl.DataFrame,
                     aggregate_function="first")
 
     n_slow = 0
+    n_std = 0
+    std_cache: dict[frozenset[str], str] = {}
+    std_cols: set[str] = set()
     for i, rule in enumerate(addps, 1):   # 행 순서 = 계산 순서
         tick(f"ADDP {rule.alias}", i, len(addps))
-        expr = _compile_expr(rule.formula, set(wide.columns))
+        formula = rule.formula
+        need = _std_needs(formula, set(wide.columns))
+        if need:
+            # 순수 Std 호출을 그룹 std 스캐폴드 컬럼 참조로 바꾼다.
+            # 같은 인자 조합은 캐시해서 한 번만 만든다.
+            names: list[str] = []
+            for args in need:
+                key = frozenset(args)
+                name = std_cache.get(key)
+                if name is None:
+                    name = _std_name(set(wide.columns) | std_cols)
+                    wide = _std_scaffold(wide, args, name)
+                    std_cache[key] = name
+                    std_cols.add(name)
+                names.append(name)
+            formula = _std_substitute(formula, names)
+            n_std += 1
+        elif next(_STD_CALL.finditer(formula), None) is not None:
+            log.info(
+                "ADDP %s: Std()를 그룹 단위로 바꿀 수 없어(5키 또는 인자 "
+                "컬럼이 데이터에 없음) 예전처럼 행 단위로 계산합니다",
+                rule.alias)
+        expr = _compile_expr(formula, set(wide.columns))
         if expr is not None:                      # 벡터 경로 (거의 전부)
             e = expr.abs() if rule.absolute else expr
             wide = wide.with_columns(e.cast(pl.Float64).alias(rule.alias))
             continue
         n_slow += 1                               # 행 단위 폴백
-        fn = compile_formula(rule.formula)
+        fn = compile_formula(formula)
         cols = [wide[a] if a in wide.columns else pl.Series([None] * len(wide))
                 for a in fn.refs]
         vals = [fn(dict(zip(fn.refs, t))) for t in zip(*cols)] if cols \
@@ -543,6 +631,12 @@ def apply(rf: Reformatter, df: pl.DataFrame,
 
     if n_slow:
         log.info("ADDP %d개 중 %d개는 행 단위로 계산했습니다", len(addps), n_slow)
+    if n_std:
+        log.info("ADDP %d개 중 %d개는 Std()를 그룹 표본표준편차로 계산했습니다",
+                 len(addps), n_std)
     tick("역피벗", 0, 0)
+    if std_cols:
+        # 스캐폴드 컬럼이 출력 item_id로 새지 않게 역피벗 전에 지운다
+        wide = wide.drop(*std_cols)
     out = wide.unpivot(index=key_cols, variable_name="item_id", value_name="value")
     return out.drop_nulls("value")

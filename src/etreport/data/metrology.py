@@ -2,7 +2,7 @@
 
 쓰임새 세 가지(기능 B):
   1. 사용자가 준 `step_id`+`item_id` 목록의 계측값을 **분석 중인 lot에 한해**
-     가져와 (lot, wafer)로 ET 데이터에 붙인다 → Summary 표·산점도 x축
+     가져와 (lot, wafer)로 ET 데이터에 붙인다 → 요약 표·산점도 x축
   2. subitem 처리 규칙(확정):
        site level  — `RANGE·STD·MIN·VALUE·SLOTID·Q2·MAX`를 **제외한** 나머지
        wafer level — `Q2`

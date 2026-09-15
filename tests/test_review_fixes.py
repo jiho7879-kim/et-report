@@ -146,7 +146,7 @@ def test_reformatting_writes_a_separate_file(tmp_path):
     assert "out.write_parquet(f)" not in src
 
 
-# ── P1: Summary 복사가 화면과 같은 값 ───────────────────────
+# ── P1: 요약 복사가 화면과 같은 값 ───────────────────────
 def test_to_tsv_applies_delta_and_caption():
     from etreport.export.excel import SummaryOptions, to_tsv
     from etreport.render.pptgen import TableData

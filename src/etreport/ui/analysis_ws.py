@@ -1,7 +1,12 @@
-"""분석 워크스페이스 — 도크(설정·실험·그룹·제외) + 3개 탭.
+"""분석 워크스페이스 — 소스 레일 + 탭 3종 + 인스펙터 + 액션바를 조립한다.
 
-탭 자체는 ui/tabs/ 에 있다(탐색·Summary·리포트 구성). 여기서는 도크에서
-파일·설정을 모아 [적용] 한 번으로 검증하고, 그 결과를 StateBus로 알린다.
+네 조각의 역할 분담은 설계 §1·§2에 있고 코드도 그대로 나뉜다:
+`ui/source_rail.py`(무엇을 보고 있나) · `ui/tabs/`(측정면) ·
+`ui/inspector.py`(어떻게 보일까) · `ui/actionbar.py`(주 동작과 결과).
+
+여기가 갖는 것은 **동작과 상태**다: 파일·설정을 모아 [적용] 한 번으로 읽고
+검증하고(`model/session.apply_config`), 그 결과를 StateBus로 알린다. 레일은
+위젯만 갖고 눌리면 여기를 부른다 — 화면 조각이 세션 일을 하지 않게.
 """
 from __future__ import annotations
 
@@ -10,20 +15,15 @@ from pathlib import Path
 
 import polars as pl
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QKeySequence, QShortcut
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QFileDialog,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
     QListWidgetItem,
     QMessageBox,
-    QPushButton,
-    QScrollArea,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -32,22 +32,37 @@ from PySide6.QtWidgets import (
 from etreport.config.settings import AnalysisConfig, Settings
 from etreport.model import outliers
 from etreport.model.state import AppState, StateBus
-from etreport.ui.tabs.common import on_combo
+from etreport.ui import guidance
+from etreport.ui.actionbar import ActionBar
+from etreport.ui.inspector import InspectorPanel
+from etreport.ui.source_rail import RAIL_WIDTH, SourceRail
 from etreport.ui.tabs.common import pick_sheet as _pick_sheet
 from etreport.ui.tabs.explore import ExploreTab
 from etreport.ui.tabs.report import ReportTab
 from etreport.ui.tabs.summary import SummaryTab
-from etreport.ui.widgets.cards import CollapsibleSection, GhostButton, SectionLabel
+from etreport.ui.widgets.cards import ChromeSection
 from etreport.ui.widgets.group_dialog import GroupDialog
+from etreport.ui.widgets.group_section import GroupSection
 from etreport.ui.widgets.metrology_dialog import MetrologyDialog
 from etreport.ui.widgets.reformatter_dialog import ReformatterDialog
 from etreport.ui.widgets.split_dialog import SplitDialog, SplitSourceDialog
 from etreport.ui.widgets.sql_dialog import SqlExportDialog
 
-__all__ = ["AnalysisWorkspace", "ExploreTab", "ReportTab", "SummaryTab",
-           "_pick_sheet"]
+__all__ = ["RAIL_WIDTH", "AnalysisWorkspace", "ExploreTab", "ReportTab",
+           "SummaryTab", "_pick_sheet"]
 
 log = logging.getLogger(__name__)
+
+#: 레일이 갖고 있는 위젯 — 예전 이름 그대로 워크스페이스에서도 찾을 수 있게
+#: 한다(설계 §8 완충). 여기 없는 이름은 평소처럼 AttributeError다.
+_RAIL_WIDGETS = frozenset({
+    "cfg_combo", "btn_cfg_menu", "btn_db", "btn_plot", "btn_tbl", "btn_rfm",
+    "btn_split", "_file_values", "lot_section", "lot_list", "btn_coverage",
+    "tukey_section", "chk_tukey", "cmb_tukey_k", "cmb_tukey_scope",
+    "btn_tukey_log", "sources_section", "lbl_sources", "btn_factor",
+    "lbl_factor", "btn_apply", "lbl_apply", "lbl_report", "lbl_summary",
+    "btn_undo",
+})
 
 
 class AnalysisWorkspace(QWidget):
@@ -56,33 +71,144 @@ class AnalysisWorkspace(QWidget):
         super().__init__(parent)
         self.state, self.bus, self.settings = state, bus, settings
         self._applied = False
+        self._guide = False              # 가이드 모드(F2) — 다음 한 곳만 강조
 
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
-        lay.addWidget(self._build_dock())
+        # 3단 + 하단 액션바(설계 §2). 왼쪽 레일은 **무엇을 보고 있나**,
+        # 오른쪽 인스펙터는 **그것을 어떻게 보일까**, 아래 액션바는 주 동작과
+        # 결과를 꺼내는 자리다. 탭은 가운데 측정면만 갖는다.
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        self.rail = SourceRail(self)
+        body.addWidget(self.rail)
 
         self.tabs = QTabWidget()
         self.tab_explore = ExploreTab(state, bus)
         self.tab_summary = SummaryTab(state, bus)
         self.tab_report = ReportTab(state, bus)
         self.tabs.addTab(self.tab_explore, "탐색")
-        self.tabs.addTab(self.tab_summary, "Summary")
+        self.tabs.addTab(self.tab_summary, "요약")
         self.tabs.addTab(self.tab_report, "리포트 구성")
-        lay.addWidget(self.tabs, 1)
+        body.addWidget(self.tabs, 1)
+
+        self.inspector = InspectorPanel()
+        body.addWidget(self.inspector)
+        root.addLayout(body, 1)
+
+        self.actionbar = ActionBar()
+        root.addWidget(self.actionbar)
+
+        # 탭이 넘긴 위젯을 양쪽에 등록한다 — **탭 순서가 곧 페이지 번호**다.
+        # 위젯을 새로 만들지 않고 그대로 담으므로 dirty 표시(`•`)·Ctrl+Enter·
+        # 비활성 처리가 지금까지와 같은 한 벌로 남는다.
+        for tab in self.tab_widgets():
+            self.actionbar.add_page(tab.action_items())
+            self.inspector.add_page(tab.inspector_sections())
+        # 탭과 무관한 공용 섹션 — **진짜 한 인스턴스**여야 규칙 2가 지켜진다
+        # (예전에는 그룹 스타일 카드가 탐색·리포트에 한 벌씩 있었다).
+        self.group_section = GroupSection(state, bus, on_edit=self._edit_groups)
+        self.inspector.add_shared(self.group_section)
+        self.inspector.add_shared(self._build_view_section())
+        self.tabs.currentChanged.connect(self._tab_changed)
+        self._tab_changed(self.tabs.currentIndex())
 
         for sig in (bus.groups_changed, bus.exclusion_changed, bus.data_changed):
             sig.connect(self._refresh_dock)
         self._build_shortcuts()
+        self._fill_cfg_combo()
         self._refresh_dock()
+
+    def __getattr__(self, name: str):
+        """레일 위젯을 예전 이름으로도 찾게 한다(설계 §8 완충).
+
+        `_refresh_dock`처럼 위젯을 만지는 코드와 테스트가 `ws.chk_tukey`로
+        쓰고 있었다. 자리를 옮겼다고 그 주소를 한꺼번에 바꾸면 무엇이 왜
+        깨졌는지 알 수 없게 된다 — 목록에 적힌 이름만 레일로 넘긴다.
+        """
+        if name in _RAIL_WIDGETS:
+            return getattr(self.rail, name)
+        raise AttributeError(name)
+
+    def tab_widgets(self) -> list[QWidget]:
+        """탭 순서대로 — 액션바·인스펙터 페이지 번호가 이 순서를 따른다."""
+        return [self.tab_explore, self.tab_summary, self.tab_report]
+
+    # ── 인스펙터 공용 [보기] ─────────────────────────────────
+    def _build_view_section(self) -> ChromeSection:
+        """표현만 바꾸는 것들 — DB를 다시 읽지 않으므로 [적용]이 필요 없다.
+
+        예전에는 도크 `표시` 절에 있어서, 바로 위의 lot 선택([적용] 필요)과
+        구분되지 않았다(설계 §0 D).
+        """
+        sec = ChromeSection("보기")
+        lab = QLabel("로그 축 item 패턴")
+        lab.setObjectName("hint")
+        sec.body.addWidget(lab)
+        self.ed_log = QLineEdit(", ".join(self.state.log_patterns))
+        self.ed_log.setToolTip(
+            "이름이 이 패턴에 걸리는 item은 Y축을 로그로 그립니다(쉼표로 여러 개).")
+        self.ed_log.editingFinished.connect(self._log_changed)
+        sec.body.addWidget(self.ed_log)
+
+        self.chk_lot_split = QCheckBox("lot마다 심볼 다르게")
+        self.chk_lot_split.setToolTip(
+            "여러 lot을 함께 볼 때 lot마다 점 모양을 달리하고 범례에 lot을 적습니다.\n"
+            "켜 두는 동안에는 그룹별로 지정한 심볼 대신 lot이 모양을 정합니다.")
+        self.chk_lot_split.toggled.connect(self._lot_split_toggled)
+        sec.body.addWidget(self.chk_lot_split)
+        return sec
+
+    def _tab_changed(self, index: int) -> None:
+        self.actionbar.show_page(index)
+        self.inspector.show_page(index)
 
     def _build_shortcuts(self) -> None:
         """이 화면의 동작 — 창 전역 단축키는 MainWindow가 갖는다."""
         for keys, fn in (("F5", self.apply_config),
                          ("Ctrl+Return", self._run_current_tab),
                          ("Ctrl+Enter", self._run_current_tab),
-                         ("Ctrl+Z", self._undo)):
+                         ("Ctrl+Z", self._undo),
+                         ("F9", self.toggle_rail),
+                         ("F10", self.toggle_inspector),
+                         ("F2", self.toggle_guide)):
             QShortcut(QKeySequence(keys), self, activated=fn)
+
+    # ── 패널 접기 (1366×768에서 캔버스를 되찾는 길) ───────────
+    def toggle_rail(self) -> None:
+        """F9 — 왼쪽 소스 레일을 접는다. 데이터셋을 정한 뒤에는 볼 일이 없다."""
+        self.rail.setVisible(not self.rail.isVisible())
+
+    def toggle_inspector(self) -> None:
+        """F10 — 오른쪽 인스펙터를 접는다. 둘 다 접으면 캔버스가 약 1350px."""
+        self.inspector.setVisible(not self.inspector.isVisible())
+
+    # ── 입력 가이드 (설계 §5) ────────────────────────────────
+    def requirements(self) -> list:
+        """지금 무엇이 채워졌는지 — 판정은 `ui/guidance.py` 하나가 한다."""
+        return guidance.analysis_requirements(self.state, self.cfg())
+
+    def toggle_guide(self) -> bool:
+        """`F2` — 다음에 할 한 곳만 강조한다. 다 채우면 저절로 꺼진다."""
+        self._guide = not self._guide
+        if self._guide and guidance.next_step(self.requirements()) is None:
+            self._guide = False          # 채울 것이 없으면 켤 이유도 없다
+            from etreport.ui.widgets.toast import toast
+            toast(self, "채워야 할 입력이 없습니다 — [적용](F5)한 결과를 보세요")
+        self._refresh_guidance()
+        return self._guide
+
+    def _refresh_guidance(self) -> None:
+        """필요 표시(층 1)는 늘, 가이드 강조(층 2)는 켰을 때만."""
+        reqs = self.requirements()
+        step = guidance.next_step(reqs)
+        if self._guide and step is None:         # 다 채웠다 — 스스로 꺼진다
+            self._guide = False
+        self.rail.apply_guidance(reqs, step.key if self._guide and step else "")
+        if self._guide and step is not None:
+            self.lbl_apply.setText(f"① {step.label} — {step.how}")
 
     def _run_current_tab(self) -> None:
         """보고 있는 탭의 주 동작([그리기]·[표 만들기]·[미리보기])을 누른다."""
@@ -91,263 +217,7 @@ class AnalysisWorkspace(QWidget):
         if btn is not None and btn.isEnabled():
             btn.click()
 
-    # ── 도크 ─────────────────────────────────────────────────
-    def _build_dock(self) -> QWidget:
-        panel = QWidget()
-        panel.setObjectName("dock")
-        v = QVBoxLayout(panel)
-        v.setContentsMargins(16, 16, 16, 16)
-        v.setSpacing(10)
-
-        # 설정 프리셋 -----------------------------------------
-        v.addWidget(SectionLabel("설정"))
-        self.cfg_combo = QComboBox()
-        on_combo(self.cfg_combo, lambda: self._cfg_selected(
-            self.cfg_combo.currentIndex()))
-        v.addWidget(self.cfg_combo)
-        btns = QHBoxLayout()
-        for text, fn in (("저장", self._cfg_save),
-                         ("새 이름", self._cfg_save_as),
-                         ("삭제", self._cfg_delete)):
-            b = GhostButton(text)
-            b.clicked.connect(fn)
-            btns.addWidget(b)
-        v.addLayout(btns)
-
-        # 파일 5행 (고르면 경로만 담아 둔다) --------------------
-        # 라벨과 값을 두 열로 나눈다 — 예전처럼 공백 문자로 자리를 맞추면
-        # 배포 PC의 폰트에 따라 열이 어긋난다.
-        self._file_values: dict[str, QLabel] = {}
-        for key, label, fn in (
-                ("db", "DB", self._pick_db),
-                ("plot", "Plot", lambda: self._pick_tpl("plot")),
-                ("tbl", "Table", lambda: self._pick_tpl("table")),
-                ("rfm", "리포메터", self._pick_rfm),
-                ("split", "실험 조건", self._pick_split)):
-            b = self._file_row(key, label)
-            b.clicked.connect(fn)
-            setattr(self, f"btn_{key}", b)
-            v.addWidget(b)
-
-        # lot 선택 — 파일 바로 아래에 접이식으로(§9.2). 접혀 있어도 제목이
-        # 'LOT 3/12'로 상태를 말하므로 펼치지 않고도 무엇을 보고 있는지 안다.
-        self.lot_section = CollapsibleSection("lot", collapsed=True)
-        self._build_lot_body(self.lot_section.body)
-        v.addWidget(self.lot_section)
-
-        # REPORT는 **콤보를 두지 않는다**(확정 사양 §5.1). 템플릿에 리포트가
-        # 여럿이면 [적용] 뒤 안내 문구로만 알린다.
-        self.lbl_report = QLabel()
-        self.lbl_report.setObjectName("hint")
-        self.lbl_report.setWordWrap(True)
-        v.addWidget(self.lbl_report)
-
-        self.btn_apply = QPushButton("적용")
-        self.btn_apply.setToolTip(
-            "고른 파일들을 한 번에 읽고 검증합니다.\n"
-            "파일을 고르는 동안에는 Excel을 열지 않습니다.")
-        self.btn_apply.clicked.connect(self.apply_config)
-        v.addWidget(self.btn_apply)
-        self.lbl_apply = QLabel("파일을 고르고 [적용]을 누르세요")
-        self.lbl_apply.setObjectName("hint")
-        self.lbl_apply.setWordWrap(True)
-        v.addWidget(self.lbl_apply)
-
-        # 자주 쓰지 않는 도구는 접어 둔다 — 도크가 같은 모양의 버튼 벽이 되지
-        # 않게. 펼침 여부는 설정에 남아 다음에 켤 때 그대로다.
-        tools = CollapsibleSection("도구",
-                                   collapsed=not self.settings.dock_tools_open)
-        tools.toggle.toggled.connect(self._tools_toggled)
-        self.tools_section = tools
-        for text, tip, fn in (
-                ("S3 저장소", "사내 S3에 duckdb·csv·sbdf를 올리고 내려받습니다.",
-                 self._open_s3),
-                ("inline 계측 불러오기",
-                 "fab.f_fab_wf_met에서 계측값을 가져와 (lot, wafer)로 붙입니다.\n"
-                 "붙인 값은 탐색 X축·Summary에서 쓰고, 유의 인자 top-k는\n"
-                 "PPT 슬라이드로 나갑니다.", self._open_metrology),
-                ("fab tracking 불러오기",
-                 "fab.f_fab_tracking에서 lot·wafer별 공정 조건을 가져옵니다.\n"
-                 "line·process·part·기간은 분석 중인 DB에서 자동으로 채우고,\n"
-                 "SQL은 직접 고칠 수 있습니다. 뽑을 컬럼의 이름을 정해 붙이면\n"
-                 "boxplot X축·표 범주·PPT에서 그대로 쓸 수 있습니다.",
-                 self._open_fabtrack),
-                ("SQL 조회 · 내보내기",
-                 "DB를 직접 조회하고 결과를 csv·xlsx로 내보냅니다.",
-                 self._open_sql)):
-            b = GhostButton(text)
-            b.setToolTip(tip)
-            b.clicked.connect(fn)
-            tools.body.addWidget(b)
-        self.btn_cache = GhostButton("")
-        self.btn_cache.setToolTip(
-            "Excel 읽기 결과를 로컬에 캐시합니다.\n"
-            "누르면 캐시를 비우고 다음에 Excel에서 새로 읽습니다.")
-        self.btn_cache.clicked.connect(self._clear_cache)
-        tools.body.addWidget(self.btn_cache)
-        v.addWidget(tools)
-
-        # plot -------------------------------------------------
-        v.addWidget(SectionLabel("plot"))
-        v.addWidget(QLabel("로그 축 item 패턴"))
-        self.ed_log = QLineEdit(", ".join(self.state.log_patterns))
-        self.ed_log.editingFinished.connect(self._log_changed)
-        v.addWidget(self.ed_log)
-
-        # lot 구분 — 표시 옵션이므로 DB를 다시 읽지 않는다. [그리기]만 dirty로.
-        self.chk_lot_split = QCheckBox("lot마다 심볼 다르게")
-        self.chk_lot_split.setToolTip(
-            "여러 lot을 함께 볼 때 lot마다 점 모양을 달리하고 범례에 lot을 적습니다.\n"
-            "켜 두는 동안에는 그룹별로 지정한 심볼 대신 lot이 모양을 정합니다.")
-        self.chk_lot_split.toggled.connect(self._lot_split_toggled)
-        v.addWidget(self.chk_lot_split)
-
-        # 실험 조건 --------------------------------------------
-        v.addWidget(SectionLabel("실험 조건"))
-        b = GhostButton("factor 편집")
-        b.clicked.connect(self._edit_split)
-        v.addWidget(b)
-        self.lbl_factor = QLabel()
-        self.lbl_factor.setObjectName("hint")
-        self.lbl_factor.setWordWrap(True)
-        v.addWidget(self.lbl_factor)
-        self.lbl_confound = QLabel()
-        self.lbl_confound.setObjectName("warn")
-        self.lbl_confound.setWordWrap(True)
-        v.addWidget(self.lbl_confound)
-
-        # 그룹 -------------------------------------------------
-        v.addWidget(SectionLabel("그룹"))
-        self.group_list = QListWidget()
-        self.group_list.setObjectName("groupList")
-        self.group_list.setFixedHeight(120)
-        self.group_list.itemChanged.connect(self._toggle_group)
-        v.addWidget(self.group_list)
-        b = GhostButton("그룹 편집")
-        b.clicked.connect(self._edit_groups)
-        v.addWidget(b)
-
-        # 이상치 필터 ------------------------------------------
-        v.addWidget(SectionLabel("이상치 필터 (Tukey)"))
-        self.chk_tukey = QCheckBox("IQR 밖 자동 제외")
-        self.chk_tukey.setToolTip(
-            "표·plot을 그리기 전에 사분위수 밖의 점을 걸러 냅니다.\n"
-            "lo = Q1 − k×IQR · hi = Q3 + k×IQR\n"
-            "걸러진 점은 버리지 않고 이력에 남고, 그림에는 회색 빈 심볼로 보입니다.")
-        self.chk_tukey.toggled.connect(self._tukey_changed)
-        v.addWidget(self.chk_tukey)
-        row_t = QHBoxLayout()
-        row_t.addWidget(QLabel("배수"))
-        self.cmb_tukey_k = QComboBox()
-        self.cmb_tukey_k.setEditable(True)      # 프리셋 밖의 값도 넣을 수 있게
-        self.cmb_tukey_k.addItems([f"{k:g}" for k in outliers.PRESET_K])
-        self.cmb_tukey_k.setToolTip(
-            "IQR의 몇 배 밖을 이상치로 볼지. 3.0·4.5가 흔히 쓰는 값입니다.\n"
-            "상자그림 수염(1.5)보다 크게 잡습니다 — 여기서 하는 일은 표시가\n"
-            "아니라 '버리기'라, 1.5로 거르면 정상 산포의 꼬리까지 잘립니다.")
-        self.cmb_tukey_k.currentTextChanged.connect(
-            lambda _t: self._tukey_changed())
-        row_t.addWidget(self.cmb_tukey_k, 1)
-        self.cmb_tukey_scope = QComboBox()
-        for key, label in outliers.SCOPE_LABELS.items():
-            self.cmb_tukey_scope.addItem(label, key)
-        self.cmb_tukey_scope.setToolTip(
-            "사분위수를 어느 범위에서 구할지.\n"
-            "25 ℃와 125 ℃를 한데 섞으면 정상적인 고온 측정이 통째로 이상치가\n"
-            "되므로 기본은 측정 조건별입니다.")
-        on_combo(self.cmb_tukey_scope, self._tukey_changed)
-        row_t.addWidget(self.cmb_tukey_scope, 2)
-        w_t = QWidget()
-        w_t.setLayout(row_t)
-        v.addWidget(w_t)
-        self.lbl_tukey = QLabel()
-        self.lbl_tukey.setObjectName("hint")
-        self.lbl_tukey.setWordWrap(True)
-        v.addWidget(self.lbl_tukey)
-        self.btn_tukey_log = GhostButton("걸러진 점 보기")
-        self.btn_tukey_log.clicked.connect(self._open_filter_log)
-        v.addWidget(self.btn_tukey_log)
-
-        # 제외 -------------------------------------------------
-        v.addWidget(SectionLabel("제외 포인트"))
-        self.lbl_excl = QLabel("0")
-        self.lbl_excl.setObjectName("bigNum")
-        self.lbl_excl.setAlignment(Qt.AlignCenter)
-        v.addWidget(self.lbl_excl)
-        self.btn_undo = GhostButton("되돌리기")
-        self.btn_undo.clicked.connect(self._undo)
-        v.addWidget(self.btn_undo)
-        v.addStretch(1)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(panel)
-        scroll.setFixedWidth(282)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setObjectName("dockScroll")
-        self._fill_cfg_combo()
-        return scroll
-
-    def _file_row(self, key: str, label: str) -> QPushButton:
-        """파일 한 줄 — 라벨 열 + 값(모노). 눌러서 고른다."""
-        b = QPushButton()
-        b.setObjectName("fileRow")
-        b.setCursor(Qt.PointingHandCursor)
-        b.setMinimumHeight(38)
-        h = QHBoxLayout(b)
-        h.setContentsMargins(11, 5, 11, 5)
-        h.setSpacing(8)
-        lab = QLabel(label)
-        lab.setObjectName("fileLabel")
-        lab.setFixedWidth(62)
-        val = QLabel()
-        val.setObjectName("fileValue")
-        val.setTextInteractionFlags(Qt.NoTextInteraction)
-        h.addWidget(lab)
-        h.addWidget(val, 1)
-        self._file_values[key] = val
-        return b
-
-    def _set_file(self, key: str, value: str, sheet: str = "") -> None:
-        """파일 행의 값 갱신 — 비었으면 '고르기'를 흐리게 보여 준다."""
-        lab = self._file_values[key]
-        text = value or "고르기"
-        if value and sheet:
-            text = f"{value}  [{sheet}]"
-        lab.setProperty("empty", "true" if not value else "false")
-        # 도크 폭이 좁아 긴 파일명은 앞을 줄인다(끝의 이름·시트가 중요하다)
-        fm = lab.fontMetrics()
-        lab.setText(fm.elidedText(text, Qt.ElideLeft, max(lab.width(), 150)))
-        lab.setToolTip(text if value else "")
-        lab.style().unpolish(lab)
-        lab.style().polish(lab)
-
-    def _tools_toggled(self, collapsed: bool) -> None:
-        self.settings.dock_tools_open = not collapsed
-
     # ── lot 선택 (§9.2) ──────────────────────────────────────
-    def _build_lot_body(self, box) -> None:
-        row = QHBoxLayout()
-        for text, on in (("전체", True), ("해제", False)):
-            b = GhostButton(text)
-            b.clicked.connect(lambda _c=False, v=on: self._lot_check_all(v))
-            row.addWidget(b)
-        row.addStretch(1)
-        box.addLayout(row)
-
-        self.lot_list = QListWidget()
-        self.lot_list.setObjectName("lotList")
-        self.lot_list.setFixedHeight(132)
-        self.lot_list.itemChanged.connect(self._lot_toggled)
-        box.addWidget(self.lot_list)
-
-        self.btn_coverage = GhostButton("커버리지")
-        self.btn_coverage.setToolTip(
-            "lot마다 item·wafer·측정 조건이 어떻게 다른지 표로 봅니다.\n"
-            "기준은 item이 가장 많은 lot입니다.")
-        self.btn_coverage.clicked.connect(self._open_coverage)
-        box.addWidget(self.btn_coverage)
-
     def _load_lots(self, db_path: str) -> None:
         """DB의 lot 목록을 읽어 리스트를 채운다 — **[적용] 전에** 도는 조회다.
 
@@ -730,19 +600,24 @@ class AnalysisWorkspace(QWidget):
     def _show_report(self, name: str) -> None:
         """적용된 리포트 이름을 문구로만 보여 준다 — 고르는 콤보는 없다(§5.1).
 
-        한 파일에 리포트가 여럿이면 그 사실만 알린다. 어느 것을 쓸지는 템플릿의
-        Report 컬럼이 정한다.
+        한 파일에 리포트가 여럿이면 그 **사실만** 한 줄로 알리고, 목록과 바꾸는
+        방법은 툴팁에 둔다(설계 §2 — 조작면에 산문이 상주할 이유가 없다). 레일이
+        244px라 4줄짜리 문구가 상주하면 그만큼 소스 목록이 잘린다.
         """
         others = [r for r in self.state.reports if r != name]
         if not name:
             self.lbl_report.setText("")
+            self.lbl_report.setToolTip("")
             return
         text = f"REPORT  {name}"
+        tip = f"적용된 리포트: {name}"
         if others:
-            text += (f"\n템플릿에 리포트 {len(self.state.reports)}개 "
-                     f"({', '.join(others[:3])}{'…' if len(others) > 3 else ''}) — "
-                     f"다른 리포트를 쓰려면 템플릿의 Report 열을 바꾸세요")
+            text += f"  · 리포트 {len(self.state.reports)}개"
+            tip = (f"{tip}\n템플릿에 리포트가 {len(self.state.reports)}개 있습니다 "
+                   f"({', '.join(others[:3])}{'…' if len(others) > 3 else ''}).\n"
+                   f"다른 리포트를 쓰려면 템플릿의 Report 열을 바꾸세요.")
         self.lbl_report.setText(text)
+        self.lbl_report.setToolTip(tip)
 
     # ── 표시 갱신 ────────────────────────────────────────────
     def _refresh_dock(self) -> None:
@@ -751,50 +626,23 @@ class AnalysisWorkspace(QWidget):
         def short(p: str) -> str:
             return Path(p).name if p else ""
 
-        self._set_file("db", short(c.db_path), st.table)
-        self._set_file("plot", short(c.plot_template_path), c.plot_sheet)
-        self._set_file("tbl", short(c.table_template_path), c.table_sheet)
-        self._set_file("rfm", short(c.reformatter_path), c.reformatter_sheet)
-        self._set_file("split", "붙여넣은 내용" if getattr(c, "split_text", "")
-                       else short(c.split_path))
+        self.rail.set_file("db", short(c.db_path), st.table)
+        self.rail.set_file("plot", short(c.plot_template_path), c.plot_sheet)
+        self.rail.set_file("tbl", short(c.table_template_path), c.table_sheet)
+        self.rail.set_file("rfm", short(c.reformatter_path), c.reformatter_sheet)
+        self.rail.set_file("split", "붙여넣은 내용" if getattr(c, "split_text", "")
+                           else short(c.split_path))
 
+        # factor는 그룹이 만들어지는 **근거**라 레일에 남는다. 그 결과(목록·색·
+        # 보이기·혼입 경고)는 인스펙터 [그룹] 섹션이 스스로 갱신한다.
         self.lbl_factor.setText(
             f"factor · {', '.join(st.factors) or '(없음)'}" if st.split
             else "실험 조건 파일 미연결")
-        cf = st.split.confounds(st.factors) if st.split else []
-        self.lbl_confound.setVisible(bool(cf))
-        if cf:
-            self.lbl_confound.setText(
-                f"⚠ 혼입 {len(cf)}건 — '{cf[0].group}' 안에 "
-                f"{cf[0].step}가 {len(cf[0].codes)}종 섞여 있습니다")
 
-        # 그룹별 포인트 수 — group_by 한 번으로 (제외를 찍을 때마다 불리는 자리라
-        # 그룹마다 전체 프레임을 필터하면 데이터가 커질수록 클릭이 무거워진다)
-        counts: dict[str, int] = {}
-        if st.data is not None and st.groups:
-            counts = {r["gid"]: r["len"] for r in
-                      st.active().group_by("gid").len().iter_rows(named=True)}
-
-        self.group_list.blockSignals(True)
-        self.group_list.clear()
-        for g in st.groups:
-            n = counts.get(g.gid, 0)
-            it = QListWidgetItem(f"  {g.name}{'  · REF' if g.ref else ''}   {n}")
-            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
-            it.setCheckState(Qt.Checked if g.visible else Qt.Unchecked)
-            it.setForeground(QColor(g.color))
-            it.setData(Qt.UserRole, g.gid)
-            self.group_list.addItem(it)
-        self.group_list.blockSignals(False)
-
-        try:
-            from etreport.data.xlio import cache_stats
-            n, size = cache_stats()
-            self.btn_cache.setText(
-                f"Excel 캐시   {n}개 · {size / 1024:.0f} KB" if n
-                else "Excel 캐시   비어 있음")
-        except Exception:                            # noqa: BLE001
-            self.btn_cache.setText("Excel 캐시")
+        # 붙여 둔 추가 소스 — 접힌 절 안이라 한 줄로 알린다
+        extra = ([f"계측 {len(st.met_columns)}열"] if st.met_columns else []) \
+            + ([f"tracking {len(st.track_columns)}열"] if st.track_columns else [])
+        self.lbl_sources.setText(" · ".join(extra) or "붙인 컬럼 없음")
 
         # 데이터가 들어온 뒤에야 lot을 알 수 있는 경로(적재 직후·데모)를 위해
         # 목록이 비어 있으면 여기서 한 번 더 채운다. 조회는 하지 않는다.
@@ -802,25 +650,28 @@ class AnalysisWorkspace(QWidget):
         if not st.lots_all and st.data is not None and "lot" in st.data.columns:
             self._load_lots(c.db_path)
         self._refresh_lot_title()
-        self.lbl_excl.setText(str(len(st.excluded)))
-        self.lbl_excl.setProperty("zero", "true" if not st.excluded else "false")
-        self.lbl_excl.style().unpolish(self.lbl_excl)
-        self.lbl_excl.style().polish(self.lbl_excl)
         self.btn_undo.setEnabled(bool(st.undo_stack))
+
+        # 이상치 절은 **접힌 제목이 상태를 말한다** — 펼치지 않고도 켜져 있는지,
+        # 몇 점이 걸렸는지 보인다(lot 절과 같은 관용구).
         cfg = getattr(st, "tukey", None) or outliers.TukeyConfig()
         n_f = len(getattr(st, "filtered", {}) or {})
-        self.lbl_tukey.setText(
-            f"{cfg.label()} · {n_f:,}점 제외됨" if cfg.enabled
-            else "꺼짐 — 켜면 [적용] 때 IQR 밖의 점을 걸러 냅니다")
+        self.tukey_section.set_title(
+            f"이상치  {cfg.label()} · {n_f:,}점" if cfg.enabled else "이상치  꺼짐")
         self.btn_tukey_log.setEnabled(bool(n_f))
+        for w in (self.cmb_tukey_k, self.cmb_tukey_scope):
+            w.setEnabled(self.chk_tukey.isChecked())
+
+        # 하단 요약 한 줄 — 큰 숫자는 상단 상태 레일이 갖는다
+        parts = [f"그룹 {len(st.groups)}"] if st.groups else []
+        if st.excluded:
+            parts.append(f"제외 {len(st.excluded)}")
+        if n_f:
+            parts.append(f"필터 {n_f:,}")
+        self.lbl_summary.setText(" · ".join(parts))
+        self._refresh_guidance()
 
     # ── 나머지 동작 ──────────────────────────────────────────
-    def _toggle_group(self, item: QListWidgetItem) -> None:
-        g = self.state.group(item.data(Qt.UserRole))
-        if g:
-            g.visible = item.checkState() == Qt.Checked
-            self.bus.groups_changed.emit()
-
     def _edit_split(self) -> None:
         if self.state.split is None:
             QMessageBox.information(

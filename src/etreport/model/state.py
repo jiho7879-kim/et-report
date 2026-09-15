@@ -76,6 +76,12 @@ class AppState:
     # 램프와 함께 띄운다 — 화면마다 따로 알리지 않고 여기 한 곳으로 모은다.
     status_note: str = ""
     applied: bool = False              # [적용]으로 읽은 뒤인가
+    #: `active()`·`hidden_frame()` 캐시 — (프레임, 숨긴 키 집합, 결과).
+    #: 직접 만지지 말 것.
+    _active_cache: object | None = field(default=None, repr=False,
+                                         compare=False)
+    _hidden_cache: object | None = field(default=None, repr=False,
+                                         compare=False)
 
     # ── 조회 ─────────────────────────────────────────────────
     def aliases(self) -> list[str]:
@@ -97,13 +103,47 @@ class AppState:
         return self.excluded | set(self.filtered)
 
     def active(self) -> pl.DataFrame:
-        """제외·필터 반영된 포인트."""
+        """제외·필터 반영된 포인트. **결과를 캐시한다.**
+
+        리포트 미리보기는 슬롯 6개가 각자 이걸 부르고 `_excluded_frame()`이 또
+        6번 부른다 — 20만 행에서 `is_in`을 12번 도는 자리였다.
+
+        캐시 키는 `(프레임 동일성, 숨긴 키 집합)`이다. 버전 카운터를 쓰지 않는
+        이유: `excluded`는 여러 곳에서 직접 add/discard되고, 개수만 보면 한 점을
+        빼고 다른 점을 넣은 경우를 놓친다. 집합 비교는 숨긴 점 수(수십 개)에만
+        비례하므로 필터 한 번보다 훨씬 싸다. 프레임은 polars 특성상 바뀔 때마다
+        **새 객체**가 되므로(`with_columns`) 동일성 비교로 충분하다.
+        """
         if self.data is None:
             return pl.DataFrame()
         hide = self.hidden()
+        cached = self._active_cache
+        if (cached is not None and cached[0] is self.data
+                and cached[1] == hide):
+            return cached[2]
+        out = (self.data if not hide
+               else self.data.filter(~pl.col("key").is_in(list(hide))))
+        self._active_cache = (self.data, set(hide), out)
+        return out
+
+    def hidden_frame(self) -> pl.DataFrame | None:
+        """그림에 회색 빈 심볼로 남길 점 — `active()`의 여집합.
+
+        캐시 규칙도 같다. 리포트 미리보기는 슬롯마다 이걸 부르므로 캐시가 없으면
+        `active()`와 짝을 이뤄 20만 행을 열두 번 훑는다.
+        """
+        if self.data is None:
+            return None
+        hide = self.hidden()
         if not hide:
-            return self.data
-        return self.data.filter(~pl.col("key").is_in(list(hide)))
+            return None
+        cached = self._hidden_cache
+        if (cached is not None and cached[0] is self.data
+                and cached[1] == hide):
+            return cached[2]
+        out = self.data.filter(pl.col("key").is_in(list(hide)))
+        self._hidden_cache = (self.data, set(hide), out)
+        return out
 
     def wafer_columns(self) -> list[tuple[str, list[str]]]:
         """표의 wafer 열 — **plot과 같은 기준**으로 좁힌다.

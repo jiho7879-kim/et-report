@@ -16,6 +16,18 @@ log = logging.getLogger(__name__)
 ROW_H = 26
 
 
+def detach(w) -> None:
+    """레이아웃에서 뺀 위젯을 **즉시 화면에서 떼고** 파괴를 예약한다.
+
+    `deleteLater()`만 부르면 파괴가 이벤트 루프로 밀리는데, 그동안 위젯은 여전히
+    부모의 자식이라 **예전 자리에 그대로 그려진다.** 리포트 슬롯을 다시 만들 때
+    옛 캔버스 6개가 새 캔버스 6개 밑에 겹쳐 남아, 슬롯 경계에 축 조각이 삐져나온
+    채로 찍혔다(설명서 캡처에서 발견). 부모를 끊으면 그 프레임부터 사라진다.
+    """
+    w.setParent(None)
+    w.deleteLater()
+
+
 def defer(fn, *args, delay: int = 0):
     """다음 이벤트 루프 차례(또는 delay ms 뒤)에 실행.
 
@@ -108,7 +120,7 @@ class StaleMixin:
       stale_label_attr   — 안내 문구를 쓸 QLabel 속성 이름 (없으면 None)
       stale_message      — 그 문구
       auto_refresh       — 보고 있을 때 자동으로 refresh()까지 할지
-                           (Summary는 [표 만들기]를 눌러야만 계산한다)
+                           (요약은 [표 만들기]를 눌러야만 계산한다)
     그리고 refresh()를 구현한다.
 
     **신호별 정책**(확정): `data_changed`(=[적용])·`explore_changed`·

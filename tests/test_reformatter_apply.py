@@ -183,7 +183,7 @@ def test_addp_computed_per_key_not_globally():
 
 def test_matches_row_engine_on_realistic_frame():
     """합성 testset 한 판을 통째로 행 단위 엔진과 대조한다."""
-    from etreport.data.reformatter import compile_formula
+    from etreport.data.reformatter import _STD_CALL, compile_formula
     from tests.factory import make_reformatter
 
     rf = make_reformatter(n_real=30, n_addp=8, seed=5)
@@ -197,6 +197,11 @@ def test_matches_row_engine_on_realistic_frame():
     for r in wide.iter_rows(named=True):
         env = {k: v for k, v in r.items() if k not in key}
         for rule_ in rf.addps():
+            # 순수-ref Std()는 apply()가 5키(§10.8 그룹) 단위 표본표준편차로
+            # 다시 계산한다 — 행 단위 엔진과 의미가 다르므로 여기서 비교하지
+            # 않는다. 그 계약은 test_reformatter_std_group.py가 지킨다.
+            if _STD_CALL.search(rule_.formula):
+                continue
             expect = compile_formula(rule_.formula)(env)
             if expect is not None and rule_.absolute:
                 expect = abs(expect)

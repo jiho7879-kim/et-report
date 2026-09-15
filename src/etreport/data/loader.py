@@ -24,6 +24,9 @@ log = logging.getLogger(__name__)
 #: step/temp/site는 측정 조건 — 그룹 편집의 4단 필터와 배정 범위가 쓴다(§9.1).
 RESERVED = ("key", "lot", "wafer", "gid", "step", "temp", "site")
 
+# 분석 화면 외에 Excel/브라우저가 함께 도는 현장 PC를 위한 예측 가능한 상한.
+DUCKDB_MEMORY_LIMIT = "4GB"
+
 
 def readonly_config() -> dict:
     """읽기 전용 연결의 **공통 설정**.
@@ -44,8 +47,9 @@ def readonly_config() -> dict:
         tmp.mkdir(parents=True, exist_ok=True)
     except OSError as e:                       # 권한이 없으면 기본값으로
         log.debug("DuckDB 임시 폴더를 만들지 못했습니다(%s) — 기본값 사용", e)
-        return {"threads": 4}
-    return {"threads": 4, "temp_directory": str(tmp)}
+        return {"threads": 4, "memory_limit": DUCKDB_MEMORY_LIMIT}
+    return {"threads": 4, "memory_limit": DUCKDB_MEMORY_LIMIT,
+            "temp_directory": str(tmp)}
 
 
 def open_readonly(db_path: str) -> duckdb.DuckDBPyConnection:

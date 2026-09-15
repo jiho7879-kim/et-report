@@ -132,10 +132,27 @@ def test_native_menubar_is_hidden_but_actions_remain(win):
     from PySide6.QtWidgets import QToolButton
 
     assert not win.menuBar().isVisible()
-    assert [a.text() for a in win.menuBar().actions()] == ["템플릿", "도움말"]
+    assert [a.text() for a in win.menuBar().actions()] == ["템플릿", "도구",
+                                                          "도움말"]
     titles = {b.text() for b in win.findChildren(QToolButton)
               if b.objectName() == "menuButton"}
-    assert titles == {"템플릿", "도움말"}
+    assert titles == {"템플릿", "도구", "도움말"}
+
+
+def test_tools_menu_holds_the_file_utilities(qapp, win):
+    """지금 보는 분석을 바꾸지 않는 도구는 상단바로 갔다(설계 §2 이동표).
+
+    계측·fab tracking은 **여기 없다** — 프레임에 컬럼을 붙여 그릴 수 있는 것이
+    달라지므로 소스 레일 [추가 소스]다.
+    """
+    act = next(a for a in win.menuBar().actions() if a.text() == "도구")
+    texts = [x.text() for x in act.menu().actions() if x.text()]
+    assert any("S3" in t for t in texts)
+    assert any("SQL" in t for t in texts)
+    assert any("캐시" in t for t in texts)
+    assert not any("계측" in t or "tracking" in t for t in texts)
+    # 캐시 항목은 열 때 크기를 센다
+    assert "캐시" in win._refresh_cache_action()
 
 
 # ── 미적용 표시 ──────────────────────────────────────────────────────────
@@ -170,11 +187,11 @@ def test_file_rows_use_two_columns(qapp, win):
     assert ws._file_values["db"].property("empty") == "false"
 
 
-def test_tools_section_starts_collapsed(qapp, win):
-    """자주 안 쓰는 도구는 접어 둔다(펼침 여부는 설정에 남는다)."""
+def test_extra_sources_section_starts_collapsed(qapp, win):
+    """추가 소스(계측·tracking)는 접어 둔다(펼침 여부는 설정에 남는다)."""
     ws = win.anal_ws
-    assert ws.tools_section.toggle.isChecked()          # 접힘
-    ws.tools_section.toggle.setChecked(False)
+    assert ws.sources_section.toggle.isChecked()        # 접힘
+    ws.sources_section.toggle.setChecked(False)
     assert ws.settings.dock_tools_open is True
 
 
@@ -223,3 +240,43 @@ def test_data_layout_switches_to_two_columns(qapp, win):
     assert ws.grid.itemAtPosition(0, 1) is not None   # 조회 조건이 오른쪽 열
     ws._relayout(1)
     assert ws.grid.itemAtPosition(0, 1) is None
+
+
+# ── 도크가 제 폭 안에 들어간다 ───────────────────────────────────────────
+def test_rail_content_fits_its_fixed_width(qapp, win):
+    """레일 안의 어떤 위젯도 레일 폭 밖으로 나가지 않는다.
+
+    레일은 고정 폭 스크롤 영역이고 가로 스크롤이 없다. 그래서 위젯 하나가
+    폭을 넘기면 **오류 없이 오른쪽이 잘린 채로** 남는다 — 예전에 항목이 긴
+    콤보(`측정 조건별 (step · 온도)`) 하나가 최소 폭을 338px로 밀어 올려
+    도크 전체의 오른쪽 글자가 통째로 사라졌고, 아무도 눈치채지 못했다.
+    폭이 300 → 244로 좁아졌으므로 더 빠듯하다.
+    """
+    from PySide6.QtWidgets import QScrollArea, QWidget
+
+    from etreport.ui.source_rail import RAIL_WIDTH
+
+    rail = win.anal_ws.rail
+    panel = rail.findChild(QWidget, "dock")
+    scroll = rail.findChild(QScrollArea, "dockScroll")
+    assert panel is not None and scroll is not None
+    assert rail.width() == RAIL_WIDTH
+    assert panel.minimumSizeHint().width() <= scroll.viewport().width(), (
+        f"레일 내용이 {panel.minimumSizeHint().width()}px를 요구하는데 "
+        f"쓸 수 있는 폭은 {scroll.viewport().width()}px다 — 오른쪽이 잘린다")
+    # 하단 고정 블록([적용]·요약)도 같은 폭 안에 들어가야 한다
+    foot = rail.findChild(QWidget, "railFooter")
+    assert foot.minimumSizeHint().width() <= RAIL_WIDTH
+
+
+def test_dock_checkbox_text_uses_chrome_colour(qapp):
+    """도크의 체크박스 글자는 크롬 글자색이어야 한다.
+
+    QCheckBox는 QLabel이 아니라 `#dock QLabel` 규칙이 닿지 않는다. 규칙이
+    없으면 전역 `QWidget { color:TEXT }`(측정면용 먹색)를 물려받아 어두운
+    도크 위에 어두운 글자가 찍히고, 라벨이 통째로 안 보인다.
+    """
+    from etreport.ui import theme
+
+    css = theme.qss_path().read_text(encoding="utf-8")
+    assert "#dock QCheckBox" in css

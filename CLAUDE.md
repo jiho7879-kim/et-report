@@ -219,20 +219,66 @@ COM이 계정에 묶여 있어 로그인 없이 돌리면 조용히 빈 결과�
 바뀐다). 렌더러는 **pyplot을 쓰지 않는다** — `Figure()`를 직접 만든다. pyplot로
 만들면 전역 매니저에 등록돼 덱 하나당 수백 개가 남는다.
 
+**그리는 자리의 비용 규약 다섯**(설계 §4-C, `tests/test_perf_plot.py`가 지킨다).
+리포트 미리보기는 슬롯이 6개라 여기 있는 것이 전부 6배로 걸린다.
+- 히트테스트 좌표는 **`on_pick`이 있을 때만** 모은다(없으면 `key.to_list()`가
+  20만 개 문자열을 만들었다 버린다).
+- 그룹 분할은 `partition_by("gid")` **한 번**. 그룹마다 filter를 걸면 O(n×g).
+- `state.active()`·`hidden()`은 캐시된다(프레임·제외 집합이 키). 제외가 바뀌면
+  **반드시** 무효화된다 — 캐시가 틀리면 화면이 거짓말을 한다.
+- 그룹 안에서 색·크기가 균일하면 `ax.scatter`(PathCollection) 대신
+  `ax.plot(..., linestyle="none")`(Line2D). 마커 크기 단위가 다르므로
+  `markersize = sqrt(s)`로 환산한다. **샘플링·decimation은 쓰지 않는다** —
+  이상점을 찾는 그림에서 점을 버리면 안 된다.
+- 클릭 히트테스트는 점 전체를 픽셀로 변환하지 않고 **클릭 좌표를 역변환**해서
+  데이터 공간에서 비교한다.
+
+측정값(데모 데이터를 20만 행으로 늘려, 개편 전 커밋과 같은 스크립트로 비교):
+리포트 미리보기(슬롯 6개) 1.15초 → 0.69초, 탐색 [그리기] 0.32초 → 0.23초,
+`active()` 12회 0.11초 → 0.00초.
+
+**레이아웃에서 뺀 위젯은 `tabs/common.detach()`로 뗀다.** `deleteLater()`만
+부르면 파괴가 이벤트 루프로 밀리고, 그동안 위젯은 여전히 부모의 자식이라
+**예전 자리에 계속 그려진다** — 리포트 미리보기를 두 번 누르면 옛 캔버스 6개가
+새 캔버스 밑에 겹쳐 남아 슬롯 경계에 축 조각이 삐져나왔다(설명서 캡처에서
+발견). 그리는 값도 그만큼 늘어난다. 규칙은
+`test_perf_plot.test_rebuild_leaves_no_ghost_canvases`.
+
 **REF μ±3σ 밴드는 넣지 않는다.** 사양서 §6·§5.2에 남아 있지만 2026-08-11에
 **전체 plot에서 삭제하기로 확정**됐고(`docs/trend-chart-plan.md` §2-4),
 `test_render_trend.py`의 `test_ref_band_field_removed`·
 `test_renderer_module_has_no_ref_band`가 재발을 막는다. 사양서만 보고 되살리지 말 것.
 
-**화면 테마는 `ui/theme.py`가 전부 갖는다**(2026-08-15 리디자인, "계측기 콘솔").
-상단바·도크는 무채색 그래파이트(크롬), 카드·표·캔버스는 흰색(측정면)이고 액센트는
-딥 틸 하나다 — 차트가 이미 Okabe-Ito 8색과 규격 빨강을 쓰므로 UI가 같은 색조로
-경쟁하지 않게 한 결정이다. 지켜야 할 것 셋:
+**화면 테마는 `ui/theme.py`가 전부 갖는다**(2026-08-15 "계측기 콘솔", 2026-09-05
+라이트 크롬 개정). 원칙은 **"흰 종이 = 측정면(캔버스·표·슬라이드)뿐"** — 상단바·
+도크·조작면은 밝은 무채색 크롬 하나(`%INK% #F6F7F9`, 위계는 어둠이 아니라
+hairline 경계선·표면 명도), 측정면만 종이 흰색이고 액센트는 인디고(`ACC #3E51C4`)
+하나다 — 차트가 이미 Okabe-Ito 8색과 규격 빨강을 쓰므로 UI가 같은 색조로
+경쟁하지 않게 한 결정이다(딥 틸은 레거시 공정관리 툴 냄새가 나고 Okabe-Ito
+파랑·타깃 파랑과 겹쳐 기각). 지켜야 할 것:
 - 색·모서리·글자 크기는 **`TOKENS`에만** 적는다. `style.qss`는 `%TOKEN%`을 쓰고
   파이썬 코드에 hex를 박지 않는다(`tests/test_theme.py`가 대비를 이 표로 검사한다).
-- **전역 `QWidget { background: … }` 규칙을 두지 않는다.** 그 규칙이 있으면 어두운
-  도크 안의 자식 위젯이 전부 밝은 회색으로 칠해진다. 배경은 QPalette와 이름 있는
-  표면(`#topbar` `#dock` `#card` …)에만 준다.
+- **전역 `QWidget { background: … }` 규칙을 두지 않는다.** 그 규칙은 상속이 아니라
+  *모든 위젯에 각각* 매치되어, 크롬 안의 자식 위젯이 전부 같은 회색으로 칠해져
+  표면 구분이 사라진다. 배경은 QPalette와 이름 있는 표면에만 준다.
+- **글자색은 그 반대다 — 크롬 위에서는 종류마다 따로 돌려줘야 한다.** 전역
+  `QWidget { color:%TEXT% }`는 측정면용 규칙이라, `#dock QLabel`처럼 한 종류만
+  덮으면 나머지(QCheckBox·QRadioButton·hint)가 크롬 표면용 토큰(`INK_*`)을 못 받아
+  회색·상태색이 어긋난다. 크롬 안에 새 위젯 종류를 넣으면 5개 크롬 표면
+  (`#dock`·`#console`·`#probePanel`·`#toolStrip`·`#pageStrip`·`#inspector`) 규칙에
+  함께 적는다(`test_ux_redesign.test_dock_checkbox_text_uses_chrome_colour`).
+- **레일에 넣는 위젯은 `RAIL_WIDTH`(source_rail.py, 244) 안에 들어가야 한다.**
+  레일은 고정 폭 스크롤 영역이고 가로 스크롤이 없어서, 최소 폭을 넘긴 위젯은
+  오류 없이 **오른쪽이 잘린 채로** 남는다. 특히 콤보는 기본이 "가장 긴
+  항목만큼"이라 항목 하나가 길어지면 레일 전체를 밀어낸다 — `SourceRail`이
+  자기 안 모든 콤보의 `sizeAdjustPolicy`를 자리 기준으로 바꿔 두는 이유다.
+  긴 항목은 툴팁과 펼친 목록에서 읽는다. 규칙은
+  `test_ux_redesign.test_dock_content_fits_its_fixed_width`. 인스펙터도 같은
+  계약이다(`INSPECTOR_WIDTH` = 272, inspector.py).
+- **레이아웃을 `QWidget()` + `setLayout()`으로 만들 때는 `setContentsMargins(0,0,0,0)`
+  을 잊지 않는다.** Qt 기본 여백이 9px이라 그 줄만 위아래 형제보다 안쪽으로
+  들어가 카드 안에 왼쪽 선이 두 개 생기고, 그 18px 때문에 옆 콤보가 잘린다
+  (옛 `style_card`·`explore._scale_card`에서 실제로 그랬다).
 - 스타일은 **Fusion 고정**(`theme._use_fusion`). Windows 기본 스타일은 스크롤바·
   체크박스·콤보 화살표를 자기 식으로 그려서 QSS로 칠한 나머지와 따로 논다.
 - 콤보 화살표·체크 표시 아이콘은 토큰 색으로 **부팅 때 만들어** `%APPDATA%\\ETReport\\
@@ -247,7 +293,60 @@ COM이 계정에 묶여 있어 로그인 없이 돌리면 조용히 빈 결과�
 `assets/manual/ET_Report_사용설명서.pdf`이고 [도움말] 메뉴가 연다. 화면을 바꿨으면
 이 스크립트를 다시 돌려 설명서를 갱신한다.
 
-UI 구조: 도크는 `ui/analysis_ws.py`, 탭 3종은 `ui/tabs/`(explore·summary·report).
+UI 구조: 분석 화면은 **왼쪽 레일 + 탭 + 오른쪽 인스펙터 + 하단 액션바** 넷으로
+조립된다(`ui/analysis_ws.py`가 조립, 설계
+`docs/superpowers/specs/2026-09-13-ui-ux-restructure-design.md`).
+
+| 자리 | 무엇이 들어가나 | 코드 |
+|---|---|---|
+| 왼쪽 레일 | **무엇을 보고 있나** — DB·템플릿·리포메터·lot·이상치·추가 소스 | `ui/source_rail.py`(`SourceRail`) |
+| 가운데 탭 | 측정면 하나 — 캔버스·표·슬라이드 | `ui/tabs/`(explore·summary·report) |
+| 오른쪽 인스펙터 | **그것을 어떻게 보일까** — 축·집계·슬롯·그룹·보기 | `ui/inspector.py` |
+| 하단 액션바 | 왼쪽 끝=주 동작, 가운데=상태, 오른쪽 끝=결과 꺼내기 | `ui/actionbar.py` |
+
+새 컨트롤을 넣을 때 물을 것: **"이게 데이터를 바꾸나, 표현을 바꾸나."**
+데이터를 바꾸면 왼쪽, 표현만 바꾸면 오른쪽이다. 몇 주에 한 번 쓰는 동작
+(프리셋 저장·개명·삭제)은 레일이 아니라 프리셋 옆 `⋯` 메뉴, 지금 보는 분석을
+바꾸지 않는 것(S3·SQL 조회·Excel 캐시)은 상단바 `[도구]` 메뉴로 간다.
+`SourceRail`은 **위젯만 갖고 동작은 워크스페이스(`owner`)가 한다** — 파일을
+읽고 검증하는 일은 화면 조각이 아니라 세션의 일이고, 예약 실행 같은 다른
+입구도 같은 코드를 타야 하기 때문이다. `[적용]`은 스크롤 **밖** 하단에
+고정한다(목록을 내리면 주 동작이 사라지는 것을 막는다).
+
+**그룹은 `ui/widgets/group_section.py` 하나가 전부 갖는다**(보이기 · 색/심볼/
+크기 · REF · 편집). 예전에는 *보이기*=도크 리스트, *스타일*=탐색·리포트
+인스펙터에 각각 한 벌, *편집*=도크 버튼으로 흩어져 있었고 리포트 화면에는 뜻이
+다른 `[모든 plot에 적용]`이 둘이나 보였다. 워크스페이스가 `GroupSection`을
+**한 개만** 만들어 인스펙터 공용 자리에 두므로, 탭을 옮겨도 같은 인스턴스다.
+리스트에서 고른 행이 곧 편집 대상이라 그룹 고르기 콤보는 없앴다. 스타일 변경은
+그룹 편집 창·실험 조건 배정에서도 들어오므로 알림은 `groups_changed`
+**한 방향**으로만 흘린다.
+
+리포트 페이지 목록은 세로 목록이 아니라 **가로 스트립**이다
+(`ui/widgets/page_strip.py`, 높이 36px 고정). 페이지가 3장이든 30장이든 세로
+높이가 변하지 않게 브라우저 탭처럼 칩을 늘어놓고 넘치면 가로로 스크롤한다
+(`◀ ▶`·`⌄` 전체 목록). 바깥 API는 예전 `QListWidget`과 같은 뜻이다
+(`set_pages(labels, current)` · `currentRowChanged`).
+
+**무엇이 필수 입력인지는 `ui/guidance.py` 하나가 판정한다**(설계 §5).
+`analysis_requirements(state, cfg)` / `data_requirements(preset)`가 순서 있는
+`Requirement` 목록을 돌려주고 **셋이 같은 목록을 읽는다**: ① 비어 있는 필수
+입력에 `needs="true"`를 달아 QSS가 왼쪽 액센트 바를 그리는 상시 표시,
+② `F2`(상단바 `?`) 가이드 모드 — 다음에 할 **한 곳만** 강조, ③ 빈 상태 화면의
+안내 문구. 판정이 갈리면 "표시는 초록인데 [적용]은 실패"가 되므로 기준은
+`session.apply_config`가 실제로 요구하는 것을 따른다(템플릿은 plot·table이
+**둘 다** 있어야 읽는다). 오버레이 말풍선은 쓰지 않는다 — 스크롤·리사이즈·
+패널 접기에서 어긋난다. 강조는 위젯 자신의 속성으로 그린다.
+
+**인스펙터와 액션바는 워크스페이스가 하나만 소유한다.** 탭은 자기 위젯을
+`action_items()`(주 동작·상태 라벨·결과 버튼)와 `inspector_sections()`로
+넘길 뿐이고, **위젯은 새로 만들지 않고 그대로 담긴다** — 프록시 버튼을 두면
+dirty 표시(`•`)·`Ctrl+Enter`·비활성 처리가 두 벌로 갈린다. 탭을 추가하면 두
+메서드만 정의하면 되고, 페이지 번호는 `tab_widgets()` 순서를 따른다.
+인스펙터도 도크와 **같은 고정 폭 계약**이다(`INSPECTOR_WIDTH`, 가로 스크롤
+없음) — 넘긴 위젯은 오류 없이 오른쪽이 잘린다. `tests/test_layout_narrow.py`가
+1366×768에서 이것을 지킨다.
+
 지연 계산 토글(버튼 주황색 → 보고 있을 때만 갱신)은 `ui/tabs/common.py`의
 `StaleMixin` 하나에 있다 — 탭을 추가하면 여기에 붙인다. 오래 걸리는 작업
 (PPT·xlsx·[적용]·SQL 조회/저장)은 `ui/widgets/worker.py`의 `run_in_background`로
@@ -256,7 +355,8 @@ UI 구조: 도크는 `ui/analysis_ws.py`, 탭 3종은 `ui/tabs/`(explore·summar
 [그리기]/[미리보기]는 UI 스레드에서 그리되 버튼 잠금 + 대기 커서로 표시한다.
 
 단축키는 창 전역(`MainWindow._build_shortcuts`: Ctrl+1·Ctrl+2·F1)과 화면별
-(`AnalysisWorkspace`: F5·Ctrl+Enter·Ctrl+Z / `DataWorkspace`: F5·Esc)로 나뉜다.
+(`AnalysisWorkspace`: F5·Ctrl+Enter·Ctrl+Z·F9·F10 / `DataWorkspace`: F5·Esc)로
+나뉜다(F9=왼쪽 레일 접기, F10=인스펙터 접기 — 1366×768에서 캔버스를 되찾는 길).
 Ctrl+Enter는 보고 있는 탭의 `stale_button_attr` 버튼을 누른다 — 탭을 추가해도
 그 속성만 정의하면 따라온다. 새 단축키를 넣으면 [도움말] → [단축키]와 설명서의
 단축키 절도 함께 고친다.
@@ -294,7 +394,7 @@ plot 종류는 `scatter · box · trend` 셋이고 목록은 `model/specs.PLOT_T
 화면과 PPT의 숫자가 갈린다.
 
 ### 계산은 명시적으로만
-표·plot·미리보기는 자동 재계산하지 않는다. Summary [표 만들기] / 탐색 [그리기] /
+표·plot·미리보기는 자동 재계산하지 않는다. 요약 [표 만들기] / 탐색 [그리기] /
 리포트 [미리보기] 버튼이 트리거이고, 변경이 생기면 버튼이 앰버색 + 라벨 끝에 `•`가
 되며(색만으로 알리지 않는다 — `tabs/common.set_dirty`) 보고 있는 탭만 갱신된다.
 새 기능을 넣을 때 이 지연 계산 규약을 깨지 않는다.
@@ -321,6 +421,22 @@ item은 9999개씩 나눠 쿼리 하나가 Impala IN 상한을 넘지 않게 한
 미리보기는 `build_preview_sql()`로 **개수 주석만** 만든다 — 목록을 문자열로 펴면
 24,180개 기준 43만 자가 되어 조건을 고칠 때마다 다시 그린다.
 
+**추출은 메모리 앞에서 겸손하다**(설계 §4-A). 한 조회는 변환 중 pandas와
+polars 두 벌이 동시에 살아 있어 워커 수가 곧 피크다. 그래서:
+- **`MemoryError`·`ArrowMemoryError`는 재시도하지 않는다.** 이미 터진 상태에서
+  같은 쿼리를 두 번 더 던지면 반드시 더 나빠진다 — 즉시 중단하고 "기간·item을
+  줄이라"고 말한다. `RETRY`는 네트워크 같은 일시 오류에만 쓴다.
+- **첫 예외에서 남은 unit이 시작되지 않는다.** 전 단위를 한꺼번에 submit하지
+  않고 내부 abort 플래그(`should_stop`과 같은 통로)로 큐를 멈춘다.
+- **첫 청크는 단독 실행해 실측한다.** 그 크기로 `plan_workers()`가 병렬도를
+  (상한 `N_WORKERS`, 하한 1) 정하고, `plan_group_size()`가 행 예산
+  (`MAX_ROWS_PER_UNIT`)을 넘었으면 `resplit_units()`로 남은 단위의 item 그룹을
+  더 잘게 쪼갠다 — 기간은 1일이 이미 최소라 줄일 수 있는 축은 item뿐이다.
+  **풀은 상한으로 만들고 동시에 띄우는 수만 조절한다**(`ThreadPoolExecutor`의
+  `max_workers`는 생성 후 못 늘린다 — 1로 만들면 영원히 직렬이다).
+- 실측 규모(20만행/일 · item 1000)는 예산에 한참 못 미쳐 평소에는 아무 일도
+  일어나지 않는다. 규칙은 `tests/test_extract_oom.py`.
+
 **추출 결과 정규화** (`data/extractor.py: normalize_schema`) — bdq 결과는 반드시
 여기를 거쳐 long 고정 스키마가 된다. `cast` 하나로 끝내면 안 되는 이유가 둘 있다:
 Categorical → 숫자 직접 캐스팅은 polars가 막고(Utf8을 한 번 거친다), **문자열 →
@@ -339,6 +455,14 @@ tkout_time이 null이 되면 `key_hash`가 뭉쳐 서로 다른 측정이 중복
 different configuration`), `duckdb.connect(..., read_only=True)`를 직접 부르는
 코드가 하나만 생겨도 그 순간 충돌한다. 쓰기(적재)와 읽기도 함께 열 수 없으므로
 추출을 시작하기 전에 `loader.close_store(state)`로 읽기 연결을 닫는다. 따라서:
+- 읽기 연결에는 **명시적 천장**이 있다(`loader.DUCKDB_MEMORY_LIMIT`). 없으면
+  DuckDB가 기본값인 물리 메모리의 80%까지 쓰는데, 현장 PC는 Excel COM과
+  메모리를 나눠 쓴다. `temp_directory`(디스크 스필)는 예전부터 있었고 빠진 것은
+  상한뿐이었다. 다만 예전 로그의 `Arrow buffer failed to allocate`는 DuckDB
+  내부가 아니라 **결과를 파이썬으로 실체화하는 쪽**에서 났으므로 이 상한이 그
+  사고를 막는 것은 아니다 — 그쪽은 미리보기 `LIMIT 200`과 `COPY TO`
+  (`data/exporting.py`)가 막는다. SQL 창은 전체 행 수를 세려고 무거운 쿼리를
+  한 번 더 돌리지 않는다(미리보기보다 많으면 `200+행`으로 적는다).
 - 컬럼 이름은 고정하지 않고 `data/compat.py`의 `ROLE_ALIASES`로 역할을 추론한다
   (`root_lot_id|lot_id|lot`, `wafer_id|slot_no`, `tkout_time|create_dttm` …).
   long(`item_id`/`value`) 테이블이면 `select_sql()`이 PIVOT으로 wide화한다.
@@ -480,7 +604,11 @@ line·process·part와 기간 기본값은 `data/lotcontext.py`가 DuckDB에서 
 순서대로**. 아래 행은 위 행의 ADDP를 참조할 수 있고 그 반대는 검증 오류다(행 순서
 규칙이 곧 순환참조 차단). 수식은 `eval()`이 아니라 ast 화이트리스트로 파싱하며,
 `_compile_expr()`가 polars 식으로 번역해 벡터 계산하고 번역 불가한 것만 행 단위
-폴백으로 떨어진다(로그에 남음). `Std(...)`는 표본표준편차(n-1, NULL 제외).
+폴백으로 떨어진다(로그에 남음). `Std(...)`는 **5키(`STD_KEYS`:
+root_lot_id·wafer_id·step_id·step_seq·temperature)가 wide에 모두 있고 인자가
+전부 `{ALIAS}`인 순수 호출이면 그 묶음의 그룹 표본표준편차(n-1, NULL 제외,
+유효값 2개 미만이면 NULL)로 계산한다**(요청 ⑤). 키나 인자가 없으면 예전처럼
+행 단위로 떨어진다(로그에 남음).
 검증 실패 행은 **버리고 나머지로 진행**하며 이유를 `warnings`에 남긴다 — 이게 이
 코드베이스 전반의 오류 처리 방식이다(중단하지 않고 건너뛰고 보고).
 
@@ -546,5 +674,4 @@ ALIAS여야 하고, 아니면 그 행만 건너뛴다.
 `ui/theme.py`를 따른다**. `design-plans/instrument-console-redesign.md`가 그
 리디자인의 근거와 결정을 남긴 문서다.
 `docs/data-report-tool-plan.md`가 계획서다(코드 주석의 "계획서 §N" 참조 대상).
-`README.md`의 폴더 구조 표는 일부 모듈(session/aggregate/compat/loader/fonts 등)이
-빠져 있어 최신이 아니다.
+`README.md`의 폴더 구조 표는 2026-09-15 UI·UX 개편 때 전 모듈로 다시 채웠다.

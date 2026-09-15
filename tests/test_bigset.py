@@ -10,14 +10,15 @@
 """
 from __future__ import annotations
 
+import statistics
 import time
 
 import polars as pl
 import pytest
 
 from etreport.data import db, loader
+from etreport.data.reformatter import _STD_CALL, compile_formula
 from etreport.data.reformatter import apply as rf_apply
-from etreport.data.reformatter import compile_formula
 from tests.factory import make_long, make_reformatter
 
 pytestmark = pytest.mark.slow
@@ -69,18 +70,30 @@ def test_reformat_one_day(big, caplog):
     assert out["value"].null_count() == 0
 
 
+def _std_rules(rf):
+    """순수 `Std({A},{B}…)` 규칙 — 그룹 표본표준편차로 다시 쓰이는 것들(요청 ⑤).
+
+    이들은 **한 행 안의 수평 산포가 아니라** 5키 묶음의 산포라, 행 단위 엔진과
+    대조하면 당연히 어긋난다. 정의가 다른 것을 같다고 우기지 않도록 여기서
+    갈라내고 아래 `test_group_std_*`가 그룹 정의로 따로 검증한다.
+    """
+    return [r for r in rf.addps() if _STD_CALL.search(r.formula)]
+
+
 def test_values_match_row_engine_on_sampled_keys(big):
-    """벡터 결과를 행 단위 엔진과 대조 — 키 30개 × ADDP 40개."""
+    """벡터 결과를 행 단위 엔진과 대조 — 키 30개 × 행 단위 ADDP."""
     rf, src = big
     out = rf_apply(rf, src)
     key = ["root_lot_id", "wafer_id", "chip_x_pos", "chip_y_pos"]
     wide = out.pivot(on="item_id", index=key, values="value",
                      aggregate_function="first").head(30)
+    rules = [r for r in rf.addps() if r not in _std_rules(rf)]
+    assert rules, "행 단위로 대조할 ADDP가 하나도 없다"
 
     checked = 0
     for r in wide.iter_rows(named=True):
         env = {k: v for k, v in r.items() if k not in key}
-        for rule in rf.addps():
+        for rule in rules:
             expect = compile_formula(rule.formula)(env)
             if expect is not None and rule.absolute:
                 expect = abs(expect)
@@ -92,7 +105,38 @@ def test_values_match_row_engine_on_sampled_keys(big):
                     (rule.alias, rule.formula)
             checked += 1
     print(f"  값 대조           {checked:,}건 일치")
-    assert checked == 30 * N_ADDP
+    assert checked == 30 * len(rules)
+
+
+def test_group_std_is_broadcast_over_the_five_keys(big):
+    """실측 규모에서도 Std는 5키 묶음 산포다 — 묶음 안에서 값이 하나여야 한다.
+
+    testset은 lot·step·seq·온도가 하나씩이라 묶음이 곧 wafer다. 값 자체는
+    인자 네 개의 wafer 내 표본표준편차(n-1, NULL 제외)와 같아야 한다.
+    """
+    rf, src = big
+    out = rf_apply(rf, src)
+    key = ["root_lot_id", "wafer_id", "chip_x_pos", "chip_y_pos"]
+    wide = out.pivot(on="item_id", index=key, values="value",
+                     aggregate_function="first")
+    rules = _std_rules(rf)
+    assert rules, "factory가 Std 수식을 더 이상 만들지 않는다 — 대조가 비었다"
+
+    checked = 0
+    for rule in rules:
+        args = [a.strip().strip("{}")
+                for a in _STD_CALL.search(rule.formula).group(1).split(",")]
+        for (lot, waf), grp in wide.group_by(["root_lot_id", "wafer_id"]):
+            got = grp[rule.alias].unique().to_list()
+            assert len(got) == 1, (rule.alias, lot, waf, "묶음 안에서 값이 갈렸다")
+            pool = [v for a in args for v in grp[a].to_list() if v is not None]
+            expect = statistics.stdev(pool) if len(pool) > 1 else None
+            if expect is None:
+                assert got[0] is None
+            else:
+                assert got[0] == pytest.approx(expect, rel=1e-9), (rule.alias, waf)
+            checked += 1
+    print(f"  그룹 Std 대조     {checked:,}묶음 일치")
 
 
 def test_full_pipeline_one_day(big, tmp_path, appdata):

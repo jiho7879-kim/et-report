@@ -30,6 +30,35 @@ def qt_until(pred, ms: int = 3000) -> bool:
 
 
 @pytest.fixture
+def no_modal_dialogs(monkeypatch):
+    """모달 창은 headless에서 영원히 기다린다 — 전부 눌린 셈 치고 넘긴다.
+
+    **QApplication이 살아 있는지에 따라 결과가 달라지는 코드가 있다**
+    (`app._install_excepthook`은 창이 떠 있을 때만 알림을 띄운다). 테스트가
+    파일 순서에 따라 앱을 만들어 두면 그런 자리가 조용히 모달로 바뀌므로,
+    창을 쓰지 않는 테스트도 이 픽스처를 걸어 둔다.
+
+    돌려주는 리스트에는 (종류, 제목, 본문)이 쌓인다 — 무엇이 떴는지 셀 수 있다.
+    """
+    from PySide6.QtWidgets import QMessageBox
+
+    seen: list[tuple[str, str, str]] = []
+
+    def record(kind, answer):
+        def call(*a, **k):
+            args = [x for x in a[1:] if isinstance(x, str)]
+            seen.append((kind, *[*args, "", ""][:2]))
+            return answer
+        return staticmethod(call)
+
+    for name in ("information", "warning", "critical"):
+        monkeypatch.setattr(QMessageBox, name, record(name, QMessageBox.Ok))
+    monkeypatch.setattr(QMessageBox, "question",
+                        record("question", QMessageBox.Yes))
+    return seen
+
+
+@pytest.fixture
 def fake_sheet(monkeypatch):
     """`etreport.data.reformatter.load()`가 읽을 시트를 지정한다.
 

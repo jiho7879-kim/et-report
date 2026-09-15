@@ -38,8 +38,9 @@ from etreport.data.querybuilder import (
 )
 from etreport.data.reformatter import load as rf_load
 from etreport.model.state import AppState, StateBus
+from etreport.ui.tabs.common import detach
 from etreport.ui.widgets.autocomplete import AutoCompleteEdit
-from etreport.ui.widgets.cards import Card, GhostButton, row
+from etreport.ui.widgets.cards import GhostButton, row
 from etreport.ui.widgets.item_check_dialog import ItemCheckDialog
 
 log = logging.getLogger(__name__)
@@ -53,6 +54,38 @@ WAIT_TEXT = "준비됨"
 LOG_PLACEHOLDER = ("여기에 단계별 진행이 남습니다.\n"
                    "리포메터 → 추출 → 리포메팅 → 적재 순서로 진행하고, "
                    "각 단계의 소요 시간도 함께 적힙니다.")
+
+
+def _chrome_section(title: str, sub: str = "") -> QWidget:
+    """흰 카드 대신 잉크 크롬 위에 놓이는 조작면 묶음.
+
+    데이터 화면에는 측정면(흰 종이)이 없으므로 Card(흰 카드) 대신 크롬
+    섹션을 쓴다. `#sectionGroup` 패널(INK_2 + hairline, 설계 §5)로 감싸 네
+    섹션(설정·대상·기간·조회 조건)이 구분되게 한다. 제목은 #sectionLabel로
+    #sectionHead에 담아 전역 라벨의 위 여백을 지운다(패널 안에서는 묶음
+    경계를 패널 테두리가 대신한다). 내용은 `.body`에 채운다.
+    """
+    w = QWidget()
+    w.setObjectName("sectionGroup")
+    v = QVBoxLayout(w)
+    v.setContentsMargins(16, 12, 16, 14)
+    v.setSpacing(8)
+    head = QWidget()
+    head.setObjectName("sectionHead")
+    hl = QHBoxLayout(head)
+    hl.setContentsMargins(0, 0, 0, 0)
+    hl.setSpacing(6)
+    lab = QLabel(title)
+    lab.setObjectName("sectionLabel")
+    hl.addWidget(lab)
+    if sub:
+        s = QLabel(sub)
+        s.setObjectName("hint")
+        hl.addWidget(s)
+    hl.addStretch(1)
+    v.addWidget(head)
+    w.body = v
+    return w
 
 
 class _ExtractThread(QThread):
@@ -177,6 +210,11 @@ class DataWorkspace(QWidget):
         if not settings.extract_presets:
             settings.extract_presets.append(ExtractPreset(name="기본"))
 
+        # 데이터 화면에는 측정면(흰 종이)이 없다 — 조작면은 전부 크롬 하나다.
+        # #console 규칙(잉크 배경·크롬 글자·크롬 입력·고스트 버튼)이 자식 전체에
+        # 걸리도록 루트에 objectName을 붙인다(style.qss는 수정하지 않는다).
+        self.setObjectName("console")
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -205,24 +243,27 @@ class DataWorkspace(QWidget):
         outer.addStretch(1)
 
         # 프리셋 ----------------------------------------------
-        pc = Card("설정", "목적마다 DB·리포메터·조건을 묶어 저장합니다")
+        pc = _chrome_section("설정", "목적마다 DB·리포메터·조건을 묶어 저장합니다")
         self.cmb_preset = QComboBox()
         self.cmb_preset.addItems([p.name for p in settings.extract_presets])
         self.cmb_preset.currentIndexChanged.connect(self._load_preset)
-        b_save = GhostButton("저장")
+        b_save = QPushButton("저장")
         b_save.clicked.connect(lambda: settings.save())
         b_new = GhostButton("새 설정")
         b_new.clicked.connect(self._save_as)
-        pc.body.addWidget(row(self.cmb_preset, b_save, b_new, stretch_at=0))
+        b_del = QPushButton("삭제")
+        b_del.setProperty("danger", True)
+        b_del.clicked.connect(self._delete_preset)
+        pc.body.addWidget(row(self.cmb_preset, b_save, b_new, b_del, stretch_at=0))
         self.card_preset = pc
 
         # 대상 ------------------------------------------------
-        tc = Card("대상")
+        tc = _chrome_section("대상")
         self.lbl_db = QLabel()
         self.lbl_rfm = QLabel()
-        b1 = GhostButton("변경")
+        b1 = self.btn_pick_db = GhostButton("변경")
         b1.clicked.connect(self._pick_db)
-        b2 = GhostButton("변경")
+        b2 = self.btn_pick_rfm = GhostButton("변경")
         b2.clicked.connect(self._pick_rfm)
         tc.body.addWidget(row("DuckDB", self.lbl_db, None, b1, stretch_at=1))
         tc.body.addWidget(row("리포메터", self.lbl_rfm, None, b2, stretch_at=1))
@@ -232,23 +273,35 @@ class DataWorkspace(QWidget):
         tc.body.addWidget(row("컬럼 정보", self.lbl_cat, None, b3, stretch_at=1))
         self.card_target = tc
 
-        # 기간 ------------------------------------------------
-        dc = Card("기간", "tkout_time 기준 · 파티션 컬럼이라 좁을수록 빠릅니다")
+        # 기간 — **조회 조건 카드 안에** 넣는다. 예전에는 카드 하나를 통째로
+        # 쓰면서 위 2/3가 비었고, 그만큼 좌우 칼럼 높이도 어긋났다(설계 §0 F).
+        # 기간도 결국 조회를 좁히는 조건이라 한 카드에 묶이는 편이 읽기도 낫다.
         self.d_from = QDateEdit(QDate.currentDate().addDays(-7))
         self.d_to = QDateEdit(QDate.currentDate())
         for d in (self.d_from, self.d_to):
             d.setCalendarPopup(True)
             d.setDisplayFormat("yyyy-MM-dd")
             d.dateChanged.connect(self._refresh_sql)
+        q3 = GhostButton("최근 3일")
+        q3.clicked.connect(lambda: self._quick(3))
         q7 = GhostButton("최근 7일")
         q7.clicked.connect(lambda: self._quick(7))
-        q30 = GhostButton("30일")
+        q30 = GhostButton("최근 30일")
         q30.clicked.connect(lambda: self._quick(30))
-        dc.body.addWidget(row(self.d_from, "—", self.d_to, q7, q30, None))
-        self.card_period = dc
+        q1y = GhostButton("최근 1년")
+        q1y.clicked.connect(lambda: self._quick(365))
+        self.row_period = row(self.d_from, "—", self.d_to, q3, q7, q30, q1y, None)
 
         # 조건 ------------------------------------------------
-        cc = Card("조회 조건", "line_id는 파티션 컬럼이라 필수입니다")
+        cc = _chrome_section(
+            "조회 조건", "기간(tkout_time)은 파티션 컬럼이라 좁을수록 빠릅니다")
+        lab_period = QLabel("기간")
+        lab_period.setObjectName("sectionLabel")
+        cc.body.addWidget(lab_period)
+        cc.body.addWidget(self.row_period)
+        lab_cond = QLabel("조건 — line_id는 필수")
+        lab_cond.setObjectName("sectionLabel")
+        cc.body.addWidget(lab_cond)
         self.cond_host = QVBoxLayout()
         self.cond_host.setSpacing(6)
         cc.body.addLayout(self.cond_host)
@@ -272,7 +325,6 @@ class DataWorkspace(QWidget):
         # 실행 ------------------------------------------------
         # 버튼은 **동작만** 말한다. 진행 단계는 라벨과 진행 막대가 말한다 —
         # 예전에는 버튼 글자가 "추출 중"으로 바뀌어 한 요소가 두 일을 했다.
-        rc = Card("실행")
         self.btn_run = QPushButton("추출하고 적재")
         self.btn_run.setMinimumWidth(150)
         self.btn_run.setToolTip("리포메터의 item만 조회해 추출·리포메팅·적재까지 (F5)")
@@ -283,6 +335,7 @@ class DataWorkspace(QWidget):
         self.btn_cancel.clicked.connect(self._cancel)
         self.chk_csv = QCheckBox("완료 후 CSV 저장")
         self.chk_csv.setChecked(True)
+        self.chk_sbdf = QCheckBox("완료 후 SBDF 저장")
         self.lbl_step = QLabel(WAIT_TEXT)
         self.lbl_step.setObjectName("hint")
         self.btn_schedule = GhostButton("예약 실행…")
@@ -290,18 +343,13 @@ class DataWorkspace(QWidget):
             "정해진 시각에 이 프리셋으로 추출·적재를 돌립니다.\n"
             "앱이 꺼져 있어도 Windows 작업 스케줄러가 실행합니다.")
         self.btn_schedule.clicked.connect(self._open_schedule)
-        rc.body.addWidget(row(self.btn_run, self.btn_cancel, self.chk_csv,
-                              QCheckBox("SBDF"), self.btn_schedule, None))
-        # 진행 문구는 제 줄에 둔다 — 체크박스 옆에 붙이면 그 체크박스의 설명처럼 읽힌다
-        rc.body.addWidget(row(self.lbl_step, None))
         self.bar = QProgressBar()
         self.bar.setTextVisible(False)
         self.bar.setFixedHeight(5)
-        rc.body.addWidget(self.bar)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setObjectName("logBox")
-        self.log_view.setFixedHeight(150)
+        self.log_view.setMinimumHeight(120)
         self.log_view.setPlaceholderText(LOG_PLACEHOLDER)
         b_copy = GhostButton("로그 복사")
         b_copy.clicked.connect(self._copy_log)
@@ -309,25 +357,35 @@ class DataWorkspace(QWidget):
         b_clear.clicked.connect(lambda: self.log_view.clear())
         lab_log = QLabel("진행 로그")
         lab_log.setObjectName("sectionLabel")
-        rc.body.addWidget(row(lab_log, None, b_copy, b_clear))
-        rc.body.addWidget(self.log_view)
-        self.run_card = rc
 
-        # 실행/로그는 스크롤과 무관하게 항상 하단에 보이도록 고정
-        foot = QWidget()
-        foot.setObjectName("runFooter")
-        fl = QHBoxLayout(foot)
-        fl.setContentsMargins(24, 10, 24, 14)
-        self.foot_inner = QWidget()
-        self.foot_inner.setMaximumWidth(880)
-        self.foot_inner.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        il = QVBoxLayout(self.foot_inner)
+        # 실행/로그는 스크롤과 무관하게 항상 하단에 보이도록 고정한다.
+        # 하단 콘솔 밴드(#console) 하나에 버튼·진행·로그를 모으고,
+        # 넓게 남은 공간은 로그 영역이 차지하게 한다.
+        console = QWidget()
+        console.setObjectName("console")
+        # 위 카드 열(`outer`)과 **글자 하나까지 같은 규칙**으로 가운데를 잡는다.
+        # 예전에는 stretch(1) : 10 : stretch(1)로 나눠서, 여유 폭이 최대 폭보다
+        # 넓을 때 푸터만 30px 남짓 안쪽으로 들어와 카드 왼쪽 선이 어긋났다.
+        cl = QVBoxLayout(console)
+        cl.setContentsMargins(24, 12, 24, 14)
+        cl.setAlignment(Qt.AlignHCenter)
+        self.console_inner = QWidget()
+        self.console_inner.setMaximumWidth(880)
+        self.console_inner.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        il = QVBoxLayout(self.console_inner)
         il.setContentsMargins(0, 0, 0, 0)
-        il.addWidget(self.run_card)
-        fl.addStretch(1)
-        fl.addWidget(self.foot_inner, 10)
-        fl.addStretch(1)
-        lay.addWidget(foot)
+        il.setSpacing(8)
+        # 분석 화면 액션바와 **같은 관용구**: 왼쪽 끝이 주 동작, 오른쪽 끝이
+        # 결과·옵션. 탭이나 화면이 바뀌어도 누를 것을 눈으로 찾지 않게 한다.
+        il.addWidget(row(self.btn_run, self.btn_cancel, None,
+                         self.chk_csv, self.chk_sbdf, self.btn_schedule))
+        # 진행 문구는 제 줄에 둔다 — 체크박스 옆에 붙이면 그 체크박스의 설명처럼 읽힌다
+        il.addWidget(row(self.lbl_step, None))
+        il.addWidget(self.bar)
+        il.addWidget(row(lab_log, None, b_copy, b_clear))
+        il.addWidget(self.log_view, 1)
+        cl.addWidget(self.console_inner)
+        lay.addWidget(console)
 
         self._rows: list[ConditionRow] = []
         self._rf_items: list[str] = []   # 리포메터 REAL itemid (미리보기/필터/대조용)
@@ -342,27 +400,27 @@ class DataWorkspace(QWidget):
             return
         self._cols = cols
         g = self.grid
-        for c in (self.card_preset, self.card_target,
-                  self.card_period, self.card_cond):
+        cards = (self.card_preset, self.card_target, self.card_cond)
+        for c in cards:
             g.removeWidget(c)
         g.setColumnStretch(1, 0)
         if cols == 2:
+            # 왼쪽에 짧은 둘(설정·대상), 오른쪽에 긴 하나(조회 조건 + 기간).
+            # 2×2로 놓으면 카드 높이가 제각각이라 오른쪽 아래가 통째로 비었다.
             g.addWidget(self.card_preset, 0, 0)
             g.addWidget(self.card_target, 1, 0)
-            g.addWidget(self.card_period, 2, 0)
-            g.addWidget(self.card_cond, 0, 1, 3, 1)   # 가장 긴 카드가 오른쪽 한 벌
+            g.addWidget(self.card_cond, 0, 1, 2, 1)
             g.setColumnStretch(0, 1)
             g.setColumnStretch(1, 1)
             self.col.setMaximumWidth(WIDE_MAX)
-            self.foot_inner.setMaximumWidth(WIDE_MAX)
+            self.console_inner.setMaximumWidth(WIDE_MAX)
         else:
-            for i, c in enumerate((self.card_preset, self.card_target,
-                                   self.card_period, self.card_cond)):
+            for i, c in enumerate(cards):
                 g.addWidget(c, i, 0)
             g.setColumnStretch(0, 1)
             self.col.setMaximumWidth(NARROW_MAX)
-            self.foot_inner.setMaximumWidth(NARROW_MAX)
-        g.setRowStretch(3, 1)
+            self.console_inner.setMaximumWidth(NARROW_MAX)
+        g.setRowStretch(2, 1)
 
     def resizeEvent(self, e) -> None:
         super().resizeEvent(e)
@@ -378,12 +436,14 @@ class DataWorkspace(QWidget):
 
     def _load_preset(self, _i: int) -> None:
         p = self.preset()
+        self.chk_csv.setChecked(p.save_csv)
+        self.chk_sbdf.setChecked(p.save_sbdf)
         self.lbl_db.setText(p.db_path or "(미지정)")
         self.lbl_rfm.setText(p.reformatter_path or "(미지정)")
         while self.cond_host.count():
             it = self.cond_host.takeAt(0)
             if it.widget():
-                it.widget().deleteLater()
+                detach(it.widget())
         self._rows = []
         for c in p.conditions:
             self._add_row(c)
@@ -401,6 +461,23 @@ class DataWorkspace(QWidget):
             self.cmb_preset.addItem(name)
             self.cmb_preset.setCurrentIndex(self.cmb_preset.count() - 1)
             self.settings.save()
+
+    def _delete_preset(self) -> None:
+        """현재 프리셋을 지운다 — 되돌릴 수 없으므로 확인을 받는다."""
+        if len(self.settings.extract_presets) <= 1:
+            QMessageBox.information(self, "삭제", "설정이 하나뿐입니다")
+            return
+        name = self.preset().name
+        if QMessageBox.question(self, "삭제", f"'{name}' 설정을 지울까요?") \
+                != QMessageBox.Yes:
+            return
+        idx = self.cmb_preset.currentIndex()
+        self.settings.extract_presets.pop(idx)
+        self.settings.save()
+        self.cmb_preset.blockSignals(True)
+        self.cmb_preset.removeItem(idx)
+        self.cmb_preset.blockSignals(False)
+        self._load_preset(self.cmb_preset.currentIndex())
 
     # ── 조건 ─────────────────────────────────────────────────
     def _add_row(self, cond: Condition) -> None:
@@ -429,6 +506,32 @@ class DataWorkspace(QWidget):
         self.d_to.setDate(QDate.currentDate())
         self.d_from.setDate(QDate.currentDate().addDays(-n + 1))
 
+    # ── 입력 가이드 (설계 §5) ────────────────────────────────
+    def requirements(self) -> list:
+        """판정은 `ui/guidance` 하나가 한다 — 분석 화면과 같은 규칙이다."""
+        from etreport.ui import guidance
+        line = next((r.cond.val for r in self._rows
+                     if r.cond.col == "line_id"), "")
+        days = self.d_from.date().daysTo(self.d_to.date()) + 1
+        return guidance.data_requirements(self.preset(), line, days)
+
+    def _refresh_guidance(self) -> None:
+        """비어 있는 필수 입력에 표시를 단다(층 1). 채우면 조용히 사라진다."""
+        by = {r.key: r for r in self.requirements()}
+        targets = {"db": self.btn_pick_db, "rfm": self.btn_pick_rfm}
+        line_row = next((r for r in self._rows if r.cond.col == "line_id"), None)
+        if line_row is not None:
+            targets["line"] = line_row.ed_val
+        for key, w in targets.items():
+            r = by.get(key)
+            missing = bool(r) and not r.done and not r.optional
+            if w.property("needs") != ("true" if missing else "false"):
+                w.setProperty("needs", "true" if missing else "false")
+                w.style().unpolish(w)
+                w.style().polish(w)
+            if missing and r is not None:
+                w.setToolTip(r.how)
+
     def _refresh_sql(self) -> None:
         try:
             # 실제 목록은 실행할 때만 만든다(§10.10) — 여기서는 개수 주석만
@@ -439,6 +542,7 @@ class DataWorkspace(QWidget):
             self.sql.setPlainText(sql)
         except ConditionError as e:
             self.sql.setPlainText(f"-- {e.col}: {e}")
+        self._refresh_guidance()
 
     # ── 리포메터 item (필터/미리보기/대조) ───────────────────
     def _load_rf_items(self) -> None:
@@ -560,6 +664,8 @@ class DataWorkspace(QWidget):
     # ── 실행 ─────────────────────────────────────────────────
     def _run(self) -> None:
         p = self.preset()
+        p.save_csv = self.chk_csv.isChecked()
+        p.save_sbdf = self.chk_sbdf.isChecked()
         d_from, d_to = self.d_from.date().toPython(), self.d_to.date().toPython()
         if d_from > d_to:
             QMessageBox.warning(
