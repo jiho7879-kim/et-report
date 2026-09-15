@@ -412,11 +412,12 @@ SQL 창(§4-B)·`memory_limit`까지 들어갔다.
 `active()` 12회 0.11초 → 0.00초. 대용량 회귀(`pytest -m slow -s`)는 리포메팅
 0.46초 / 적재 1.2초 / 7일 적재 4.7초로 개편 전과 같은 자릿수다.
 
-**환경 주의.** `myenv`는 CLAUDE.md의 설명과 달리 editable이 아니라 **복사본
-설치**(site-packages에 etreport 1.3.0)가 들어 있다. `pytest`(pythonpath=src)와
-`python app.py`는 `src/`를 보지만, `myenv/bin/etreport`와 맨 `python -c "import
-etreport"`는 **옛 사본**을 본다 — 고친 것이 반영되지 않는 것처럼 보인다.
-`myenv/bin/pip install -e .`로 되돌리는 것이 좋다.
+**환경 주의(해결됨).** 마감 중에 `myenv`가 editable이 아니라 **복사본 설치**로
+바뀌어 있는 것을 발견했다. `pytest`(pythonpath=src)와 `python app.py`는 `src/`를
+보지만 `myenv/bin/etreport`와 맨 `python -c "import etreport"`는 site-packages의
+**옛 사본**을 봐서, 고친 것이 반영되지 않는 것처럼 보인다(현장의 "고쳤는데 exe가
+그대로"와 증상이 같다 — 그쪽은 `buildinfo`로 가른다). `pip install -e .`로
+되돌려 두었다. 복사본 설치로 돌아가면 코드를 고칠 때마다 다시 설치해야 한다.
 
 ---
 
