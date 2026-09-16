@@ -390,6 +390,13 @@ class SourceRail(QWidget):
         self.lbl_apply.setWordWrap(True)
         v.addWidget(self.lbl_apply)
 
+        # 건너뛴 행·확인할 것은 [적용]마다 모달로 띄우지 않는다 — 보고 싶을 때 연다.
+        self.btn_apply_log = GhostButton("적용 결과 보기")
+        self.btn_apply_log.setToolTip("리포메터·템플릿에서 건너뛴 행과 확인할 것을 봅니다")
+        self.btn_apply_log.clicked.connect(lambda: self.owner._open_apply_log())
+        self.btn_apply_log.setVisible(False)
+        v.addWidget(self.btn_apply_log)
+
         # REPORT는 **콤보를 두지 않는다**(확정 사양 §5.1). 템플릿에 리포트가
         # 여럿이면 [적용] 뒤 문구로만 알린다.
         self.lbl_report = QLabel()

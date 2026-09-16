@@ -211,6 +211,34 @@ def test_toast_is_not_modal(qapp, win):
     assert t.testAttribute(Qt.WA_TransparentForMouseEvents)
 
 
+def test_apply_warnings_are_not_modal(qapp, win, no_modal_dialogs, monkeypatch):
+    """[적용]에서 건너뛴 행은 모달로 띄우지 않는다 — 레일 버튼으로 연다."""
+    from etreport.model.session import LoadReport
+    from etreport.ui.widgets import table_dialog
+
+    ws = win.anal_ws
+    rep = LoadReport(lines=["리포메터 OK"],
+                     warnings=["[리포메터] 3행 Vt: ITEMID가 비어 있습니다",
+                               "[plot] 5행: x가 ALIAS가 아닙니다"],
+                     notes=["lot PA2 결손"])
+    ws._apply_done(ws.cfg(), rep)
+    qapp.processEvents()
+    assert no_modal_dialogs == []
+    assert ws.btn_apply_log.isVisible()
+
+    shown = []
+    monkeypatch.setattr(table_dialog.FrameDialog, "exec",
+                        lambda self: shown.append(self.df))
+    ws._open_apply_log()
+    df = shown[0]
+    assert df.columns == ["구분", "출처", "내용"]
+    assert df.row(0) == ("제외", "리포메터", "3행 Vt: ITEMID가 비어 있습니다")
+    assert df["구분"].to_list() == ["제외", "제외", "확인"]
+
+    ws._apply_done(ws.cfg(), LoadReport(lines=["OK"]))
+    assert not ws.btn_apply_log.isVisible()                 # 알릴 것이 없으면 숨는다
+
+
 def test_toast_skips_when_parent_is_hidden(qapp):
     """창이 없거나 숨어 있으면 조용히 건너뛴다(종료 중 알림으로 죽지 않게)."""
     from PySide6.QtWidgets import QWidget

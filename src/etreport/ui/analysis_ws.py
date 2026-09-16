@@ -60,7 +60,7 @@ _RAIL_WIDGETS = frozenset({
     "btn_split", "_file_values", "lot_section", "lot_list", "btn_coverage",
     "tukey_section", "chk_tukey", "cmb_tukey_k", "cmb_tukey_scope",
     "btn_tukey_log", "sources_section", "lbl_sources", "btn_factor",
-    "lbl_factor", "btn_apply", "lbl_apply", "lbl_report", "lbl_summary",
+    "lbl_factor", "btn_apply", "lbl_apply", "btn_apply_log", "lbl_report", "lbl_summary",
     "btn_undo",
 })
 
@@ -445,6 +445,25 @@ class AnalysisWorkspace(QWidget):
         for w in (self.cmb_tukey_k, self.cmb_tukey_scope):
             w.setEnabled(self.chk_tukey.isChecked())
 
+    def _open_apply_log(self) -> None:
+        """마지막 [적용]에서 건너뛴 행·확인할 것 — 출처별로 표에 펼친다."""
+        import re
+
+        import polars as pl
+
+        from etreport.ui.widgets.table_dialog import FrameDialog
+        rep = getattr(self, "_last_report", None)
+        if rep is None:
+            return
+        rows = []
+        for kind, items in (("제외", rep.warnings),
+                            ("확인", getattr(rep, "notes", None) or [])):
+            for text in items:
+                m = re.match(r"\[(.+?)\]\s*(.*)", text, re.S)
+                rows.append((kind, *(m.groups() if m else ("", text))))
+        df = pl.DataFrame(rows, schema=["구분", "출처", "내용"], orient="row")
+        FrameDialog(df, "적용 결과", self).exec()
+
     def _open_filter_log(self) -> None:
         """걸러진 점 목록 — 무엇이 왜 빠졌는지 확인하는 자리."""
         from etreport.model import outliers as ol
@@ -589,13 +608,17 @@ class AnalysisWorkspace(QWidget):
         self.bus.report_changed.emit()
         self._refresh_dock()
 
-        if rep.warnings:
-            QMessageBox.information(self, "적용 완료 — 일부 제외", rep.text())
-        elif getattr(rep, "notes", None):
-            # 버린 것이 없으니 모달로 막지 않는다 — 알리고 [커버리지]로 보낸다
+        # 성공한 [적용]은 모달로 막지 않는다 — 건너뛴 행이 많으면 매번 긴 창을
+        # 닫아야 해서 피로했다. 한 줄로 알리고 자세한 것은 레일 버튼으로 연다.
+        self._last_report = rep
+        notes = getattr(rep, "notes", None) or []
+        self.btn_apply_log.setVisible(bool(rep.warnings or notes))
+        if rep.warnings or notes:
             from etreport.ui.widgets.toast import toast
-            toast(self, f"lot 커버리지 확인 {len(rep.notes)}건 — "
-                        f"도크 [커버리지]에서 보세요")
+            parts = ([f"제외 {len(rep.warnings)}건"] if rep.warnings else []) \
+                + ([f"확인 {len(notes)}건"] if notes else [])
+            toast(self, f"적용 완료 — {' · '.join(parts)} · "
+                        f"왼쪽 [적용 결과 보기]에서 확인하세요")
 
     def _show_report(self, name: str) -> None:
         """적용된 리포트 이름을 문구로만 보여 준다 — 고르는 콤보는 없다(§5.1).

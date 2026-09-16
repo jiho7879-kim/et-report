@@ -363,6 +363,8 @@ Ctrl+Enter는 보고 있는 탭의 `stale_button_attr` 버튼을 누른다 — �
 
 확인만 받는 알림(캐시 비움·예시 저장 등)은 모달이 아니라
 `ui/widgets/toast.py`의 `toast()`를 쓴다. 모달은 실패와 되돌릴 수 없는 확인에만.
+[적용]이 성공했는데 건너뛴 행(리포메터·템플릿)이 있으면 토스트 한 줄만 띄우고,
+목록은 레일의 `적용 결과 보기`(`_open_apply_log`, 알릴 것이 있을 때만 보임)로 연다.
 
 ### boxplot과 plot 종류
 
@@ -449,16 +451,22 @@ tkout_time이 null이 되면 `key_hash`가 뭉쳐 서로 다른 측정이 중복
 값이 같고, 반올림은 멱등이라 raw로 적재해 둔 예전 DB도 그대로 맞는다.
 
 **DuckDB** — 기준 테이블 이름은 `et_data`(손코딩 시절과 동일, `fact`는 레거시).
-분석 화면은 DB를 **읽기 전용**으로 연다. **읽기 전용으로 여는 자리는 전부
-`loader.open_readonly()`를 쓴다** — DuckDB는 같은 파일에 설정이 다른 연결을
+분석 화면은 DB를 **읽기 전용**으로 연다. **읽는 자리는 전부
+`with loader.readonly_query(path) as con:`을 쓴다**(안에서 `open_readonly()`) — DuckDB는 같은 파일에 설정이 다른 연결을
 동시에 열지 못해서(`can't open a connection to same database file with a
 different configuration`), `duckdb.connect(..., read_only=True)`를 직접 부르는
 코드가 하나만 생겨도 그 순간 충돌한다. 쓰기(적재)와 읽기도 함께 열 수 없으므로
-추출을 시작하기 전에 `loader.close_store(state)`로 읽기 연결을 닫는다. 따라서:
+추출을 시작하기 전에 `loader.close_store(state)`로 읽기 연결을 닫는다.
+**연결을 열어 두지 않는다**(`state.store`는 늘 None). 같은 파일·같은 설정의
+연결은 인스턴스 하나를 공유하고 그 버퍼 캐시는 **마지막 연결이 닫혀야** 풀린다 —
+분석 연결을 쥐고 있던 시절에는 SQL 창의 무거운 조회 한 번이 캐시를 채운 채로 남아
+그 뒤 모든 DuckDB 접근이 OOM이 됐다. 캐시를 비우려고 `SET memory_limit`을
+잠깐 낮추는 방법은 쓰지 않는다(인스턴스 전역이라 백그라운드 조회를 떨어뜨린다).
+규칙은 `test_ux_requests3.test_duckdb_access_leaves_no_instance_behind`. 따라서:
 - 읽기 연결에는 **명시적 천장**이 있다(`loader.DUCKDB_MEMORY_LIMIT`). 없으면
   DuckDB가 기본값인 물리 메모리의 80%까지 쓰는데, 현장 PC는 Excel COM과
   메모리를 나눠 쓴다. `temp_directory`(디스크 스필)는 예전부터 있었고 빠진 것은
-  상한뿐이었다. 다만 예전 로그의 `Arrow buffer failed to allocate`는 DuckDB
+  상한뿐이었다. 적재(쓰기) 연결도 같은 상한·스필을 쓴다(`db._limit_memory`). 다만 예전 로그의 `Arrow buffer failed to allocate`는 DuckDB
   내부가 아니라 **결과를 파이썬으로 실체화하는 쪽**에서 났으므로 이 상한이 그
   사고를 막는 것은 아니다 — 그쪽은 미리보기 `LIMIT 200`과 `COPY TO`
   (`data/exporting.py`)가 막는다. SQL 창은 전체 행 수를 세려고 무거운 쿼리를
@@ -604,19 +612,29 @@ line·process·part와 기간 기본값은 `data/lotcontext.py`가 DuckDB에서 
 순서대로**. 아래 행은 위 행의 ADDP를 참조할 수 있고 그 반대는 검증 오류다(행 순서
 규칙이 곧 순환참조 차단). 수식은 `eval()`이 아니라 ast 화이트리스트로 파싱하며,
 `_compile_expr()`가 polars 식으로 번역해 벡터 계산하고 번역 불가한 것만 행 단위
-폴백으로 떨어진다(로그에 남음). `Std(...)`는 **5키(`STD_KEYS`:
-root_lot_id·wafer_id·step_id·step_seq·temperature)가 wide에 모두 있고 인자가
-전부 `{ALIAS}`인 순수 호출이면 그 묶음의 그룹 표본표준편차(n-1, NULL 제외,
-유효값 2개 미만이면 NULL)로 계산한다**(요청 ⑤). 키나 인자가 없으면 예전처럼
-행 단위로 떨어진다(로그에 남음).
+폴백으로 떨어진다(로그에 남음). `Std(...)`(`STDEV`·`STDDEV` 표기도 같다)는
+**6키(`STD_KEYS`: root_lot_id·wafer_id·step_id·step_seq·total_site_cnt·
+temperature)가 wide에 모두 있으면 그 묶음의 그룹 표본표준편차(n-1, NULL 제외,
+유효값 2개 미만이면 NULL)로 계산해 묶음 안 모든 chip에 같은 값을 붙인다**(요청 ⑤).
+키 **값**이 NULL이어도 한 묶음으로 본다(join `nulls_equal=True` — 빼면 온도 하나만
+비어도 item이 통째로 사라진다). 인자는 `{A}`뿐 아니라 `Abs({A})`·`{A}/{B}` 같은 식도 되며, 칩마다 먼저 계산한
+뒤 묶음 산포를 낸다(괄호 짝은 `_std_calls()`가 따라간다). 키 **컬럼**이나 인자
+컬럼이 없거나 Std 안에 Std가 있으면 예전처럼 행 단위로 떨어진다(로그에 남음).
 검증 실패 행은 **버리고 나머지로 진행**하며 이유를 `warnings`에 남긴다 — 이게 이
 코드베이스 전반의 오류 처리 방식이다(중단하지 않고 건너뛰고 보고).
 
-**ADDP는 step_seq를 넘나들 수 없다.** 리포메팅은 추출 직후, 즉 §10.1 병합보다
-**앞에서** 돌기 때문에 seq가 갈려 기록되는 두 항목(예: DC는 seq 1, 누설은 2)을
-한 수식에 쓰면 한 행에 함께 있는 적이 없어 결과가 전부 NULL이고, `apply()`
-끝의 `drop_nulls`가 그 item을 통째로 지운다. 데모 리포메터의 수식이 seq 안에서만
-참조하는 이유다 — 이 제약을 모르고 수식을 짜면 "만든 ADDP가 사라진다".
+**step_seq 원칙: 저장은 seq를 살리고, 표·plot만 seq를 무시한다.** REAL 값은
+추출·DuckDB에 원래 seq 그대로 들어가고, 합치는 일은 읽을 때(§10.1) 한다.
+예외가 ADDP 하나다 — 리포메팅은 병합보다 **앞에서** 돌아서, seq가 갈려 기록되는
+두 항목(DC는 seq 1, 누설은 2)을 한 수식에 쓰면 행 단위 결과가 전부 NULL이 되어
+`drop_nulls`가 그 item을 적재 전에 지웠다(표의 CAT1이 비고 산점도가 비던 원인).
+그래서 `apply()`는 **참조 항목을 모두 담은 seq가 없는 ADDP**(`_cross_seq_aliases`,
+연쇄 포함)만 로딩과 같은 규칙(seq마다 최신 retest → seq·시각을 뺀 키로 합침)의
+프레임에서 다시 계산해 **die의 최신 행마다** 같은 값으로 붙인다(`_fill_cross_seq`).
+이때 `Std()` 묶음 키에서도 step_seq가 빠진다. seq 안에서 풀리는 ADDP는 예전과
+같다. 규칙은 `tests/test_step_seq_merge.py` 아래쪽 ADDP 절.
+단 리포메팅은 **추출 파일 단위**(하루 × item 그룹)라 자정을 넘겨 다른 날에
+찍힌 seq끼리는 여전히 한 수식에 모이지 않는다.
 
 함수 목록은 확정 사양이다(`_BASE_FUNCS`): `ABS SQRT LN LOG LOG10 EXP MIN MAX AVG
 SUM STD`. **`LN`은 자연로그(밑 e), `LOG`·`LOG10`은 상용로그(밑 10)** — 엑셀 관례를
