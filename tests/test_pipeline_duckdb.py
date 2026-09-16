@@ -88,8 +88,8 @@ def test_analysis_load_state(loaded, appdata):
 
     # 읽기 전용 — 쓰기가 막혀 있어야 한다
     import duckdb
-    with pytest.raises(duckdb.Error):
-        st.store.execute("create table x(a int)")
+    with loader.readonly_query(loaded["db"]) as con, pytest.raises(duckdb.Error):
+        con.execute("create table x(a int)")
 
 
 def test_values_survive_the_round_trip(loaded, appdata):

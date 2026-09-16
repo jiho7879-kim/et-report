@@ -83,31 +83,25 @@ def from_db(db_path: str, lots: list[str] | None = None) -> LotContext:
 
     **[적용] 없이도 돌아야 한다** — 사용자는 DB만 고르고 fab tracking부터 볼 수
     있다. item 컬럼을 전혀 건드리지 않으므로 큰 DB에서도 한 번 훑고 끝난다.
-    읽기 전용 연결은 반드시 `loader.open_readonly()`를 거친다(설정이 다른 연결을
-    같은 파일에 열면 DuckDB가 막는다).
+    읽기 전용 연결은 반드시 `loader.readonly_query()`를 거친다(설정이 다른 연결을
+    같은 파일에 열면 DuckDB가 막고, 닫지 않은 연결은 조회 캐시를 붙잡는다).
     """
     from pathlib import Path
 
-    from etreport.data.loader import open_readonly
+    from etreport.data.loader import readonly_query
 
     if not db_path or not Path(db_path).exists():
         return empty()
     try:
-        con = open_readonly(db_path)
+        with readonly_query(db_path) as con:
+            tbl = compat.pick_table(con)
+            if tbl is None:
+                return empty()
+            prof = compat.profile(con, tbl)
+            return _read(con, prof, lots)
     except Exception as e:                    # noqa: BLE001 — 기본값일 뿐이다
-        log.warning("lot 조건을 읽지 못했습니다(%s) — 빈 값으로 진행", e)
-        return empty()
-    try:
-        tbl = compat.pick_table(con)
-        if tbl is None:
-            return empty()
-        prof = compat.profile(con, tbl)
-        return _read(con, prof, lots)
-    except Exception as e:                    # noqa: BLE001
         log.warning("lot 조건 조회 실패(%s) — 빈 값으로 진행", e)
         return empty()
-    finally:
-        con.close()
 
 
 def _read(con, prof, lots: list[str] | None) -> LotContext:

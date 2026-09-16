@@ -74,6 +74,23 @@ def _connect_write(path: Path) -> duckdb.DuckDBPyConnection:
                 explain_conn_error(e, str(path), write=True)) from e
 
 
+def _limit_memory(con: duckdb.DuckDBPyConnection) -> None:
+    """쓰기 연결에도 읽기 연결과 같은 메모리 천장과 디스크 스필을 건다.
+
+    설정하지 않으면 DuckDB가 물리 메모리의 80%까지 쓴다 — 적재는 추출이 남긴
+    polars 프레임과 함께 도는데, 그 위에서 피벗·INSERT가 캐시를 다 채우면
+    프로세스가 OOM으로 떨어진다. 상한을 넘는 몫은 임시 폴더로 흘려보낸다.
+    """
+    from etreport.data.loader import readonly_config
+    cfg = readonly_config()
+    try:
+        con.execute(f"SET memory_limit='{cfg['memory_limit']}'")
+        if tmp := cfg.get("temp_directory"):
+            con.execute(f"SET temp_directory='{tmp.replace(chr(39), chr(39) * 2)}'")
+    except duckdb.Error as e:                     # 설정 실패로 적재를 막지 않는다
+        log.warning("DuckDB 메모리 설정 실패(기본값으로 진행): %s", e)
+
+
 def key_hash_expr() -> pl.Expr:
     """포인트 식별자. **절대 바꾸지 말 것** — 기존 DB에 이어 적재할 때 이 값으로
     중복을 걸러내므로, 계산식이 바뀌면 같은 포인트가 두 번 들어간다.
@@ -91,6 +108,7 @@ class Store:
         self.path = Path(path)
         self.con = _connect_write(self.path)
         self.con.execute("PRAGMA threads=4")
+        _limit_memory(self.con)
         self._ensure_meta()
 
     # ── 스키마 ────────────────────────────────────────────────

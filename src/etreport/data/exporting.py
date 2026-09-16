@@ -42,16 +42,13 @@ def copy_to(db_path: str, sql: str, out: str, fmt: str) -> str:
     fmt는 "csv" 또는 "parquet". CSV는 엑셀에서 한글이 깨지지 않도록 BOM을
     앞에 붙인다 — DuckDB가 다 쓴 뒤 3바이트만 앞에 이어 붙인다.
     """
-    from etreport.data.loader import open_readonly
+    from etreport.data.loader import readonly_query
     opts = ("FORMAT CSV, HEADER" if fmt == "csv" else "FORMAT PARQUET")
     target = Path(out)
     tmp = target.with_name(target.name + ".part") if fmt == "csv" else target
-    con = open_readonly(db_path)
-    try:
+    with readonly_query(db_path) as con:
         con.execute(f"COPY (\n{sql}\n) TO '{str(tmp).replace(chr(39), chr(39) * 2)}'"
                     f" ({opts})")
-    finally:
-        con.close()
     if fmt == "csv":
         with target.open("wb") as dst:
             dst.write(b"\xef\xbb\xbf")
@@ -100,21 +97,17 @@ def save_wide(preset, on_log: Callable[[str], None] | None = None) -> list[str]:
             say("⚠ SBDF 저장 건너뜀 — spotfire/sbdf 라이브러리를 찾을 수 없습니다")
             return saved
         try:
-            from etreport.data.loader import open_readonly
-            con = open_readonly(db_path)
-            try:
+            from etreport.data.loader import readonly_query
+            with readonly_query(db_path) as con:
                 n = con.execute("SELECT count(*) FROM et_data").fetchone()[0]
-            finally:
-                con.close()
-            if n > SBDF_WARN_ROWS:
-                say(f"⚠ SBDF 저장 건너뜀 — {n:,}행이 상한({SBDF_WARN_ROWS:,})을 넘습니다")
-                return saved
-            con = open_readonly(db_path)
-            try:
-                full = con.execute("SELECT * FROM et_data").pl()
-            finally:
-                con.close()
-            sbdf.export_data(full.to_pandas(), str(base) + ".sbdf")
+                if n > SBDF_WARN_ROWS:
+                    say(f"⚠ SBDF 저장 건너뜀 — {n:,}행이 상한"
+                        f"({SBDF_WARN_ROWS:,})을 넘습니다")
+                    return saved
+                # pandas로 바로 받는다 — polars를 거치면 같은 표가 두 벌 생긴다
+                full = con.execute("SELECT * FROM et_data").df()
+            sbdf.export_data(full, str(base) + ".sbdf")
+            del full
             saved.append(str(base) + ".sbdf")
         except Exception as e:                       # noqa: BLE001
             say(f"⚠ et_data.sbdf 저장 실패 — {e}")

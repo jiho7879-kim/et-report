@@ -565,14 +565,11 @@ class DataWorkspace(QWidget):
             try:
                 # 읽기 전용 연결은 반드시 loader를 경유한다 — 설정이 하나여야
                 # 같은 파일을 여러 곳에서 열 수 있다(loader.readonly_config)
-                from etreport.data.loader import open_readonly
-                con = open_readonly(str(p.db_path))
-                try:
+                from etreport.data.loader import readonly_query
+                with readonly_query(str(p.db_path)) as con:
                     cols = [r[0] for r in con.execute(
                         "SELECT column_name FROM information_schema.columns "
                         "WHERE table_name='et_data'").fetchall()]
-                finally:
-                    con.close()
                 keys = {"key_hash", "key", "lot", "wafer", "gid", "line_id",
                         "root_lot_id", "wafer_id", "chip_x_pos", "chip_y_pos",
                         "temperature", "step_id", "step_seq", "total_site_cnt",

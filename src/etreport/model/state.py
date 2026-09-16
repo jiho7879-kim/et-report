@@ -47,7 +47,7 @@ class AppState:
     table_slide_mode: str = "overflow"    # overflow | split (§7.3)
     explore: PlotSpec = field(default_factory=PlotSpec)
     db_label: str = "(DB 미연결)"
-    store: object | None = None        # 읽기 전용 duckdb 연결
+    store: object | None = None        # 쓰지 않음 — 연결은 열어 두지 않는다(loader.readonly_query)
     templates: object | None = None    # model.templates.Templates
     db_path: str = ""
     table: str = ""                    # 실제 조회 테이블 (기본 et_data)

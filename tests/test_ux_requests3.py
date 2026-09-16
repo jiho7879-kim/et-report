@@ -254,6 +254,58 @@ def test_preview_reads_only_a_page(appdata, tmp_path):
     assert head.height == 10 and total is None
 
 
+def test_duckdb_access_leaves_no_instance_behind(appdata, tmp_path):
+    """★ 조회가 끝나면 DuckDB 인스턴스(와 그 캐시)가 남지 않는다.
+
+    분석 화면이 연결(state.store)을 열어 둔 채 SQL 창에서 무거운 조회를 돌리면,
+    같은 인스턴스를 공유하는 탓에 조회 캐시가 화면 수명만큼 남아 그 뒤의 모든
+    DuckDB 접근이 OOM이 됐다. 이제 읽는 자리는 전부 열고-읽고-닫는다.
+    남은 인스턴스가 없다는 증거: **설정이 다른 쓰기 연결이 곧바로 열린다.**
+    """
+    import duckdb
+
+    from etreport.data import exporting, loader, lotcontext
+    from etreport.model.state import AppState
+    from etreport.ui.widgets.sql_dialog import preview_query
+    p = tmp_path / "big.duckdb"
+    con = duckdb.connect(str(p))
+    con.execute("CREATE TABLE et_data AS SELECT i::VARCHAR AS lot, "
+                "(i % 25)::VARCHAR AS wafer, random() AS a, "
+                "md5(i::VARCHAR) AS h FROM range(0, 200000) t(i)")
+    con.close()
+
+    def no_instance_left():
+        duckdb.connect(str(p)).close()          # 인스턴스가 남아 있으면 실패
+
+    st = AppState()
+    loader.load_state(st, str(p))               # [적용]
+    assert st.store is None and st.data.height == 200_000
+    no_instance_left()
+    head, _ = preview_query(str(p), "SELECT h, max(a) FROM et_data GROUP BY h",
+                            rows=5)             # SQL 창 — 캐시를 채우는 집계
+    assert head.height == 5
+    no_instance_left()
+    loader.lot_index(str(p))
+    loader.wafer_index_from_db(str(p))
+    lotcontext.from_db(str(p))
+    exporting.copy_to(str(p), "SELECT * FROM et_data LIMIT 10",
+                      str(tmp_path / "o.parquet"), "parquet")
+    no_instance_left()
+    loader.load_state(st, str(p))               # 그 뒤의 조회도 그대로 된다
+    assert st.data.height == 200_000
+    no_instance_left()
+
+
+def test_write_connection_has_memory_ceiling(appdata, tmp_path):
+    """★ 적재 연결도 메모리 상한·디스크 스필을 쓴다(기본은 물리 메모리 80%)."""
+    from etreport.data import db
+    with db.Store(tmp_path / "w.duckdb") as s:
+        got = s.con.execute(
+            "SELECT current_setting('memory_limit'), "
+            "current_setting('temp_directory')").fetchone()
+    assert got[0].endswith("GiB") and got[1].endswith("duckdb_tmp")
+
+
 def test_save_streams_through_duckdb(appdata, tmp_path):
     """★ 저장은 DuckDB가 파일로 직접 쓴다 — 결과를 메모리에 올리지 않는다."""
     from etreport.ui.widgets.sql_dialog import copy_to

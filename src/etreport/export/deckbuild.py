@@ -107,20 +107,26 @@ def deck_meta(state: AppState) -> dict:
     meta["STEP_ID"] = _join("step")
     temps = _join("temp")
     meta["TEMPERATURE"] = (temps + " ℃") if temps else ""
-    con, prof = getattr(state, "store", None), getattr(state, "profile", None)
-    if con is not None and prof is not None:
-        roles = getattr(prof, "roles", {})
-        for label, role in (("LINE_ID", "line"), ("TKOUT_TIME", "time")):
-            col = roles.get(role)
-            if not col:
-                continue
-            agg = "max" if role == "time" else "min"
-            try:
-                got = con.execute(
-                    f'SELECT {agg}("{col}") FROM "{prof.table}"').fetchone()
-                meta[label] = "" if got is None or got[0] is None else str(got[0])
-            except Exception as e:                 # noqa: BLE001 — 표지일 뿐이다
-                log.debug("표지 메타 조회 실패(%s): %s", label, e)
+    db_path, prof = getattr(state, "db_path", None), getattr(state, "profile", None)
+    roles = getattr(prof, "roles", {}) if prof is not None else {}
+    wanted = [(label, role, roles[role]) for label, role in
+              (("LINE_ID", "line"), ("TKOUT_TIME", "time")) if roles.get(role)]
+    if db_path and wanted and Path(db_path).exists():
+        # 분석 연결은 열어 두지 않는다 — 필요한 순간에만 열고 닫는다(loader)
+        from etreport.data.loader import readonly_query
+        try:
+            with readonly_query(str(db_path)) as con:
+                for label, role, col in wanted:
+                    agg = "max" if role == "time" else "min"
+                    try:
+                        got = con.execute(
+                            f'SELECT {agg}("{col}") FROM "{prof.table}"').fetchone()
+                        meta[label] = ("" if got is None or got[0] is None
+                                       else str(got[0]))
+                    except Exception as e:         # noqa: BLE001 — 표지일 뿐이다
+                        log.debug("표지 메타 조회 실패(%s): %s", label, e)
+        except Exception as e:                     # noqa: BLE001
+            log.debug("표지 메타용 DB 열기 실패: %s", e)
     return meta
 
 

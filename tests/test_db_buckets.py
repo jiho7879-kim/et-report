@@ -162,7 +162,7 @@ def test_query_only_db_is_never_written(parquet, tmp_path, appdata):
     loader.load_state(st, str(dbp))
     key = st.data["key"][0]
     loader.sync_exclusion(st, key, True, reason="조회 전용 확인")
-    st.store.close()
+    loader.close_store(st)
 
     assert (dbp.stat().st_size, dbp.stat().st_mtime_ns) == before
     con = duckdb.connect(str(dbp), read_only=True)

@@ -122,12 +122,10 @@ def test_load_state_closes_previous_connection(tmp_path, appdata, monkeypatch):
 
     st = AppState()
     loader.load_state(st, str(dbp))
-    first = st.store
     loader.load_state(st, str(dbp))                   # 다시 적용
-    assert st.store is not first
+    assert st.store is None                           # 연결을 쥐고 있지 않는다
     import duckdb
-    with pytest.raises(duckdb.Error):                 # 이전 연결은 닫혀 있어야
-        first.execute("select 1")
+    duckdb.connect(str(dbp)).close()                  # 쓰기 연결도 바로 열린다
 
 
 # ── P1: 원본 rawdata 보존 ───────────────────────────────────

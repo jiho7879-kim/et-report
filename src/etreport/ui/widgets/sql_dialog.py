@@ -61,14 +61,13 @@ def preview_query(db_path: str, sql: str,
     `Out of Memory Error: Arrow buffer failed to allocate`로 죽었다. 화면에
     필요한 것은 200행뿐이다. 전체 행 수를 세기 위해 같은 무거운 SQL을 한 번 더
     실행하지 않는다. 결과 수는 미리보기보다 많은지만 표시한다.
+
+    분석 화면이 같은 DB를 열어 두면 이 연결은 그 인스턴스에 붙으므로, 닫을 때
+    조회가 채운 캐시를 돌려준다(`loader.readonly_query`).
     """
-    from etreport.data.loader import open_readonly
-    con = open_readonly(db_path)
-    try:
-        head = con.execute(f"{_sub(sql)} LIMIT {int(rows)}").pl()
-        return head, None
-    finally:
-        con.close()
+    from etreport.data.loader import readonly_query
+    with readonly_query(db_path) as con:
+        return con.execute(f"{_sub(sql)} LIMIT {int(rows)}").pl(), None
 
 
 class SqlExportDialog(QDialog):
@@ -245,15 +244,12 @@ class SqlExportDialog(QDialog):
             return
         # SBDF는 pandas 전체 프레임을 요구한다. 행 수가 아직 없다면 이 저장
         # 경로에서만 세어, 미리보기 때 SQL을 두 번 돌리지 않는다.
-        from etreport.data.loader import open_readonly
+        from etreport.data.loader import readonly_query
         try:
-            con = open_readonly(self.db_path)
-            try:
+            with readonly_query(self.db_path) as con:
                 got = con.execute(
                     f"SELECT count(*) FROM (\n{self.sql_text()}\n)").fetchone()
                 self.n_rows = int(got[0]) if got else 0
-            finally:
-                con.close()
         except Exception as e:                       # noqa: BLE001
             QMessageBox.critical(self, "SBDF 저장 실패", str(e))
             return
@@ -264,16 +260,17 @@ class SqlExportDialog(QDialog):
         ) != QMessageBox.Yes:
             return
         try:
-            con = open_readonly(self.db_path)
-            try:
-                full = con.execute(self.sql_text()).pl()
-            finally:
-                con.close()
-            sbdf.export_data(full.to_pandas(), p)
+            # pandas로 바로 받는다 — polars를 거치면 같은 표가 두 벌 생긴다
+            with readonly_query(self.db_path) as con:
+                full = con.execute(self.sql_text()).df()
+            sbdf.export_data(full, p)
+            del full
         except Exception as e:                       # noqa: BLE001
             QMessageBox.critical(self, "SBDF 저장 실패", str(e))
             return
         self._done(p)
 
     def _done(self, path: str) -> None:
-        QMessageBox.information(self, "저장 완료", f"{self.n_rows:,}행\n{path}")
+        # CSV·parquet 저장은 행 수를 세지 않는다(미리보기도 None을 준다).
+        rows = f"{self.n_rows:,}행\n" if self.n_rows is not None else ""
+        QMessageBox.information(self, "저장 완료", f"{rows}{path}")

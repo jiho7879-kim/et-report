@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import duckdb
@@ -63,6 +65,28 @@ def open_readonly(db_path: str) -> duckdb.DuckDBPyConnection:
                               config=readonly_config())
     except duckdb.Error as e:
         raise RuntimeError(explain_conn_error(e, db_path, write=False)) from e
+
+
+@contextmanager
+def readonly_query(db_path: str) -> Iterator[duckdb.DuckDBPyConnection]:
+    """한 번 쓰고 닫는 읽기 전용 연결. **DB를 읽는 자리는 전부 이것을 쓴다.**
+
+    DuckDB는 같은 파일·같은 설정의 연결을 **인스턴스 하나로 묶고**, 그 인스턴스의
+    버퍼 캐시(최대 `DUCKDB_MEMORY_LIMIT`)는 마지막 연결이 닫힐 때에야 풀린다.
+    예전에는 분석 화면이 연결(`state.store`)을 계속 열어 두어서, SQL 창에서 한 번
+    무거운 조회를 돌리면 그 캐시가 분석 데이터·Excel 위에 그대로 남았고 그 뒤의
+    모든 조회가 `Out of Memory Error`로 떨어졌다. 그래서 연결을 오래 쥐고 있는
+    곳을 없앴다 — 열고, 읽고, 바로 닫는다.
+
+    캐시를 비우려고 `SET memory_limit`을 잠깐 낮추는 방법은 쓰지 않는다. 상한은
+    인스턴스 전역이라 다른 스레드(백그라운드 작업)가 같은 파일을 읽는 중이면
+    그 조회가 OOM으로 떨어진다.
+    """
+    con = open_readonly(db_path)
+    try:
+        yield con
+    finally:
+        con.close()
 
 
 def explain_conn_error(e: Exception, db_path: str, write: bool) -> str:
@@ -160,15 +184,12 @@ def wafer_index_from_db(db_path: str,
     item 컬럼을 만지지 않으므로 큰 DB에서도 가볍다. `lots`를 주면 도크에서 고른
     lot으로 좁힌다 — 그룹 편집이 분석 대상과 같은 범위를 보게 하기 위해서다.
     """
-    con = open_readonly(db_path)
-    try:
+    with readonly_query(db_path) as con:
         tbl = compat.pick_table(con)
         if tbl is None:
             return wafer_index_empty()
         prof = compat.profile(con, tbl)
         idx = con.execute(compat.wafer_index_sql(prof, lots)).pl()
-    finally:
-        con.close()
     return idx.with_columns([pl.col(c).cast(pl.Utf8) for c in compat.CTX_ROLES])
 
 
@@ -176,14 +197,13 @@ def lot_index(db_path: str) -> pl.DataFrame:
     """DB에 들어 있는 lot 목록 — `(lot, wafers)`. 도크 lot 리스트가 쓴다.
 
     DB를 **고르는 즉시**(=[적용] 전에) 도는 조회다. 그래서 item도 die 좌표도 보지
-    않고 lot·wafer만 센다. 읽기 전용 연결은 반드시 `open_readonly()`를 거친다 —
+    않고 lot·wafer만 센다. 읽기 전용 연결은 반드시 `readonly_query()`를 거친다 —
     설정이 다른 연결을 같은 파일에 하나라도 더 열면 그 순간 DuckDB가 막는다.
     """
     empty = pl.DataFrame(schema={"lot": pl.Utf8, "wafers": pl.Int64})
     if not Path(db_path).exists():
         return empty
-    con = open_readonly(db_path)
-    try:
+    with readonly_query(db_path) as con:
         tbl = compat.pick_table(con)
         if tbl is None:
             return empty
@@ -191,8 +211,6 @@ def lot_index(db_path: str) -> pl.DataFrame:
         if not sql:                      # lot 컬럼을 못 찾은 스키마
             return empty
         idx = con.execute(sql).pl()
-    finally:
-        con.close()
     return idx.with_columns(pl.col("lot").cast(pl.Utf8))
 
 
@@ -203,10 +221,11 @@ def wafer_index_empty() -> pl.DataFrame:
 
 
 def close_store(state: AppState) -> None:
-    """이전에 열어 둔 읽기 전용 연결을 닫는다.
+    """남아 있는 읽기 전용 연결을 닫는다.
 
-    [적용]을 누를 때마다 새 연결을 만들기 때문에, 닫지 않으면 세션이 길어질수록
-    연결과 파일 핸들이 계속 쌓인다(Windows에서는 DB 파일도 계속 잡혀 있다).
+    `load_state`는 이제 연결을 쥐고 있지 않으므로 보통은 할 일이 없다. 예전
+    코드·테스트가 `state.store`에 연결을 넣어 둔 경우를 위한 안전장치다 —
+    열린 연결이 하나라도 남으면 DuckDB 캐시와 파일 잠금이 함께 남는다.
     """
     con = getattr(state, "store", None)
     if con is None:
@@ -229,21 +248,21 @@ def load_state(state: AppState, db_path: str, table: str | None = None,
         raise FileNotFoundError(f"파일이 없습니다: {db_path}")
 
     close_store(state)                              # 이전 연결부터 정리
-    con = open_readonly(db_path)
-    tbl = compat.pick_table(con, table)
-    if tbl is None:
-        state.store, state.data = con, None
-        state.db_label = Path(db_path).name
-        return "테이블이 없습니다 — [데이터]에서 먼저 추출·적재하세요"
-
-    prof = compat.profile(con, tbl)
-    log.info("조회 테이블 %s", prof.describe())
-    df = con.execute(compat.select_sql(prof, lots=lots)).pl()
+    # 연결은 읽는 동안만 연다(readonly_query 참조). 열어 두면 조회 캐시가
+    # 화면 수명만큼 남아 이후 모든 DuckDB 접근이 OOM이 된다.
+    with readonly_query(db_path) as con:
+        tbl = compat.pick_table(con, table)
+        if tbl is None:
+            state.data = None
+            state.db_label = Path(db_path).name
+            return "테이블이 없습니다 — [데이터]에서 먼저 추출·적재하세요"
+        prof = compat.profile(con, tbl)
+        log.info("조회 테이블 %s", prof.describe())
+        df = con.execute(compat.select_sql(prof, lots=lots)).pl()
     if prof.is_long:
         df = _normalize_pivoted(df, prof)
     df, n_abs = apply_absolute(df, state.rf)     # 음수로 적재된 기존 DB도 교정
 
-    state.store = con
     state.table = tbl
     state.profile = prof
     state.data = df
