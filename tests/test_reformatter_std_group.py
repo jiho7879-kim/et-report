@@ -1,8 +1,8 @@
-"""요청 ⑤ — ADDP `Std()`의 5키 그룹 표본표준편차(n-1) 계약.
+"""요청 ⑤ — ADDP `Std()`의 6키 그룹 표본표준편차(n-1) 계약.
 
-`reformatter.apply()`는 순수-ref Std 호출(인자가 전부 {ALIAS})을
-root_lot_id·wafer_id·step_id·step_seq·temperature 5키 그룹의 표본 std로
-다시 계산해 그룹의 모든 행에 흩뿌린다(broadcast). 5키 또는 인자 컬럼이
+`reformatter.apply()`는 Std 호출(인자는 {ALIAS} 또는 Abs({A}) 같은 식)을
+root_lot_id·wafer_id·step_id·step_seq·total_site_cnt·temperature 6키 그룹의 표본 std로
+다시 계산해 그룹의 모든 행에 흩뿌린다(broadcast). 6키 또는 인자 컬럼이
 데이터에 없으면 예전 행 단위(수평) Std로 폴백한다.
 
 이 계약은 표·plot·PPT의 "그룹 산포" 지표와 화면/행 단위 엔진 비교
@@ -33,11 +33,12 @@ def rf_of(*rules) -> Reformatter:
 
 
 def long5(rows, item_col, values):
-    """5키 + 칩 좌표 + tkout_time를 갖춘 long 프레임.
+    """6키 + 칩 좌표 + tkout_time를 갖춘 long 프레임.
 
     칩 좌표·tkout_time이 없으면 피벗이 wafer당 한 행으로 뭉개 첫 값만
     남기므로(aggregate_function="first") 그룹 std 테스트에 쓸 수 없다.
-    rows = (lot, wafer, step_id, step_seq, temperature) 하나당 칩 한 개.
+    rows = (lot, wafer, step_id, step_seq, temperature[, total_site_cnt])
+    하나당 칩 한 개. total_site_cnt를 생략하면 5.
     """
     n = len(rows)
     return pl.DataFrame({
@@ -46,6 +47,7 @@ def long5(rows, item_col, values):
         "step_id": [r[2] for r in rows],
         "step_seq": [r[3] for r in rows],
         "temperature": [r[4] for r in rows],
+        "total_site_cnt": [r[5] if len(r) > 5 else 5 for r in rows],
         "chip_x_pos": list(range(n)),
         "chip_y_pos": [0] * n,
         "tkout_time": [float(i) for i in range(n)],
@@ -60,7 +62,7 @@ def s_values(out: pl.DataFrame) -> pl.DataFrame:
 
 
 def test_std_broadcasts_group_std_to_every_member():
-    """Std는 wafer(5키) 그룹 단위로 계산해 그룹의 모든 행에 흩뿌린다."""
+    """Std는 wafer(6키) 그룹 단위로 계산해 그룹의 모든 행에 흩뿌린다."""
     rf = rf_of(
         rule("REAL", "ET_A", "A"),
         rule("ADDP", "", "S", formula="Std({A})", row=3),
@@ -210,7 +212,7 @@ def test_std_addp_absolute_applies_to_group_result():
 
 
 def test_std_falls_back_to_row_engine_without_five_keys(caplog):
-    """5키가 데이터에 없으면 기존 행 단위 Std로 폴백하고 로그에 남긴다."""
+    """6키가 데이터에 없으면 기존 행 단위 Std로 폴백하고 로그에 남긴다."""
     rf = rf_of(
         rule("REAL", "ET_A", "A"),
         rule("ADDP", "", "S", formula="Std({A})", row=3),
@@ -240,3 +242,90 @@ def test_scaffold_columns_do_not_leak_into_output():
     assert not any(c.startswith("__std") for c in out.columns)
     item_ids = out["item_id"].unique().to_list()
     assert set(item_ids) <= {"A", "B", "S"}
+
+
+def test_std_splits_by_total_site_cnt():
+    """total_site_cnt가 다르면 다른 묶음이다(6키)."""
+    rf = rf_of(
+        rule("REAL", "ET_A", "A"),
+        rule("ADDP", "", "S", formula="Std({A})", row=3),
+    )
+    src = pl.concat([
+        long5([("PA2600", "01", "M2", 1, 25.0, 5)] * 2, "ET_A", [1.0, 3.0]),
+        long5([("PA2600", "01", "M2", 1, 25.0, 9)] * 2, "ET_A", [10.0, 30.0]),
+    ])
+    s = s_values(apply(rf, src))
+    assert s.filter(pl.col("total_site_cnt") == 5)["value"].to_list() == \
+        [pytest.approx(math.sqrt(2))] * 2
+    assert s.filter(pl.col("total_site_cnt") == 9)["value"].to_list() == \
+        [pytest.approx(math.sqrt(200))] * 2
+
+
+def test_std_survives_null_key():
+    """키 하나(온도)가 NULL이어도 그 묶음의 std가 붙는다 — join이 NULL 키를
+    다르게 보면 결과가 전부 NULL이 되어 item이 통째로 사라졌다."""
+    rf = rf_of(
+        rule("REAL", "ET_A", "A"),
+        rule("ADDP", "", "S", formula="Std({A})", row=3),
+    )
+    src = long5([("PA2600", "01", "M2", 1, None)] * 2, "ET_A", [1.0, 3.0])
+    assert s_values(apply(rf, src))["value"].to_list() == \
+        [pytest.approx(math.sqrt(2))] * 2
+
+
+@pytest.mark.parametrize("fn", ["stddev", "STDDEV", "StdDev", "stdev", "STDEV"])
+def test_stddev_alias_is_group_std(fn):
+    """엑셀 STDEV·SQL STDDEV 표기도 Std와 같다 — 예전엔 검증에서 행이 빠졌다."""
+    rf = rf_of(
+        rule("REAL", "ET_A", "A"), rule("REAL", "ET_B", "B"),
+        rule("ADDP", "", "S", formula=f"{fn}({{A}},{{B}})", row=4),
+    )
+    rows = [("PA2600", "01", "M2", 1, 25.0)] * 2
+    src = pl.concat([
+        long5(rows, "ET_A", [1.0, 3.0]),
+        long5(rows, "ET_B", [7.0, 9.0]),
+    ])
+    assert s_values(apply(rf, src))["value"].to_list() == \
+        [pytest.approx(math.sqrt(40 / 3))] * 2
+
+
+def test_std_repeated_argument_does_not_crash():
+    rf = rf_of(
+        rule("REAL", "ET_A", "A"),
+        rule("ADDP", "", "S", formula="Std({A},{A})", row=3),
+    )
+    src = long5([("PA2600", "01", "M2", 1, 25.0)] * 2, "ET_A", [1.0, 3.0])
+    assert s_values(apply(rf, src)).height == 2
+
+
+def test_std_expression_args_are_group_std():
+    """Std(Abs({A}),{B})도 wafer 묶음 산포다 — 인자 식은 칩마다 먼저 계산한다."""
+    rf = rf_of(
+        rule("REAL", "ET_A", "A"), rule("REAL", "ET_B", "B"),
+        rule("ADDP", "", "S", formula="stddev(Abs({A}),{B}*2)", row=4),
+    )
+    rows = [("PA2600", "01", "M2", 1, 25.0)] * 2
+    src = pl.concat([
+        long5(rows, "ET_A", [-1.0, -3.0]),     # Abs → 1, 3
+        long5(rows, "ET_B", [3.5, 4.5]),       # *2  → 7, 9
+    ])
+    out = apply(rf, src)
+    assert s_values(out)["value"].to_list() == \
+        [pytest.approx(math.sqrt(40 / 3))] * 2
+    assert not any(v.startswith("__std") for v in out["item_id"].unique())
+
+
+def test_std_call_scanner_handles_nesting_and_alias_parens():
+    from etreport.data.reformatter import _std_calls, _std_substitute
+    f = "Std(Abs({A (x,y)}), Max({B},{C}))/Avg({A (x,y)})+STD({D})"
+    calls = _std_calls(f)
+    assert [c[2] for c in calls] == [["Abs({A (x,y)})", "Max({B},{C})"], ["{D}"]]
+    assert _std_substitute(f, ["__std0", "__std1"]) == \
+        "{__std0}/Avg({A (x,y)})+{__std1}"
+
+
+def test_nested_std_falls_back_to_row_engine():
+    from etreport.data.reformatter import STD_KEYS, _std_needs
+    cols = {*STD_KEYS, "A", "B"}
+    assert _std_needs("Std(Std({A}),{B})", cols) == []
+    assert _std_needs("Std(Abs({A}),{B})", cols) == [["Abs({A})", "{B}"]]

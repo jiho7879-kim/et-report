@@ -158,8 +158,8 @@ RULE_ROWS: list[tuple] = [
      "Sum({Ioff N SVT},{Ioff P SVT},{Jg Gate})", "nA",
      None, 6.00, None, None, None),
     # LOG는 상용로그(밑 10) · LN은 자연로그 — 헷갈리기 쉬운 규칙을 데모에 남긴다.
-    # 참조는 **같은 step_seq에 기록되는 항목끼리**여야 한다 — 리포메팅은 추출
-    # 직후(병합 전)에 돌기 때문에, seq가 갈린 두 항목을 한 수식에 쓰면 값이 없다.
+    # 여기 수식은 같은 step_seq 안에서 참조한다. seq를 넘나드는 수식도
+    # 리포메팅이 seq를 합쳐 계산한다(reformatter._fill_cross_seq).
     ("ADDP", "", "Ioff decade", "N", 1.0,
      "Log({Ioff N SVT})", "dec", None, 0.30, None, None, None),
     ("ADDP", "", "Rs 로그", "N", 1.0,
@@ -297,8 +297,7 @@ def table_frame() -> pl.DataFrame:
 #: item별 step_seq — NMOS는 1, PMOS·누설·기타는 2에 기록된다(§10.1 병합 대상)
 #: DC 특성은 seq 1, 누설·용량은 seq 2 — 읽을 때 한 점으로 합쳐야 x·y가 함께
 #: 있는 행이 생긴다(page1 order2의 `Vtlin N SVT` vs `Ioff N SVT`가 그 예).
-#: ADDP는 seq를 넘나들 수 없으므로(리포메팅은 병합 전에 돈다) 수식도 seq 안에서만
-#: 참조한다.
+#: 데모 ADDP는 seq 안에서만 참조한다(seq를 넘나드는 수식은 테스트가 지킨다).
 _SEQ = {
     "ET_IDSAT_N_SVT": 1, "ET_IDSAT_N_LVT": 1, "ET_VTLIN_N_SVT": 1,
     "ET_VTSAT_N_SVT": 1, "ET_VTLIN_N_LVT": 1, "ET_RS_POLY": 1,

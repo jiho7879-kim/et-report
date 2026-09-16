@@ -17,7 +17,7 @@ import polars as pl
 import pytest
 
 from etreport.data import db, loader
-from etreport.data.reformatter import _STD_CALL, compile_formula
+from etreport.data.reformatter import _std_calls, compile_formula
 from etreport.data.reformatter import apply as rf_apply
 from tests.factory import make_long, make_reformatter
 
@@ -71,13 +71,13 @@ def test_reformat_one_day(big, caplog):
 
 
 def _std_rules(rf):
-    """순수 `Std({A},{B}…)` 규칙 — 그룹 표본표준편차로 다시 쓰이는 것들(요청 ⑤).
+    """`Std(…)` 규칙 — 그룹 표본표준편차로 다시 쓰이는 것들(요청 ⑤).
 
-    이들은 **한 행 안의 수평 산포가 아니라** 5키 묶음의 산포라, 행 단위 엔진과
+    이들은 **한 행 안의 수평 산포가 아니라** 6키 묶음의 산포라, 행 단위 엔진과
     대조하면 당연히 어긋난다. 정의가 다른 것을 같다고 우기지 않도록 여기서
     갈라내고 아래 `test_group_std_*`가 그룹 정의로 따로 검증한다.
     """
-    return [r for r in rf.addps() if _STD_CALL.search(r.formula)]
+    return [r for r in rf.addps() if _std_calls(r.formula)]
 
 
 def test_values_match_row_engine_on_sampled_keys(big):
@@ -109,7 +109,7 @@ def test_values_match_row_engine_on_sampled_keys(big):
 
 
 def test_group_std_is_broadcast_over_the_five_keys(big):
-    """실측 규모에서도 Std는 5키 묶음 산포다 — 묶음 안에서 값이 하나여야 한다.
+    """실측 규모에서도 Std는 6키 묶음 산포다 — 묶음 안에서 값이 하나여야 한다.
 
     testset은 lot·step·seq·온도가 하나씩이라 묶음이 곧 wafer다. 값 자체는
     인자 네 개의 wafer 내 표본표준편차(n-1, NULL 제외)와 같아야 한다.
@@ -124,8 +124,7 @@ def test_group_std_is_broadcast_over_the_five_keys(big):
 
     checked = 0
     for rule in rules:
-        args = [a.strip().strip("{}")
-                for a in _STD_CALL.search(rule.formula).group(1).split(",")]
+        args = [a.strip("{}") for a in _std_calls(rule.formula)[0][2]]
         for (lot, waf), grp in wide.group_by(["root_lot_id", "wafer_id"]):
             got = grp[rule.alias].unique().to_list()
             assert len(got) == 1, (rule.alias, lot, waf, "묶음 안에서 값이 갈렸다")

@@ -261,17 +261,18 @@ BinOp(a / b)  → f"({a} / nullif({b}, 0))"        # 0 나눗셈 방어
 Std({item1}, {item2}, ...)
 ```
 `{}` 안의 item들을 **같은 측정점 묶음의 값들로 간주**하여 하나의 산포를 계산. **계산
-단위는 키 5개**(`STD_KEYS` = `root_lot_id, wafer_id, step_id, step_seq, temperature`,
-응답 ⑤ 확정) — 다이 좌표·site 수는 키가 아니다.
+단위는 키 6개**(`STD_KEYS` = `root_lot_id, wafer_id, step_id, step_seq, total_site_cnt,
+temperature`, 2026-09-16 site 수 추가 확정) — 다이 좌표는 키가 아니고, 묶음 안 모든
+chip(chip_x_pos·chip_y_pos)에 같은 값이 붙는다. 함수 이름은 `STDEV`·`STDDEV`도 받는다.
 
 **구현 (확정): SQL GROUP BY가 아니라 리포메팅 wide 스캐폴드로 만든다.**
 
-리포메터 `apply()`가 long을 wide로 피벗한 뒤, 인자가 전부 `{ALIAS}`인 순수
-`Std({A},{B},…)` 호출을 찾아 **인자 값을 `STD_KEYS`로 묶어 표본 std(n-1)를 만들고
+리포메터 `apply()`가 long을 wide로 피벗한 뒤 `Std(…)` 호출을 찾아(인자는 `{A}` 또는
+`Abs({A})` 같은 식 — 식은 칩마다 먼저 계산) **인자 값을 `STD_KEYS`로 묶어 표본 std(n-1)를 만들고
 `{__stdN}` 스캐폴드 컬럼 참조로 치환**한다. 같은 인자 조합은 한 번만 만들고
 역피벗 전에 스캐폴드 컬럼을 지운다. polars `std()`는 ddof=1(표본)·NULL 무시·유효값
-2개 미만이면 NULL이라 행 단위 엔진과 숫자가 같다. 5키가 없거나 인자가 순수 참조가
-아니면 행 단위 수평 산포로 폴백되고 로그에 남는다.
+2개 미만이면 NULL이라 행 단위 엔진과 숫자가 같다. 6키·인자 컬럼이 없거나 Std 안에 Std가
+있으면 행 단위 수평 산포로 폴백되고 로그에 남는다.
 
 아래는 검토했으나 채택하지 않은 SQL 시안이다(키 8개 그대로).
 

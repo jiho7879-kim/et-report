@@ -155,7 +155,7 @@ src/etreport/
 │  ├─ pipeline.py         추출→리포메팅→적재 한 줄기(Qt를 모른다 — 화면·예약이 공유)
 │  ├─ querybuilder.py     타입 인식 조건 → Impala SQL (NOT IN NULL 가드)
 │  ├─ extractor.py        청크 플래너 → 메모리 예산 병렬 → long parquet(고정 스키마)
-│  ├─ reformatter.py      실컬럼 스키마 · ADDP ast 화이트리스트 · Std(5키 그룹 n-1)
+│  ├─ reformatter.py      실컬럼 스키마 · ADDP ast 화이트리스트 · Std(6키 그룹 n-1)
 │  ├─ xlio.py             xlwings 단일 창구 + parquet 캐시, csv·tsv 정식 입력
 │  ├─ db.py               DuckDB 적재: et_data·load_log·key_hash ANTI JOIN·버킷 피벗
 │  ├─ loader.py           읽기 전용 열기(open_readonly)·wide 로딩·절대값 재적용

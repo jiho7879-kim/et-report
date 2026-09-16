@@ -191,3 +191,113 @@ def test_schema_without_seq_is_left_alone(tmp_path, appdata):
     st = AppState()
     loader.load_state(st, str(p))
     assert st.data.height == 2
+
+
+# ── ADDP가 seq를 넘나들 때 (리포메팅 → 적재 → 로딩 전 구간) ──────
+def _rf(*addp: tuple[str, str]):
+    """REAL Vt·Id(seq 1)·Ioff(seq 2) + 주어진 ADDP들."""
+    from etreport.data import reformatter
+    n = 3 + len(addp)
+    return reformatter.from_frame(pl.DataFrame({
+        "CATEGORY": ["REAL"] * 3 + ["ADDP"] * len(addp),
+        "ITEMID": ["VT", "ID", "IOFF"] + [None] * len(addp),
+        "ALIAS": ["Vt", "Id", "Ioff"] + [a for a, _ in addp],
+        "ABSOLUTE": [None] * n, "SCALE FACTOR": [None] * n,
+        "ADDP FORM": [None] * 3 + [f for _, f in addp],
+        "UNIT": [None] * n, "SPECLOW": [None] * n, "SPECHIGH": [None] * n,
+        "TARGET": [None] * n,
+    }))
+
+
+def _pipeline(tmp_path, rf, retest: bool = False) -> AppState:
+    """seq 1에 Vt·Id, seq 2에 Ioff — die 3개 × wafer 2장. 실제 경로를 그대로 탄다."""
+    from etreport.data import reformatter
+    rows = []
+    for w in ("01", "02"):
+        for x in range(3):
+            t1 = datetime(2026, 8, 4, 9, 0)
+            for it, v in (("VT", 0.4 + x), ("ID", 5.0 + x)):
+                rows.append({"wafer_id": w, "chip_x_pos": x, "step_seq": 1,
+                             "tkout_time": t1, "item_id": it, "et_value": v})
+            if retest:          # seq 1 재측정 — 최신 값(Id=100+x)이 이겨야 한다
+                rows.append({"wafer_id": w, "chip_x_pos": x, "step_seq": 1,
+                             "tkout_time": datetime(2026, 8, 4, 18, 0),
+                             "item_id": "ID", "et_value": 100.0 + x})
+            rows.append({"wafer_id": w, "chip_x_pos": x, "step_seq": 2,
+                         "tkout_time": datetime(2026, 8, 4, 9, 30),
+                         "item_id": "IOFF", "et_value": 1.0 + x})
+    long = pl.DataFrame([{**BASE, **r} for r in rows])
+    out = reformatter.apply(rf, long)
+    p = tmp_path / "rf.parquet"
+    out.write_parquet(p)
+    dbp = tmp_path / "et.duckdb"
+    store = db.Store(dbp)
+    try:
+        db.pivot_and_load(store, [p])
+    finally:
+        store.close()
+    st = AppState()
+    st.rf = rf
+    loader.load_state(st, str(dbp))
+    st.db_file = str(dbp)
+    return st
+
+
+def _counts(st: AppState, *cols: str) -> list[tuple]:
+    """seq별로 각 컬럼에 값이 든 행 수 — DB에 무엇이 어느 seq로 저장됐나."""
+    sel = ", ".join(f"count({c})" for c in cols)
+    con = duckdb.connect(st.db_file, read_only=True)
+    try:
+        return con.execute(f"select step_seq, {sel} from et_data "
+                           "group by 1 order by 1").fetchall()
+    finally:
+        con.close()
+
+
+def test_cross_seq_addp_survives_to_table_and_plot(tmp_path, appdata):
+    """seq 1의 Id와 seq 2의 Ioff로 만든 ADDP가 적재 전에 지워지면 안 된다.
+
+    예전에는 리포메팅이 seq별 행에서 수식을 풀어 결과가 전부 NULL → drop_nulls로
+    item째 사라졌다. 표의 CAT1이 통째로 비고 그 item을 축으로 쓴 산점도가 비었다.
+    """
+    from etreport.model.aggregate import wafer_stats
+
+    st = _pipeline(tmp_path, _rf(("Ratio", "{Id}/{Ioff}"),
+                                 ("Ratio2", "{Ratio}*2")))   # ADDP-on-ADDP
+    assert st.data.height == 6
+    got = {r["Id"]: (r["Ratio"], r["Ratio2"]) for r in st.data.iter_rows(named=True)}
+    for x in range(3):
+        exp = (5.0 + x) / (1.0 + x)
+        assert got[5.0 + x] == pytest.approx((exp, 2 * exp))
+    assert st.data.drop_nulls(["Vt", "Ratio"]).height == 6          # 산점도 점 수
+    ws = wafer_stats(st.data, set(), ["Ratio"])
+    assert ws.get("Ratio", "PA100", "01") == pytest.approx((5 + 3 + 7 / 3) / 3)
+
+
+def test_cross_seq_addp_uses_latest_retest(tmp_path, appdata):
+    """재측정이 있으면 분석 화면과 같은 최신 값으로 계산한다."""
+    st = _pipeline(tmp_path, _rf(("Ratio", "{Id}/{Ioff}")), retest=True)
+    for r in st.data.iter_rows(named=True):
+        assert r["Ratio"] == pytest.approx(r["Id"] / r["Ioff"])
+        assert r["Id"] >= 100
+
+
+def test_cross_seq_addp_is_stored_with_every_seq(tmp_path, appdata):
+    """REAL은 원래 seq에 그대로, 합쳐 계산한 ADDP는 die의 seq 행마다 같은 값."""
+    st = _pipeline(tmp_path, _rf(("Ratio", "{Id}/{Ioff}")))
+    assert _counts(st, "Id", "Ioff", "Ratio") == [(1, 6, 0, 6), (2, 0, 6, 6)]
+
+
+def test_same_seq_addp_is_unchanged(tmp_path, appdata):
+    """seq 안에서 풀리는 ADDP는 예전처럼 그 seq 행에만 저장된다."""
+    st = _pipeline(tmp_path, _rf(("Gm", "{Id}/{Vt}")))
+    assert _counts(st, "Gm") == [(1, 6), (2, 0)]
+
+
+def test_cross_seq_std_groups_without_seq(tmp_path, appdata):
+    """Std()도 seq를 넘나들면 seq를 뺀 묶음(lot·wafer·step·site·온도)으로 계산한다."""
+    import statistics
+
+    st = _pipeline(tmp_path, _rf(("Spread", "Std({Id},{Ioff})")))
+    exp = statistics.stdev([5.0, 6.0, 7.0, 1.0, 2.0, 3.0])
+    assert st.data["Spread"].to_list() == pytest.approx([exp] * 6)
