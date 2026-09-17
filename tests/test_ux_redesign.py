@@ -228,9 +228,11 @@ def test_apply_warnings_are_not_modal(qapp, win, no_modal_dialogs, monkeypatch):
 
     shown = []
     monkeypatch.setattr(table_dialog.FrameDialog, "exec",
-                        lambda self: shown.append(self.df))
+                        lambda self: shown.append(self))
     ws._open_apply_log()
-    df = shown[0]
+    df = shown[0].df
+    # 마지막 열(내용)이 남는 폭을 채운다 — 오른쪽이 비면 안 된다
+    assert shown[0].table.horizontalHeader().stretchLastSection()
     assert df.columns == ["구분", "출처", "내용"]
     assert df.row(0) == ("제외", "리포메터", "3행 Vt: ITEMID가 비어 있습니다")
     assert df["구분"].to_list() == ["제외", "제외", "확인"]

@@ -56,6 +56,8 @@ class FrameDialog(QDialog):
                 self.table.setItem(
                     r, c, QTableWidgetItem("" if val is None else str(val)))
         self.table.resizeColumnsToContents()
+        # 마지막 열(대개 내용·사유)이 남는 폭을 채운다 — 오른쪽이 비지 않게
+        self.table.horizontalHeader().setStretchLastSection(True)
         v.addWidget(self.table, 1)
 
         bb = QDialogButtonBox(QDialogButtonBox.Close)

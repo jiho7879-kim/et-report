@@ -117,8 +117,32 @@ def _make_qapp(qt_args: list[str]):
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(__version__)
     app.setOrganizationName("ETReport")       # QStandardPaths·QSettings 기준 이름
+    _install_qt_korean(app)
     _set_windows_app_id()
     return app
+
+
+def _install_qt_korean(app):
+    """Qt 표준 문구(닫기·확인·취소·예/아니요)를 한국어로.
+
+    번역을 싣지 않으면 QDialogButtonBox·QMessageBox의 버튼이 앱 전체에서
+    `Close`·`Cancel`로 나온다. exe에서는 QLibraryInfo 경로가 번들 안을 가리키지
+    않을 수 있어 PySide6 폴더 옆(`collect_all`이 싣는 자리)도 찾는다.
+    없으면 영어로 남을 뿐이라 조용히 넘어간다.
+    """
+    from pathlib import Path
+
+    import PySide6
+    from PySide6.QtCore import QLibraryInfo, QTranslator
+
+    dirs = [QLibraryInfo.path(QLibraryInfo.TranslationsPath),
+            str(Path(PySide6.__file__).parent / "Qt" / "translations")]
+    tr = QTranslator(app)                     # 부모를 app으로 — 앱과 수명이 같다
+    if any(tr.load("qtbase_ko", d) for d in dirs if d):
+        app.installTranslator(tr)
+        return tr
+    logging.getLogger(__name__).info("Qt 한국어 번역(qtbase_ko)을 찾지 못했습니다")
+    return None
 
 
 def _set_windows_app_id() -> None:

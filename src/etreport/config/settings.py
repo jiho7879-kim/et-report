@@ -50,6 +50,9 @@ class ExtractPreset:
     )
     save_csv: bool = True
     save_sbdf: bool = False
+    # 이미 받아 둔 추출 원본 parquet을 다시 쓸 것인가(§11). 조건이 같아도 원본
+    # 테이블이 바뀌었으면 옛 값을 쓰게 되므로 **사용자가 켠다**. 기본은 꺼짐.
+    reuse_staging: bool = False
     # 예약 실행(§13) — 작업 스케줄러에 등록해 둔 내용을 여기에도 남긴다.
     # 스케줄러가 진실이지만, 화면이 "무엇을 걸어 뒀는지" 보여 주려면 사본이 필요하다
     # (schtasks /Query로는 우리가 넣은 --days를 되읽기 번거롭다).

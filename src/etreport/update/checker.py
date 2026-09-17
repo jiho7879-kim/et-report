@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass
 
 import requests
@@ -24,14 +25,16 @@ from etreport import __version__
 log = logging.getLogger(__name__)
 
 # ── 사내 환경 설정 ────────────────────────────────────────────────
-# GitHub Enterprise API 베이스. 예: https://github.company.com/api/v3
-API_BASE = "https://github.company.com/api/v3"
-OWNER = "pde-tools"
-REPO = "et-report"
+# GitHub Enterprise API 베이스.
+API_BASE = os.environ.get("ETREPORT_GH_API", "https://github.samsungds.net/api/v3")
+OWNER = os.environ.get("ETREPORT_GH_OWNER", "jiho7879-kim")
+REPO = os.environ.get("ETREPORT_GH_REPO", "PA3_SRAM")
 # 사내 저장소가 private이면 read 권한만 있는 토큰을 넣는다(없으면 None).
-TOKEN: str | None = None
-# 사내 CA 인증서 경로. requests 기본 번들에 사내 CA가 없으면 지정.
-CA_BUNDLE: str | bool = True
+# 토큰을 돌릴 때는 소스를 고치지 말고 ETREPORT_GH_TOKEN 환경변수로 덮는다.
+TOKEN: str | None = os.environ.get(
+    "ETREPORT_GH_TOKEN") or "ghp_Ol42dmopANx8lSjU60XYoqCFCYKRyv4JYe4A"
+# 사내 CA 인증서 경로. 사내 GHE는 사설 CA라 requests 기본 번들로는 검증이 깨진다.
+CA_BUNDLE: str | bool = False
 TIMEOUT = 5  # 초 — 실패해도 앱 시작을 막지 않도록 짧게
 
 

@@ -57,7 +57,8 @@ log = logging.getLogger(__name__)
 #: 한다(설계 §8 완충). 여기 없는 이름은 평소처럼 AttributeError다.
 _RAIL_WIDGETS = frozenset({
     "cfg_combo", "btn_cfg_menu", "btn_db", "btn_plot", "btn_tbl", "btn_rfm",
-    "btn_split", "_file_values", "lot_section", "lot_list", "btn_coverage",
+    "btn_split", "_file_values", "lot_section", "lot_list", "lot_search",
+    "btn_coverage",
     "tukey_section", "chk_tukey", "cmb_tukey_k", "cmb_tukey_scope",
     "btn_tukey_log", "sources_section", "lbl_sources", "btn_factor",
     "lbl_factor", "btn_apply", "lbl_apply", "btn_apply_log", "lbl_report", "lbl_summary",
@@ -269,7 +270,15 @@ class AnalysisWorkspace(QWidget):
             it.setData(Qt.UserRole, lot)
             self.lot_list.addItem(it)
         self.lot_list.blockSignals(False)
+        self._lot_filter(self.lot_search.text())
         self._refresh_lot_title()
+
+    def _lot_filter(self, text: str) -> None:
+        """검색어에 안 맞는 lot을 **숨기기만** 한다 — 체크 상태는 그대로."""
+        q = text.strip().lower()
+        for i in range(self.lot_list.count()):
+            it = self.lot_list.item(i)
+            it.setHidden(bool(q) and q not in str(it.data(Qt.UserRole)).lower())
 
     def _refresh_lot_title(self) -> None:
         st = self.state
@@ -286,10 +295,16 @@ class AnalysisWorkspace(QWidget):
         self._mark_unapplied("lot 선택이 바뀌었습니다 — [적용] (F5)")
 
     def _lot_check_all(self, on: bool) -> None:
+        """[전체]/[해제]는 **지금 보이는 lot에만** 건다.
+
+        검색으로 걸러 놓고 [전체]를 누르면 "찾은 것만 고르겠다"는 뜻이다.
+        검색이 비어 있으면 전부 보이므로 예전과 동작이 같다.
+        """
         self.lot_list.blockSignals(True)
         for i in range(self.lot_list.count()):
-            self.lot_list.item(i).setCheckState(
-                Qt.Checked if on else Qt.Unchecked)
+            it = self.lot_list.item(i)
+            if not it.isHidden():
+                it.setCheckState(Qt.Checked if on else Qt.Unchecked)
         self.lot_list.blockSignals(False)
         self._lot_toggled(None)
 

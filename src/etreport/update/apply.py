@@ -29,40 +29,61 @@ from etreport.paths import update_tmp_dir
 
 log = logging.getLogger(__name__)
 
-#: 폴더 배포 교체 — %1 pid  %2 새 폴더  %3 설치 폴더  %4 재시작할 exe
+#: 폴더 배포 교체 — %1 pid  %2 새 폴더  %3 설치 폴더  %4 재시작할 exe  %5 로그
 _BAT_DIR = """@echo off
 rem - ET Report auto update (folder) -
 setlocal
+echo [%DATE% %TIME%] start pid=%~1 src=%~2 dst=%~3 > "%~5"
 :wait
 tasklist /FI "PID eq %~1" 2>nul | find "%~1" >nul
-if not errorlevel 1 ( timeout /t 1 /nobreak >nul & goto wait )
+if not errorlevel 1 ( ping -n 2 127.0.0.1 >nul & goto wait )
 
-robocopy "%~2" "%~3" /E /R:3 /W:1 >nul
-if errorlevel 8 (
-  msg %username% "ET Report update failed - file copy error. Contact IT."
-  exit /b 1
-)
+set /a TRY=0
+:copy
+set /a TRY+=1
+robocopy "%~2" "%~3" /E /R:3 /W:1 >>"%~5"
+if not errorlevel 8 goto done
+if %TRY% LSS 20 ( ping -n 3 127.0.0.1 >nul & goto copy )
+echo [%DATE% %TIME%] robocopy failed after %TRY% tries >> "%~5"
+start "" "%~4"
+exit /b 1
+
+:done
+echo [%DATE% %TIME%] copied ok >> "%~5"
 start "" "%~4"
 rem clean up the temp folder and this script
 rmdir /s /q "%~2"
 del "%~f0"
 """
 
-#: 단일 exe 교체 — %1 pid  %2 새 exe  %3 현재 exe
+#: 단일 exe 교체 — %1 pid  %2 새 exe(_temp)  %3 현재 exe  %4 로그
+#:
+#: `timeout`을 쓰지 않는다 — DETACHED_PROCESS로 띄운 배치에는 콘솔이 없어
+#: `timeout`이 "Input redirection is not supported"로 **즉시** 실패한다. 기다리는
+#: 척만 하고 안 기다리니 앱이 방금 놓은 exe 잠금이 풀리기 전에 copy가 돌아
+#: 교체가 조용히 실패했다. `ping -n`은 콘솔 없이도 진짜로 쉰다.
 _BAT_EXE = """@echo off
 rem - ET Report auto update (single exe) -
 setlocal
+echo [%DATE% %TIME%] start pid=%~1 src=%~2 dst=%~3 > "%~4"
 :wait
 tasklist /FI "PID eq %~1" 2>nul | find "%~1" >nul
-if not errorlevel 1 ( timeout /t 1 /nobreak >nul & goto wait )
+if not errorlevel 1 ( ping -n 2 127.0.0.1 >nul & goto wait )
 
-rem  exe was locked until the app exited; give the OS a moment to release it
-timeout /t 1 /nobreak >nul
-copy /Y "%~2" "%~3" >nul
-if errorlevel 1 (
-  msg %username% "ET Report update failed - could not replace the exe. Contact IT."
-  exit /b 1
-)
+rem  exe stays locked for a moment after the process exits - retry, do not give up fast
+set /a TRY=0
+:copy
+set /a TRY+=1
+copy /Y "%~2" "%~3" >>"%~4" 2>&1
+if not errorlevel 1 goto done
+if %TRY% LSS 20 ( ping -n 3 127.0.0.1 >nul & goto copy )
+rem  give up: leave the new exe beside the old one so it can be renamed by hand
+echo [%DATE% %TIME%] replace failed after %TRY% tries - kept "%~2" >> "%~4"
+start "" "%~3"
+exit /b 1
+
+:done
+echo [%DATE% %TIME%] replaced ok >> "%~4"
 start "" "%~3"
 del /q "%~2"
 del "%~f0"
@@ -134,6 +155,29 @@ def plan(asset: Path) -> tuple[str, Path]:
     return "dir", extract(asset)
 
 
+def stage_beside(source: Path, cur: Path) -> Path:
+    """새 exe를 현재 exe 옆에 `…_temp.exe`로 먼저 복사하고 그 경로를 반환.
+
+    이유가 둘이다.
+      1) **설치 폴더에 쓸 수 있는지 앱이 살아 있는 동안 확인한다.** Program Files
+         처럼 권한이 없으면 예전에는 앱을 닫은 뒤 배치가 조용히 실패해서, 사용자
+         입장에서는 "업데이트를 눌렀는데 그냥 예전 버전이 다시 떴다"로 끝났다.
+      2) **교체가 실패해도 `…_temp.exe`가 exe 옆에 남는다.** 이름만 바꾸면 손으로
+         올릴 수 있다 — `%APPDATA%` 안에만 있으면 현장에서 찾지 못한다.
+    성공하면 배치가 지운다.
+    """
+    import shutil
+
+    staged = cur.with_name(cur.stem + "_temp" + cur.suffix)
+    try:
+        shutil.copy2(source, staged)
+    except OSError as e:
+        raise UpdateNotApplicable(
+            f"설치 폴더에 쓸 수 없어 업데이트를 적용할 수 없습니다:\n{staged}\n{e}\n"
+            "관리자 권한으로 실행하거나 IT에 문의하세요.") from e
+    return staged
+
+
 def apply_and_restart(source: Path, kind: str = "") -> None:
     """배치를 떨궈 detach 실행 — 호출측(QApplication)이 종료하면 교체된다.
 
@@ -145,17 +189,19 @@ def apply_and_restart(source: Path, kind: str = "") -> None:
     kind = kind or ("exe" if source.is_file() else "dir")
     target = install_dir()                    # 소스 실행이면 여기서 중단된다
     bat = update_tmp_dir() / "apply_update.bat"
+    blog = update_tmp_dir() / "apply_update.log"
 
     if kind == "exe":
         cur = Path(sys.executable)
+        staged = stage_beside(source, cur)
         # 배치는 ASCII만 쓴다 — 콘솔 코드페이지(한국어/영문 Windows)에 의존하지 않도록.
         bat.write_text(_BAT_EXE, encoding="ascii")
-        argv = [str(os.getpid()), str(source), str(cur)]
-        log.info("업데이트 적용(단일 exe): %s → %s", source, cur)
+        argv = [str(os.getpid()), str(staged), str(cur), str(blog)]
+        log.info("업데이트 적용(단일 exe): %s → %s", staged, cur)
     else:
         bat.write_text(_BAT_DIR, encoding="ascii")
         exe = target / Path(sys.executable).name
-        argv = [str(os.getpid()), str(source), str(target), str(exe)]
+        argv = [str(os.getpid()), str(source), str(target), str(exe), str(blog)]
         log.info("업데이트 적용(폴더): %s → %s", source, target)
 
     subprocess.Popen(

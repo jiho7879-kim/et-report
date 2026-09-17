@@ -137,3 +137,21 @@ def test_catalog_prefers_cache(appdata):
 
     assert [c.name for c in catalog.columns] == ["only_col"]
     assert json.loads(catalog_cache_file().read_text(encoding="utf-8"))["columns"]
+
+
+def test_qt_standard_buttons_are_korean():
+    """표준 버튼이 `Close`로 나오면 안 된다 — Qt 한국어 번역을 싣는다."""
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QDialogButtonBox
+
+    app = QApplication.instance() or QApplication([])
+    tr = boot._install_qt_korean(app)
+    try:
+        assert tr is not None
+        bb = QDialogButtonBox(QDialogButtonBox.Close | QDialogButtonBox.Cancel)
+        assert bb.button(QDialogButtonBox.Close).text() == "닫기"
+        assert bb.button(QDialogButtonBox.Cancel).text() == "취소"
+    finally:
+        if tr is not None:
+            app.removeTranslator(tr)

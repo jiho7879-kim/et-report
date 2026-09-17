@@ -145,6 +145,10 @@ SELECT_COLS = ", ".join(KEY_COLS)
 # 10000 미만인 9999로 쪼갠다(마지막 청크는 나머지). 더 많이 쪼개지 않는다.
 ITEM_ID_CHUNK = 9999
 
+# 일반 측정만 본다. 이 값 외(엔지니어링·재측정 전용 클래스)는 분석 대상이 아니다.
+# 세 빌더가 전부 _build_where를 거치므로 여기 한 줄이 추출·미리보기·probe에 함께 걸린다.
+DATA_CLASS = "GEN"
+
 
 def _build_where(conditions: list[Condition], d_from: date, d_to: date,
                  catalog: Catalog) -> list[str]:
@@ -157,6 +161,7 @@ def _build_where(conditions: list[Condition], d_from: date, d_to: date,
         condition_sql(line, catalog),
         f"tkout_time >= '{d_from:%Y-%m-%d} 00:00:00'",
         f"tkout_time <  '{hi:%Y-%m-%d} 00:00:00'",
+        f"data_class = '{DATA_CLASS}'",
     ]
     where += [
         condition_sql(c, catalog)

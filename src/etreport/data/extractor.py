@@ -5,10 +5,11 @@ bigdataquery(bdq)는 스레드 안전 확인됨. 청크는 (기간×lot) greedy 
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import threading
-import uuid
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ import pyarrow as pa
 from etreport.config.catalog import Catalog
 from etreport.config.settings import Condition
 from etreport.data.querybuilder import ITEM_ID_CHUNK, build_extract_sql
+from etreport.paths import STAGING_KEEP_DAYS
 
 log = logging.getLogger(__name__)
 
@@ -278,6 +280,28 @@ def correct_temperature(df: pl.DataFrame,
     return df.with_columns((half_away * TEMP_STEP).alias(col))
 
 
+def chunk_path(staging: Path, u: Unit, sql: str) -> Path:
+    """청크 parquet 경로. 이름이 **SQL로 결정된다**(§11 재사용의 열쇠).
+
+    예전에는 uuid를 붙여 매번 새 이름이 나왔다 — 그래서 조건이 똑같아도 이미 받아
+    둔 파일을 찾을 길이 없었다. SQL에는 조건·기간·item 목록이 전부 들어 있으므로
+    그 해시가 곧 "같은 조회"의 정의다. 조건이 한 글자라도 다르면 다른 파일이 된다.
+    """
+    h = hashlib.blake2b(sql.encode("utf-8"), digest_size=6).hexdigest()
+    suffix = f"_g{u.group + 1}" if u.n_groups > 1 else ""
+    return staging / (f"raw_{u.chunk.d_from:%Y%m%d}_{u.chunk.d_to:%Y%m%d}_"
+                      f"{h}{suffix}.parquet")
+
+
+def is_fresh(path: Path, keep_days: int = STAGING_KEEP_DAYS) -> bool:
+    """보관 기간 안에 받아 둔 파일인가. cleanup_staging과 같은 기준을 쓴다."""
+    try:
+        age = time.time() - path.stat().st_mtime
+    except OSError:
+        return False
+    return age < keep_days * 86400
+
+
 def extract_to_parquet(
     conditions: list[Condition],
     d_from: date,
@@ -287,8 +311,14 @@ def extract_to_parquet(
     on_progress: Callable[[int, int, str], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
     item_ids: list[str] | None = None,
+    reuse: bool = False,
 ) -> list[Path]:
-    """청크별 parquet 파일 목록 반환. 파일명에 기간·item 그룹·uuid 포함.
+    """청크별 parquet 파일 목록 반환. 파일명에 기간·item 그룹·SQL 해시 포함.
+
+    `reuse=True`면 **같은 SQL로 이미 받아 둔 parquet이 staging에 남아 있으면
+    다시 조회하지 않는다**(§11). 리포메터만 고쳐 다시 돌릴 때 수십 분짜리
+    재추출을 건너뛰기 위한 것이라 기본은 꺼짐이다 — 조건이 같아도 원본 테이블이
+    바뀌었으면 옛 값을 쓰게 되므로, 켜는 것은 사용자가 정한다.
 
     **청크 = 기간 × item 그룹의 곱**(확정 사양 §4.2)이고, 그 곱 전체가 병렬
     대상이다 — item이 3그룹이면 7일치는 7개가 아니라 21개를 4워커가 나눠 문다.
@@ -311,6 +341,11 @@ def extract_to_parquet(
             return None
         sql = build_extract_sql(conditions, u.chunk.d_from, u.chunk.d_to,
                                catalog, item_ids=u.item_ids)
+        p = chunk_path(staging, u, sql)
+        if reuse and is_fresh(p):
+            rows = pl.scan_parquet(str(p)).select(pl.len()).collect().item()
+            log.info("청크 %s 재사용 — %s (%s행)", u.label(), p.name, f"{rows:,}")
+            return p, p.stat().st_size, rows
         last: Exception | None = None
         for attempt in range(RETRY + 1):
             try:
@@ -330,10 +365,10 @@ def extract_to_parquet(
         else:
             raise RuntimeError(f"청크 {u.label()} 추출 실패") from last
         df = normalize_schema(df)
-        suffix = f"_g{u.group + 1}" if u.n_groups > 1 else ""
-        p = staging / (f"raw_{u.chunk.d_from:%Y%m%d}_{u.chunk.d_to:%Y%m%d}_"
-                       f"{uuid.uuid4().hex[:8]}{suffix}.parquet")
-        df.write_parquet(p)
+        # 반쯤 쓰다 죽은 파일이 다음 실행에서 '받아 둔 것'으로 재사용되면 안 된다.
+        tmp = p.with_suffix(".tmp")
+        df.write_parquet(tmp)
+        os.replace(tmp, p)
         return p, df.estimated_size(), df.height
 
     done = 0

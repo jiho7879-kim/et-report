@@ -336,6 +336,12 @@ class DataWorkspace(QWidget):
         self.chk_csv = QCheckBox("완료 후 CSV 저장")
         self.chk_csv.setChecked(True)
         self.chk_sbdf = QCheckBox("완료 후 SBDF 저장")
+        self.chk_reuse = QCheckBox("추출 원본 재사용")
+        self.chk_reuse.setToolTip(
+            "조건·기간·item이 같아 이미 받아 둔 parquet이 staging에 남아 있으면\n"
+            "다시 조회하지 않고 그 파일을 씁니다 (보관 7일).\n"
+            "리포메터만 고쳐 다시 돌릴 때 재추출을 건너뜁니다.\n"
+            "원본 테이블이 그사이 바뀌었으면 옛 값을 쓰게 되므로 기본은 꺼짐입니다.")
         self.lbl_step = QLabel(WAIT_TEXT)
         self.lbl_step.setObjectName("hint")
         self.btn_schedule = GhostButton("예약 실행…")
@@ -378,7 +384,8 @@ class DataWorkspace(QWidget):
         # 분석 화면 액션바와 **같은 관용구**: 왼쪽 끝이 주 동작, 오른쪽 끝이
         # 결과·옵션. 탭이나 화면이 바뀌어도 누를 것을 눈으로 찾지 않게 한다.
         il.addWidget(row(self.btn_run, self.btn_cancel, None,
-                         self.chk_csv, self.chk_sbdf, self.btn_schedule))
+                         self.chk_reuse, self.chk_csv, self.chk_sbdf,
+                         self.btn_schedule))
         # 진행 문구는 제 줄에 둔다 — 체크박스 옆에 붙이면 그 체크박스의 설명처럼 읽힌다
         il.addWidget(row(self.lbl_step, None))
         il.addWidget(self.bar)
@@ -438,6 +445,7 @@ class DataWorkspace(QWidget):
         p = self.preset()
         self.chk_csv.setChecked(p.save_csv)
         self.chk_sbdf.setChecked(p.save_sbdf)
+        self.chk_reuse.setChecked(p.reuse_staging)
         self.lbl_db.setText(p.db_path or "(미지정)")
         self.lbl_rfm.setText(p.reformatter_path or "(미지정)")
         while self.cond_host.count():
@@ -663,6 +671,7 @@ class DataWorkspace(QWidget):
         p = self.preset()
         p.save_csv = self.chk_csv.isChecked()
         p.save_sbdf = self.chk_sbdf.isChecked()
+        p.reuse_staging = self.chk_reuse.isChecked()
         d_from, d_to = self.d_from.date().toPython(), self.d_to.date().toPython()
         if d_from > d_to:
             QMessageBox.warning(

@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QMenu,
     QPushButton,
@@ -259,6 +260,16 @@ class SourceRail(QWidget):
             row.addWidget(b)
         row.addStretch(1)
         box.addLayout(row)
+
+        # lot이 수십 개가 되면 120px 목록을 굴려 찾는 것이 일이다. 검색은
+        # **숨기기만** 하고 체크는 건드리지 않는다 — 걸러 놓고 [적용]을 눌렀을 때
+        # 안 보이던 lot이 조용히 빠지면 안 되기 때문이다(§9.2 '빈 리스트=전부').
+        self.lot_search = QLineEdit()
+        self.lot_search.setObjectName("lotSearch")
+        self.lot_search.setPlaceholderText("lot 검색")
+        self.lot_search.setClearButtonEnabled(True)
+        self.lot_search.textChanged.connect(self.owner._lot_filter)
+        box.addWidget(self.lot_search)
 
         self.lot_list = QListWidget()
         self.lot_list.setObjectName("lotList")

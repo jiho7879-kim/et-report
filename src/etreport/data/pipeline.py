@@ -98,9 +98,13 @@ def run(preset, d_from: date, d_to: date, catalog,
         on_step("추출 중", done, total)
         on_log(f"  청크 {done}/{total} 완료  ({label})")
 
+    reuse = bool(getattr(preset, "reuse_staging", False))
+    if reuse:
+        on_log("  추출 원본 재사용 켜짐 — 같은 조건으로 받아 둔 parquet은 다시 "
+               "조회하지 않습니다")
     files = extractor.extract_to_parquet(
         preset.conditions, d_from, d_to, catalog, staging_dir(),
-        on_prog, stop, item_ids=rf_items)
+        on_prog, stop, item_ids=rf_items, reuse=reuse)
     if not files:
         raise RuntimeError("중지되었거나 결과가 없습니다")
     res.files = len(files)
