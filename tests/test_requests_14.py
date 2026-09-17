@@ -13,13 +13,16 @@ from datetime import date
 
 import pytest
 
-from tests.test_ux_redesign import qapp, win        # noqa: F401 — 창 조립 픽스처
-
 from etreport.config.catalog import Catalog
 from etreport.config.settings import Condition
 from etreport.data import querybuilder as qb
 from etreport.update import apply as upd_apply
 from etreport.update import checker
+from tests import test_ux_redesign as _ux
+
+# 창 조립 픽스처는 한 벌만 둔다 — 같은 것을 다시 쓰면 데모 로딩이 두 번 돈다.
+qapp = _ux.qapp
+win = _ux.win
 
 
 def _cat() -> Catalog:
