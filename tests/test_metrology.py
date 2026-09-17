@@ -258,16 +258,21 @@ def test_use_without_load_is_guarded(qapp):
     assert "조회" in dlg.lbl.text()
 
 
-def test_use_skips_when_names_exist(qapp):
-    """이미 붙은 계측 열이면 새로 붙이지 않고 안내만 한다."""
+def test_use_overwrites_when_names_exist(qapp):
+    """같은 이름이면 **덮어쓴다** — 조건을 고쳐 다시 뽑는 흐름이다. (§1)
+
+    건너뛰면 고친 결과가 프레임에 들어가지 않아 "분석에 활용이 안 먹는다"가 된다.
+    """
     dlg, state = _dialog(qapp)
-    met = _met([{"wafer_id": "01", "item_id": "Vt", "step_id": "",
-                 "subitem_id": "Q2"}])
-    dlg._load_done(met, n_lots=1)
-
+    dlg._load_done(_met([{"wafer_id": "01", "subitem_id": "Q2",
+                          "fab_value": 10.0}]), n_lots=1)
     dlg._use()
-    before = state.data.width
+    before, name = state.data.width, state.met_columns[0]
+
+    dlg._load_done(_met([{"wafer_id": "01", "subitem_id": "Q2",
+                          "fab_value": 99.0}]), n_lots=1)
     dlg._use()
 
-    assert state.data.width == before
+    assert state.data.width == before                 # 열이 늘지 않는다
+    assert state.data.filter(pl.col("wafer") == "01")[name][0] == 99.0
     assert dlg.btn_use.isEnabled()

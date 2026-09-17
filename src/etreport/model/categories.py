@@ -44,7 +44,10 @@ def choices(df: pl.DataFrame | None, extra: list[str] | None = None
         return [LOT_WAFER]
     out = [c for c in BUILTIN if c == LOT_WAFER or c in df.columns]
     for name in (extra or []):
-        if name in df.columns and name not in out:
+        # 숫자는 이름을 받아 왔어도 뺀다 — 계측 열(§1)이 여기 섞여 들어오는데,
+        # `is_category()`는 숫자를 거부하므로 목록에만 보이고 안 먹는다.
+        if (name in df.columns and name not in out
+                and not df.schema[name].is_numeric()):
             out.append(name)
     # 남은 문자열 컬럼도 후보로 — 손으로 만든 DB에 area·recipe가 들어 있을 수 있다
     for c in df.columns:

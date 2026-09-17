@@ -37,6 +37,8 @@ BASE_W_IN = 13.333            # 16:9 고정 — §7.1, 조건부로 바꾸지 �
 BASE_H_IN = 7.5
 MARGIN_IN = 0.35
 TITLE_H_IN = 0.62
+LEGEND_H_IN = 0.40        # 페이지 공통 범례 한 줄(§8)
+SPEC_LABELS = ["규격 하한", "규격 상한"]   # 표의 규격 열 이름(§14)
 WAFERS_PER_SLIDE = 12         # split 모드
 FONT_MIN = Pt(9)              # 9pt 하한 — 이 아래로 줄이지 않는다(§7.3)
 PLOT_DPI = 220                # plot 이미지 해상도(예전 150) — 확대해도 뭉개지지 않게
@@ -68,18 +70,32 @@ class TableData:
     rows: list[dict]                           # cats, item, values, offspec
     cat_names: list[str] = field(default_factory=list)
 
-    def labels(self) -> list[str]:
-        """라벨 열 이름 — CAT2…CATn + item."""
+    def cat_labels(self) -> list[str]:
+        """CAT2…CATn 열 이름 — 개수는 템플릿이 정한다(§3.3)."""
         n = max((len(r.get("cats") or ()) for r in self.rows), default=0)
         names = list(self.cat_names[:n])
         names += [f"CAT{i + 2}" for i in range(len(names), n)]
-        return [*names, "item"]
+        return names
+
+    def spec_labels(self) -> list[str]:
+        """규격 열(§14). 자리는 **item 뒤·wafer 앞** — 값을 읽기 전에 기준을
+        먼저 본다. 리포메터에 규격이 하나도 없는 표에는 붙이지 않는다(빈 열
+        두 개가 wafer를 밀어낼 이유가 없다)."""
+        return list(SPEC_LABELS) if any(
+            any(r.get("spec") or ()) for r in self.rows) else []
+
+    def labels(self) -> list[str]:
+        """라벨 열 이름 — CAT2…CATn + item + 규격."""
+        return [*self.cat_labels(), "item", *self.spec_labels()]
 
     def label_values(self, row: dict) -> list[str]:
         """한 행의 라벨 칸 값 — 길이가 labels()와 항상 같다."""
         cats = list(row.get("cats") or ())
-        cats += [""] * (len(self.labels()) - 1 - len(cats))
-        return [*cats, row["item"]]
+        cats += [""] * (len(self.cat_labels()) - len(cats))
+        n = len(self.spec_labels())
+        spec = list(row.get("spec") or ())[:n]
+        spec += [""] * (n - len(spec))
+        return [*cats, row["item"], *spec]
 
 
 def table_mode_of(mode: str) -> str:
@@ -232,25 +248,78 @@ def _add_title(slide, prs, text: str, note: str = "") -> None:
     ln.line.fill.background()
 
 
-def _slot_rect(prs, idx: int):
-    """order-1 (0~5) → (left, top, w, h). 1·2·3 윗줄 / 4·5·6 아랫줄, 왼→오."""
+def _slot_rect(prs, idx: int, legend_h: int = 0):
+    """order-1 (0~5) → (left, top, w, h). 1·2·3 윗줄 / 4·5·6 아랫줄, 왼→오.
+
+    **그림은 정사각형**이다(§8). 슬롯 칸은 가로로 길어서 그 안을 다 채우면
+    x축만 늘어난 그림이 되고, 같은 데이터가 페이지마다 다른 비율로 보인다.
+    칸 안에서 짧은 변에 맞춘 정사각형을 **가운데**에 둔다. `legend_h`만큼은
+    페이지 공통 범례 자리로 아래에서 덜어 낸다.
+    """
     top0 = Inches(0.18 + TITLE_H_IN + 0.12)
     W = prs.slide_width - Inches(2 * MARGIN_IN)
-    H = prs.slide_height - top0 - Inches(MARGIN_IN)
+    H = prs.slide_height - top0 - Inches(MARGIN_IN) - legend_h
     gw, gh = W / 3, H / 2
     r, c = divmod(idx, 3)
     pad = Emu(45720)
-    return (Inches(MARGIN_IN) + c * gw + pad, top0 + r * gh + pad,
-            gw - 2 * pad, gh - 2 * pad)
+    side = min(gw, gh) - 2 * pad
+    return (int(Inches(MARGIN_IN) + c * gw + (gw - side) / 2),
+            int(top0 + r * gh + (gh - side) / 2), int(side), int(side))
+
+
+def _legend_sample(handle) -> tuple:
+    """범례 표본의 (색, 마커, 크기). Line2D도 scatter(PathCollection)도 받는다.
+
+    렌더러는 그룹 안에서 색·크기가 균일하면 Line2D로 그린다(비용 규약) —
+    두 종류가 한 페이지에 섞일 수 있어 둘 다 읽는다. PathCollection에서는
+    마커 모양을 되돌릴 길이 없어 동그라미로 적는다.
+    """
+    if hasattr(handle, "get_marker"):
+        return (handle.get_color(), handle.get_marker(),
+                handle.get_markersize(), handle.get_markerfacecolor())
+    fc = handle.get_facecolor()
+    c = tuple(fc[0]) if len(fc) else "#000000"
+    return (c, "o", 6.0, c)
+
+
+def _legend_strip(slide, prs, entries: dict, top: int, height: int) -> None:
+    """페이지 공통 범례 한 줄(§8) — 슬라이드 아래에 가로로 눕힌다.
+
+    plot마다 범례를 달면 같은 그룹 이름이 여섯 번 반복되고, 그 자리만큼
+    그림이 좁아져 정사각형이 되지 않는다. 한 페이지의 그림들은 같은 그룹
+    스타일을 공유하므로(확정 사양) 범례도 한 벌이면 된다.
+    """
+    from matplotlib.figure import Figure
+    from matplotlib.lines import Line2D
+
+    left = Inches(MARGIN_IN)
+    width = prs.slide_width - Inches(2 * MARGIN_IN)
+    fig = Figure(figsize=(width / 914400, height / 914400), dpi=PLOT_DPI)
+    fig.patch.set_facecolor("white")
+    handles = [Line2D([], [], color=c, marker=m, markersize=sz,
+                      markerfacecolor=fc, linestyle="none")
+               for c, m, sz, fc in entries.values()]
+    fig.legend(handles, list(entries), loc="center", frameon=False,
+               ncol=min(len(entries), 8), fontsize=8, handletextpad=0.4,
+               columnspacing=1.4)
+    buf = io.BytesIO()
+    try:
+        fig.savefig(buf, format="png", dpi=PLOT_DPI)
+    finally:
+        fig.clear()
+    buf.seek(0)
+    slide.shapes.add_picture(buf, left, top, width=width, height=height)
 
 
 def _fill_slots(slide, prs, page: PageSpec, exp, styles,
                 plot_data_of, rf, log_patterns,
                 lot_split: bool = False) -> None:
+    legend_h = Inches(LEGEND_H_IN)
+    entries: dict[str, tuple] = {}
     for i, spec in enumerate(page.slots):
         if spec is None:
             continue
-        left, top, w, h = _slot_rect(prs, i)
+        left, top, w, h = _slot_rect(prs, i, legend_h)
         if spec.type == "table":
             # 표는 전용 페이지로 나간다(§7.3). 예전 템플릿의 Type=table 행은
             # 슬롯을 비우고 넘어간다 — 슬롯에도 넣으면 같은 표가 두 번 나온다.
@@ -258,9 +327,12 @@ def _fill_slots(slide, prs, page: PageSpec, exp, styles,
         figsize = (w / 914400, h / 914400)        # EMU → inch
         fig = mpl_renderer.render(spec, plot_data_of(exp, spec),
                                   styles, rf, log_patterns, figsize,
-                                  lot_split=lot_split)
+                                  lot_split=lot_split, legend=False)
         buf = io.BytesIO()
         try:
+            for ax in fig.axes:                 # 범례는 페이지에 한 벌만(§8)
+                for hd, lab in zip(*ax.get_legend_handles_labels()):
+                    entries.setdefault(lab, _legend_sample(hd))
             fig.savefig(buf, format="png", dpi=PLOT_DPI)
         finally:
             # 덱 하나에 plot이 수백 개가 되므로 쓰고 나면 바로 버린다.
@@ -269,11 +341,18 @@ def _fill_slots(slide, prs, page: PageSpec, exp, styles,
         pic = slide.shapes.add_picture(buf, left, top, width=w, height=h)
         pic.line.color.rgb = RGBColor(0xD2, 0xD2, 0xD7)
         pic.line.width = Pt(0.75)
+    if entries:
+        _legend_strip(slide, prs, entries,
+                      prs.slide_height - Inches(MARGIN_IN) - legend_h, legend_h)
 
 
-def label_widths_in(n_labels: int) -> list[float]:
-    """라벨 열 폭 — CAT 열들 + 마지막 item 열. CAT 개수는 템플릿이 정한다(§3.3)."""
-    return [CAT_W_IN] * max(0, n_labels - 1) + [ITEM_W_IN]
+def label_widths_in(n_labels: int, n_spec: int = 0) -> list[float]:
+    """라벨 열 폭 — CAT 열들 + item 열 + 규격 열들(§14).
+
+    규격은 숫자 두 칸이라 CAT 폭이면 넉넉하다. CAT 개수는 템플릿이 정한다(§3.3).
+    """
+    return ([CAT_W_IN] * max(0, n_labels - 1 - n_spec) + [ITEM_W_IN]
+            + [CAT_W_IN] * n_spec)
 
 
 def table_width_in(n_wafers: int, n_labels: int = 3) -> tuple[float, float, bool]:
@@ -296,9 +375,10 @@ def _table_slide(prs, layout, td: TableData) -> None:
     """CAT1 하나 = 표 한 장 (§7.3). 스타일은 화면과 같은 톤(§7.4)."""
     slide = prs.slides.add_slide(layout)
     wafers = [(lot, wf) for lot, ws in td.header_lots for wf in ws]
-    labels = td.labels()                      # CAT2…CATn + item (개수 자유)
-    n_lab = len(labels)
+    labels = td.labels()                      # CAT2…CATn + item + 규격(§14)
+    n_lab, n_spec = len(labels), len(td.spec_labels())
     total_w, wafer_w, overflow = table_width_in(len(wafers), n_lab)
+    widths = [Inches(w) for w in label_widths_in(n_lab, n_spec)]
     _add_title(slide, prs, td.name, note=OVERFLOW_NOTE if overflow else "")
 
     n_rows, n_cols = 2 + len(td.rows), n_lab + len(wafers)
@@ -310,7 +390,6 @@ def _table_slide(prs, layout, td: TableData) -> None:
     tbl.first_row = False          # 기본 파란 줄무늬 스타일 제거(§7.4)
     tbl.horz_banding = False
     # 열 폭·행 높이는 set_grid로 — python-pptx의 setter는 열 수의 제곱으로 느리다
-    widths = [Inches(w) for w in label_widths_in(n_lab)]
     widths += [Inches(wafer_w)] * (n_cols - n_lab)
     set_grid(frame, widths, Inches(ROW_H_IN))
 
@@ -322,7 +401,7 @@ def _table_slide(prs, layout, td: TableData) -> None:
         c += len(ws)
     # 상위 CAT이 바뀌면 하위 병합도 끊는다(§3.3) — 키에 상위 값을 포함해서
     vals = [td.label_values(r) for r in td.rows]
-    for col in range(n_lab - 1):              # item 열은 병합하지 않는다
+    for col in range(n_lab - 1 - n_spec):     # item·규격 열은 병합하지 않는다
         _merge_runs(tbl, col, [tuple(v[:col + 1]) for v in vals])
 
     # ── 값 나중 ──────────────────────────────────────────────
@@ -338,7 +417,8 @@ def _table_slide(prs, layout, td: TableData) -> None:
         fill = ALT_FILL if i % 2 else BODY_FILL
         for c, text in enumerate(vals[i]):
             _put(tbl.cell(r, c), text, fill=fill,
-                 anchor=MSO_ANCHOR.MIDDLE if c < n_lab - 1 else MSO_ANCHOR.TOP)
+                 anchor=MSO_ANCHOR.MIDDLE if c < n_lab - 1 - n_spec
+                 else MSO_ANCHOR.TOP)
         for c, (v, off) in enumerate(zip(row["values"], row["offspec"]),
                                      start=n_lab):
             text = (fmt_value(v) if v is None or isinstance(v, (int, float))

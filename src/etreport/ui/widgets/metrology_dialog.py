@@ -220,12 +220,21 @@ class MetrologyDialog(QDialog):
         if self.met is None:
             self.lbl.setText("먼저 [불러오기]로 계측값을 조회하세요")
             return
+        # 조건을 고쳐 다시 뽑는 흐름이라 **같은 이름은 덮어쓴다**(§1).
+        # 건너뛰면 고친 결과가 반영되지 않아 "활용이 안 먹는다"가 된다.
+        wide = self._met_wide()
+        dup = [c for c in (wide.columns if wide is not None else [])
+               if c not in ("lot", "wafer") and c in st.data.columns]
+        if dup:
+            st.data = st.data.drop(dup)
         st.data, names = mt.attach(st.data, self.met, self.level())
         if not names:
             self.lbl.setText("붙일 새 계측 열이 없습니다 (같은 이름이 이미 붙어 있습니다)")
             self._show_met_preview()
             return
         st.met_columns = sorted({*st.met_columns, *names})
+        # 원본을 남겨야 [적용]으로 DB를 다시 읽어도 계측 열이 살아남는다(§1)
+        st.met_frame, st.met_level = self.met, self.level()
         self.lbl.setText(
             f"분석에 활용 — 계측 {len(names)}개 붙임 ({self.level()} level) — "
             f"탐색 X축과 요약에서 쓸 수 있습니다")

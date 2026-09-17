@@ -541,7 +541,7 @@ def tracking_frame(lots: list[str] | None = None) -> pl.DataFrame:
                 code = (c or {}).get(factor) if factor else None
                 tag = (code or "STD").replace("_", "")
                 rows.append({
-                    # process_id가 step 식별자다(`fabtracking.step_key_expr`)
+                    # step_seq가 step 식별자다(`fabtracking.step_key_expr`, §3)
                     "part_id": "8NM-SRAM", "process_id": step,
                     "step_seq": seq, "root_lot_id": lp.lot, "wafer_id": waf,
                     "area": area,

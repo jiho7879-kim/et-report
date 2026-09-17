@@ -1,8 +1,10 @@
 """조건 토큰 → Impala SQL WHERE 절.
 
 문자열 컬럼 : 띄어쓰기=여러 값, ``!``=제외(NOT IN … OR IS NULL), ``*``=LIKE,
-             "…"=공백 포함, 정규식 모드(RE2 · 부분매칭 · lookahead 불가)
+             "…"=공백 포함, 정규식 모드(RE2 · 부분매칭 · lookahead 불가),
+             LIKE 모드(값을 패턴 그대로 — ``%``·``_``를 직접 쓴다)
 숫자 컬럼   : ``>=25`` ``<85`` ``25~85`` ``25 85 125`` ``!0``
+             부등호 모드를 고르면 맨 숫자에 그 부등호가 붙는다(§4)
 TIMESTAMP  : ``2026-08-01 ~ 2026-08-10``  (상한은 exclusive)
 
 주의: NOT IN은 NULL 함정이 있어 항상 ``OR col IS NULL``을 붙인다.
@@ -15,6 +17,10 @@ from datetime import date, timedelta
 
 from etreport.config.catalog import Catalog
 from etreport.config.settings import Condition
+
+# 조건 행 콤보가 고르는 모드(§4) — 문자열·숫자에서 뜻이 다르다
+STR_MODES: list[str] = ["auto", "regexp", "like"]
+CMP_MODES: list[str] = [">=", ">", "<=", "<"]
 
 _CMP = re.compile(r"^(>=|<=|>|<)\s*(-?\d+(?:\.\d+)?)$")
 _RANGE = re.compile(r"^(-?\d+(?:\.\d+)?)~(-?\d+(?:\.\d+)?)$")
@@ -60,6 +66,14 @@ def regexp_value(val: str) -> str:
 def _string_sql(col: str, val: str, mode: str) -> str:
     if mode == "regexp":
         return f"{col} REGEXP {_q(regexp_value(val))}"
+    if mode == "like":
+        # 값을 LIKE 패턴 **그대로** 쓴다 — `%`·`_`를 손으로 적는 모드다.
+        # 일반 모드의 `*` 치환·이스케이프와 섞지 않는다(둘 다면 어느 쪽인지 모른다).
+        pats = shlex.split(val)
+        if not pats:
+            raise ConditionError(col, "값이 비어 있습니다")
+        ors = " OR ".join(f"{col} LIKE {_q(p)}" for p in pats)
+        return f"({ors})" if len(pats) > 1 else ors
     inc: list[str] = []
     exc: list[str] = []
     like: list[str] = []
@@ -93,7 +107,13 @@ def _string_sql(col: str, val: str, mode: str) -> str:
     return " AND ".join(parts)
 
 
-def _numeric_sql(col: str, val: str) -> str:
+def _numeric_sql(col: str, val: str, mode: str = "auto") -> str:
+    """`mode`가 부등호면 맨 숫자에 그것을 붙인다(§4).
+
+    `>=25`처럼 직접 적은 토큰·범위·`!`는 모드와 무관하게 예전 그대로다 —
+    콤보는 **적기 귀찮은 사람**을 위한 것이지 문법을 막는 장치가 아니다.
+    """
+    cmp_all = mode if mode in CMP_MODES else ""
     eq: list[str] = []
     parts: list[str] = []
     for tok in val.split():
@@ -104,7 +124,8 @@ def _numeric_sql(col: str, val: str) -> str:
         elif tok.startswith("!") and _NUM.match(tok[1:]):
             parts.append(f"({col} <> {tok[1:]} OR {col} IS NULL)")
         elif _NUM.match(tok):
-            eq.append(tok)
+            (parts if cmp_all else eq).append(
+                f"{col} {cmp_all} {tok}" if cmp_all else tok)
         else:
             raise ConditionError(col, f"숫자가 아닙니다: {tok}")
     if eq:
@@ -120,7 +141,7 @@ def condition_sql(cond: Condition, catalog: Catalog) -> str:
     if not val:
         raise ConditionError(cond.col, "값이 비어 있습니다")
     if info and info.is_numeric:
-        return _numeric_sql(cond.col, val)
+        return _numeric_sql(cond.col, val, cond.mode)
     if info and info.is_timestamp:
         # 문자열 리터럴로 비교 — Impala가 TIMESTAMP로 암시적 캐스팅한다
         lo, _, hi = (x.strip() for x in val.partition("~"))

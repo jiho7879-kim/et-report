@@ -98,11 +98,22 @@ def condition_expr() -> pl.Expr:
             .alias("condition"))
 
 
-def step_key_expr() -> pl.Expr:
-    """step 식별자 — `process_id` 기준(없으면 step_seq)."""
-    return (pl.col("process_id").cast(pl.Utf8)
-            .fill_null(pl.col("step_seq").cast(pl.Utf8))
-            .alias("step_id"))
+def step_key_expr(columns=None) -> pl.Expr:
+    """step 식별자 — **`step_seq` 기준**(없으면 `process_id`). (§3)
+
+    표는 `lot | wafer | step_seq`로 구성한다. 예전에는 `process_id`를 먼저
+    봤는데, 같은 process_id를 route에서 여러 번 지나면 **서로 다른 지점의
+    조건이 한 열로 뭉쳐** 갈리는 step을 놓쳤다.
+
+    `columns`를 주면 그 프레임에 실제로 있는 컬럼만 본다 — 손으로 만든
+    조회 결과에는 둘 중 하나만 있는 일이 흔하다.
+    """
+    cols = ("step_seq", "process_id") if columns is None else tuple(columns)
+    parts = [pl.col(c).cast(pl.Utf8)
+             for c in ("step_seq", "process_id") if c in cols]
+    if not parts:
+        return pl.lit(None, dtype=pl.Utf8).alias("step_id")
+    return pl.coalesce(parts).alias("step_id")
 
 
 def wafer_conditions(df: pl.DataFrame) -> pl.DataFrame:
@@ -114,7 +125,7 @@ def wafer_conditions(df: pl.DataFrame) -> pl.DataFrame:
     if df.is_empty():
         return pl.DataFrame(schema={"root_lot_id": pl.Utf8, "wafer_id": pl.Utf8,
                                     "step_id": pl.Utf8, "condition": pl.Utf8})
-    out = df.with_columns(step_key_expr(), condition_expr())
+    out = df.with_columns(step_key_expr(df.columns), condition_expr())
     if "tkout_time" in out.columns:
         out = out.sort("tkout_time")
     return (out.group_by(["root_lot_id", "wafer_id", "step_id"], maintain_order=True)
@@ -276,7 +287,7 @@ def derive(df: pl.DataFrame, cols: list[TrackColumn]) -> pl.DataFrame:
     empty = pl.DataFrame(schema={"lot": pl.Utf8, "wafer": pl.Utf8})
     if df is None or df.is_empty() or not cols:
         return empty
-    src = df.with_columns(step_key_expr())
+    src = df.with_columns(step_key_expr(df.columns))
     if "tkout_time" in src.columns:
         src = src.sort("tkout_time")
 

@@ -450,18 +450,19 @@ def test_codes_from_lot_ignores_other_lots():
 
 
 def test_tracking_baseline_lot_is_per_step():
+    """step 열 이름은 step_seq다(§3) — 여기서는 `M1`을 seq로 쓴다."""
     from etreport.data import fabtracking as ft
     df = pl.DataFrame([
         {"root_lot_id": "PA", "wafer_id": "01", "process_id": "M1",
-         "area": "PHOTO", "reticle_id": "R1", "ppid": "x", "step_seq": 1},
+         "area": "PHOTO", "reticle_id": "R1", "ppid": "x", "step_seq": "M1"},
         {"root_lot_id": "PA", "wafer_id": "02", "process_id": "M1",
-         "area": "PHOTO", "reticle_id": "R1", "ppid": "x", "step_seq": 1},
+         "area": "PHOTO", "reticle_id": "R1", "ppid": "x", "step_seq": "M1"},
         {"root_lot_id": "PA", "wafer_id": "03", "process_id": "M1",
-         "area": "PHOTO", "reticle_id": "R2", "ppid": "x", "step_seq": 1},
+         "area": "PHOTO", "reticle_id": "R2", "ppid": "x", "step_seq": "M1"},
         {"root_lot_id": "PB", "wafer_id": "01", "process_id": "M1",
-         "area": "PHOTO", "reticle_id": "R2", "ppid": "x", "step_seq": 1},
+         "area": "PHOTO", "reticle_id": "R2", "ppid": "x", "step_seq": "M1"},
         {"root_lot_id": "PB", "wafer_id": "02", "process_id": "M1",
-         "area": "PHOTO", "reticle_id": "R2", "ppid": "x", "step_seq": 1},
+         "area": "PHOTO", "reticle_id": "R2", "ppid": "x", "step_seq": "M1"},
     ])
     sm = ft.to_split_matrix(df, baseline_lot="PA")
 

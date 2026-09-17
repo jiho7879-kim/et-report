@@ -107,6 +107,7 @@ myenv/bin/ruff check --fix .                        # 안전한 것만 자동 �
 | `test_demo.py` | **데모 계약** — 기능 덮개·번들 파일 == 화면 값·가짜 소스로 추출→적재 |
 | `test_xlio_csv.py` | csv·tsv 입력(열 타입 규칙·0으로 시작하는 코드·되쓰기) |
 | `test_multi_lot.py` | **§9.2** lot 선택 SQL(안 고르면 예전과 동일)·커버리지·lot 심볼·표 lot 경계·기준 lot |
+| `test_requests_14.py` | 요청 14건 — GEN 조건·적재 보전·산점도 설명·공통 legend·SPEC 열·조건 모드(LIKE·부등호)·예약 실행 왕복·계측/tracking 재부착·step_seq 표 |
 | `test_requests_13.py` | 요청 13건 — 단일 exe·리소스 경로·빌드 스탬프·fab tracking 이름 컬럼·조회 조건 자동 채움·boxplot·plot 종류·VARCHAR 읽기·Tukey 필터·예약 실행 |
 | `test_bigset.py` (slow) | 실측 규모 성능·정확성 회귀 (`-s`로 단계별 시간 출력) |
 
@@ -416,6 +417,12 @@ CSV로 떨어지는데 그걸 다시 읽을 길이 없었고, 데모 번들도 �
 셀 해석은 `_text_cell` 하나에 있다: 빈 칸은 NULL, 숫자처럼 보이면 숫자, 단
 **앞이 0인 코드(`0012`)는 문자열로 둔다**(숫자로 보면 `12`가 되어 뭉갠다).
 
+**조건 모드는 컬럼 타입을 따라간다**(`data/querybuilder.py`, 요청 §4).
+문자열은 `일반 · 정규식 · LIKE`(LIKE는 `%`·`_`를 손으로 적는 모드 — `*` 치환과
+섞지 않는다), 숫자는 부등호(`>= > <= <`)를 콤보로 고른다. 부등호를 고르면 **맨
+숫자에만** 붙고 `25~85`·`!0`·직접 적은 `>=25`는 예전 그대로다. 목록은
+`STR_MODES`·`CMP_MODES` 두 상수가 갖는다.
+
 **추출 청크** (`data/extractor.py`) — 조회는 `item_id IN (...)`으로 반드시 좁히고
 (리포메터 REAL의 ITEMID만), 청크는 **기간 × item 그룹의 곱**이다(`plan_units`).
 item은 9999개씩 나눠 쿼리 하나가 Impala IN 상한을 넘지 않게 한다. 그 곱 전체가
@@ -567,7 +574,10 @@ different configuration`), `duckdb.connect(..., read_only=True)`를 직접 부�
 
 **fab tracking** (`data/fabtracking.py`) — `fab.f_fab_tracking`에서 split 실험
 lot을 찾는다. **`area='PHOTO'`면 recipe(`reticle_id`), 그 외는 `ppid`**로 step별
-조건을 비교하고, **조건이 갈리는 step만** 실험 축(factor)으로 올린다. 그룹핑과
+조건을 비교하고, **조건이 갈리는 step만** 실험 축(factor)으로 올린다.
+**step을 가르는 키는 `step_seq`다**(`step_key_expr`, 요청 §3) — process_id는
+route에서 여러 번 반복되어 서로 다른 지점의 조건이 한 열로 뭉쳤다. 그래서 표는
+`lot | wafer | <step_seq…>`로 자동 구성된다. 그룹핑과
 혼입 감지는 `model/split.SplitMatrix`가 하며 여기서 매트릭스만 만들어 넘긴다 —
 그룹핑 로직을 두 곳에 두지 않는다.
 
@@ -584,6 +594,14 @@ lot을 찾는다. **`area='PHOTO'`면 recipe(`reticle_id`), 그 외는 `ppid`**�
 **inline 계측** (`data/metrology.py`) — `fab.f_fab_wf_met`. 조회는 **분석 중인
 lot으로 반드시 좁힌다**(전체 스캔 금지). subitem 규칙은 확정 사항이다: site
 level은 `RANGE/STD/MIN/VALUE/SLOTID/Q2/MAX`를 **뺀** 나머지, wafer level은 `Q2`.
+
+**붙인 열은 [적용]에서 다시 붙는다**(`loader.reattach_sources`, 요청 §1·§2).
+[적용]은 DuckDB에서 프레임을 새로 만들기 때문에, 다시 붙이지 않으면 이름만
+`state.track_columns`·`met_columns`에 남고 컬럼은 사라진다 — 축 후보에는 보이는데
+아무 데도 반영되지 않는 상태("분석에 활용이 안 먹는다")가 된다. 그래서 조회
+원본(`track_frame`·`met_frame`)과 컬럼 정의(`track_specs`)를 상태에 남긴다.
+계측 열은 **숫자**라 boxplot 범주가 아니라 **산점도 축** 후보다
+(`AppState.value_columns()`; `categories.choices()`는 숫자를 걸러 낸다).
 
 **두 조회 모두 조건을 분석 DB에서 채우고 SQL을 직접 고칠 수 있다**(요청 §3).
 line·process·part와 기간 기본값은 `data/lotcontext.py`가 DuckDB에서 읽어 온다 —

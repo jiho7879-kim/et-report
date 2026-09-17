@@ -280,11 +280,8 @@ class ExploreTab(StaleMixin, QWidget):
         return self._y_items()
 
     def _y_items(self) -> list[str]:
-        """Y 자동완성 — 리포메터 ALIAS, 없으면 데이터의 item 컬럼."""
-        st = self.state
-        if st.rf.rules:
-            return st.aliases()
-        return item_columns(st.data) if st.data is not None else []
+        """Y 자동완성 — 리포메터 ALIAS(없으면 item 컬럼) + 붙인 계측 열(§1)."""
+        return self.state.value_columns()
 
     def _type_changed(self) -> None:
         """종류를 고르면 **X도 그 종류가 읽을 수 있는 값으로** 바꿔 준다.

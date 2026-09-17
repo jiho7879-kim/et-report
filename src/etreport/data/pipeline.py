@@ -29,9 +29,11 @@ class ExtractResult:
     seconds: float = 0.0
     raw_rows: int = 0             # 추출 원본(long) 행 수
     files: int = 0                # 청크 파일 수
+    filled: int = 0               # 이미 있던 행에 빠진 item만 채운 수(§6)
 
     def summary(self) -> str:
-        return (f"적재 {self.rows:,}행 (원본 {self.raw_rows:,}행 · "
+        fill = f" · 빈 칸 채움 {self.filled:,}행" if self.filled else ""
+        return (f"적재 {self.rows:,}행{fill} (원본 {self.raw_rows:,}행 · "
                 f"청크 {self.files}개) · {self.seconds:.1f}초")
 
 
@@ -156,9 +158,12 @@ def run(preset, d_from: date, d_to: date, catalog,
     store = Store(preset.db_path)
     try:
         res.rows = pivot_and_load(store, reformatted, on_progress=load_prog)
+        res.filled = store.filled
     finally:
         store.close()
-    on_log(f"적재 완료 — {res.rows:,}행 · {time.monotonic() - t:.1f}초")
+    on_log(f"적재 완료 — {res.rows:,}행"
+           + (f" · 기존 행 {res.filled:,}개의 빈 item 채움" if res.filled else "")
+           + f" · {time.monotonic() - t:.1f}초")
 
     # 4.5) 저장 옵션 — 적재 결과를 CSV/SBDF로 내보낸다 (스케줄러도 이 훅을 탄다)
     if preset.save_csv or preset.save_sbdf:

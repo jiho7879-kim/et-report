@@ -65,10 +65,15 @@ class AppState:
     # inline 계측(기능 B) — 붙인 계측 열 이름과 top-k 결과
     met_columns: list[str] = field(default_factory=list)
     met_top: object | None = None      # polars DataFrame | None
+    # 조회 결과 원본과 level — [적용]으로 DB를 다시 읽을 때 loader가 다시 붙인다.
+    met_frame: object | None = None    # polars DataFrame | None
+    met_level: str = "wafer"
     # fab tracking(기능 A)에서 뽑아 붙인 열 이름. 사용자가 이름을 정하므로
     # 코드에서 추측할 수 없다 — plot 축 후보·표 범주·PPT 슬라이드가 이 목록을 본다.
     track_columns: list[str] = field(default_factory=list)
     track_frame: object | None = None  # polars DataFrame | None (lot·wafer·열들)
+    # 마지막으로 정한 컬럼 정의 — 창을 닫았다 열어도 그대로 보이게(§2).
+    track_specs: list = field(default_factory=list)   # data.fabtracking.TrackColumn
     rf_path: str = ""
     rf_sheet: str | int = 0
     exclude_all_plots: bool = True     # 제외를 모든 plot에 적용할지
@@ -86,6 +91,21 @@ class AppState:
     # ── 조회 ─────────────────────────────────────────────────
     def aliases(self) -> list[str]:
         return [r.alias for r in self.rf.rules]
+
+    def value_columns(self) -> list[str]:
+        """산점도 x·y가 될 수 있는 **숫자 열** — ALIAS + 붙여 둔 계측 열(§1).
+
+        계측값은 ET item과 같은 자격의 숫자다(상관을 보려고 붙인다). 후보에
+        넣지 않으면 [분석에 활용]을 눌러도 축에서 고를 수 없어 "적용이 안 된다".
+        """
+        from etreport.data.loader import item_columns
+
+        base = self.aliases()
+        if not base:
+            base = item_columns(self.data) if self.data is not None else []
+        cols = getattr(self.data, "columns", ())
+        return base + [c for c in self.met_columns
+                       if c in cols and c not in base]
 
     def group(self, gid: str) -> GroupStyle | None:
         return next((g for g in self.groups if g.gid == gid), None)

@@ -93,6 +93,7 @@ class FabTrackDialog(QDialog):
         v.addWidget(self.bb)
 
         self._rebuild_sql()
+        self._restore_columns()
         self._sync_ok()
 
     # ── ① 조건 ───────────────────────────────────────────────
@@ -243,6 +244,16 @@ class FabTrackDialog(QDialog):
         self.tbl_cols.resizeColumnsToContents()
         return r
 
+    def _restore_columns(self) -> None:
+        """지난번에 정한 컬럼 정의를 되살린다(§2).
+
+        창을 닫았다 다시 열면 표가 비어 있어서, 조회는 됐는데 화면이 예전과
+        다르게 채워졌다(자동 제안으로 덮였다). 정의를 상태에 남겨 두고 여기서
+        되돌리면 "다시 열면 아무것도 안 나온다"가 사라진다.
+        """
+        for c in getattr(self.state, "track_specs", None) or []:
+            self._add_row(c.name, c.source, c.step)
+
     def _del_row(self) -> None:
         r = self.tbl_cols.currentRow()
         if r < 0:
@@ -338,11 +349,25 @@ class FabTrackDialog(QDialog):
 
     def _done(self, df) -> None:
         self.tracking = df
-        self._steps = sorted({str(s) for s in
-                              ft.wafer_conditions(df)["step_id"].to_list() if s})
-        # 실험 조건(SplitMatrix)도 같은 조회에서 만들어 둔다 — [실험 조건] 창이
-        # 이 창을 열었을 때 조회를 두 번 하지 않게.
-        self.matrix = ft.to_split_matrix(df)
+        if df is None or df.is_empty():
+            self.lbl.setText("조회 결과가 0행입니다 — 조건(lot·기간·process)을 "
+                             "넓혀 보세요")
+            self._sync_ok()
+            return
+        try:
+            self._steps = sorted({str(s) for s in
+                                  ft.wafer_conditions(df)["step_id"].to_list()
+                                  if s})
+            # 실험 조건(SplitMatrix)도 같은 조회에서 만들어 둔다 — [실험 조건]
+            # 창이 이 창을 열었을 때 조회를 두 번 하지 않게.
+            self.matrix = ft.to_split_matrix(df)
+        except Exception as e:      # 화면에 적어야 원인을 안다
+            # 여기서 예외가 새면 화면은 **아무 말 없이 비어 있다**(슬롯 안이라
+            # 호출한 쪽이 못 받는다). 조회는 됐는데 표가 안 채워지던 자리다.
+            log.exception("fab tracking 결과 정리 실패")
+            self.lbl.setText(f"조회는 됐지만 결과를 읽지 못했습니다: {e}")
+            self._sync_ok()
+            return
         if self.tbl_cols.rowCount() == 0:
             self._suggest()
         else:
@@ -379,6 +404,7 @@ class FabTrackDialog(QDialog):
         st.data, names = ft.attach(st.data, self.values)
         st.track_columns = list(dict.fromkeys([*st.track_columns, *names]))
         st.track_frame = self.values
+        st.track_specs = list(self.columns)      # 다시 열면 이 정의로 복원(§2)
         log.info("fab tracking 컬럼 %d개를 분석 프레임에 붙였습니다: %s",
                  len(names), ", ".join(names))
         return names

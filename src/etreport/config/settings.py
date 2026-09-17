@@ -34,7 +34,9 @@ def _only(cls, raw: dict):
 class Condition:
     col: str
     val: str = ""
-    mode: str = "auto"        # auto | regexp  (숫자·timestamp 컬럼은 auto 고정)
+    # auto | regexp | like | 부등호(>= > <= <) — 목록은 querybuilder가 갖는다(§4).
+    # timestamp 컬럼은 auto 고정.
+    mode: str = "auto"
     required: bool = False    # line_id
 
 

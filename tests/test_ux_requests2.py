@@ -241,8 +241,10 @@ def test_summary_tab_offers_four_modes(qapp, demo_state):
     tbl = next(w for w in tab.findChildren(QTableWidget)
                if w.objectName() == "sumTable")
     heads = [tbl.horizontalHeaderItem(i).text() for i in range(tbl.columnCount())]
-    # 라벨 열 수는 CAT 개수를 따라간다(§3.3) — 그 뒤가 wafer 열이다
-    n_label = len(demo_state.report.cat_names) + 1
+    # 라벨 열 수는 CAT 개수(§3.3)와 규격 열(§14)을 따라간다 — 그 뒤가 wafer 열이다
+    from etreport.export.excel import SummaryOptions, build_table
+    n_label = len(build_table(demo_state, demo_state.report.table_names()[0],
+                              SummaryOptions(agg="gwafer")).labels())
     assert all("\n" in h and "·" in h for h in heads[n_label:])  # 그룹\nlot·wafer
     tab.deleteLater()
 

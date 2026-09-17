@@ -80,21 +80,22 @@ def test_summary_table_and_copy_agree(win, monkeypatch):
     tab.chk_delta.setChecked(True)                     # Δ vs REF 켜기
     tab.rebuild()
 
-    cat1 = win.state.report.table_names()[0]
+    # 화면 표에서 첫 데이터 행이 있는 카드를 고르고, **그 카드의 CAT1**으로
+    # 같은 표를 다시 만들어 비교한다 — 카드마다 라벨 열 수가 다를 수 있다(§14).
+    from PySide6.QtWidgets import QTableWidget
+    cards = [t for t in tab.host.findChildren(QTableWidget)
+             if t.objectName() == "sumTable"]
+    names = win.state.report.table_names()
+    idx = next(i for i, t in enumerate(cards) if t.item(0, 0) is not None)
+    table, cat1 = cards[idx], names[idx]
     td = build_table(win.state, cat1, tab._options())
     tsv = to_tsv(td, tab._options()).splitlines()
 
-    # 화면 표에서 같은 CAT1 카드의 첫 데이터 행을 뽑아 비교
-    from PySide6.QtWidgets import QTableWidget
-    table = None
-    for card in tab.host.findChildren(QTableWidget):
-        if card.item(0, 0) is not None:
-            table = card
-            break
-    assert table is not None
-
-    screen_first = [table.item(0, c).text() for c in range(3, table.columnCount())]
-    tsv_first = tsv[2].split("\t")[3:]
+    # 라벨 열 수는 CAT 개수·규격 열(§14)에 따라 달라진다 — 헤더에서 읽는다
+    n_lab = len(td.labels())
+    screen_first = [table.item(0, c).text()
+                    for c in range(n_lab, table.columnCount())]
+    tsv_first = tsv[2].split("\t")[n_lab:]
     # 화면은 제외 개수를 '값  −N'으로 덧붙이므로 값 부분만 비교한다
     assert [s.split("  ")[0] for s in screen_first] == tsv_first
 

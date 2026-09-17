@@ -107,6 +107,7 @@ class Store:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.con = _connect_write(self.path)
+        self.filled = 0                  # 겹친 행의 빈 칸을 채운 수(§6)
         self.con.execute("PRAGMA threads=4")
         _limit_memory(self.con)
         self._ensure_meta()
@@ -142,16 +143,25 @@ class Store:
         return None
 
     # ── 적재 ──────────────────────────────────────────────────
-    def load_wide(self, wide: pl.DataFrame, src_file: str) -> int:
+    def load_wide(self, wide: pl.DataFrame, src_file: str) -> tuple[int, int]:
         """버킷 하나 분량의 wide를 dedup 후 적재. 신규 item 컬럼은 자동 추가.
 
-        반환값은 **실제로 들어간 행 수**다(중복으로 걸러진 것은 빼고). 화면의
-        '적재 완료 — N행'이 이 값이므로, 같은 파일을 다시 적재하면 0이 나온다.
+        반환값은 `(새로 들어간 행 수, 빈 칸을 채운 행 수)`. 화면의 '적재 완료 —
+        N행'이 앞의 값이므로, 같은 파일을 그대로 다시 적재하면 (0, 0)이 나온다.
+
+        **뒤의 값이 있는 이유**(§6). 예전에는 key_hash가 이미 있으면 ANTI JOIN이
+        그 행을 통째로 버렸다. 그래서 리포메터에 item을 더해 같은 기간을 다시
+        적재하면 `ALTER TABLE`로 컬럼은 생기는데 값을 넣을 행이 하나도 남지 않아
+        **새 item이 전부 NULL인 채로** DB에 박혔다 — 화면에서는 "적재는 됐다는데
+        표도 산점도도 비어 있다"로 보였고, step_seq가 갈려 기록되는 항목에서
+        특히 티가 났다(합쳐지지 않는 seq 쪽이 통째로 빈다). 이제는 겹치는 행의
+        **빈 칸만** 채운다. 이미 값이 있는 칸은 건드리지 않으므로 멱등이고,
+        예전처럼 재적재로 값이 뒤집히는 일도 없다.
         """
         if wide.is_empty():
-            return 0
+            return 0, 0
         self.con.register("incoming", wide.to_arrow())
-        tbl = self.table_name()
+        tbl, filled = self.table_name(), 0
         if tbl is None:
             self.con.execute(
                 'CREATE TABLE "' + TABLE + '" AS SELECT * FROM incoming')
@@ -170,11 +180,33 @@ class Store:
                 f'INSERT INTO "{tbl}" BY NAME SELECT i.* FROM incoming i '
                 f'ANTI JOIN "{tbl}" f USING(key_hash)').fetchone()
             inserted = int(got[0]) if got else 0
+            if inserted < len(wide):          # 겹친 행이 있다 = 채울 것이 있다
+                filled = self._fill_gaps(tbl, wide)
         self.con.unregister("incoming")
         self.con.execute(
             "INSERT OR REPLACE INTO load_log VALUES (?, ?, ?, '')",
             [src_file, datetime.now(), inserted])
-        return inserted
+        return inserted, filled
+
+    def _fill_gaps(self, tbl: str, wide: pl.DataFrame) -> int:
+        """이미 있는 key_hash 행의 **빈 item 칸만** 채운다(§6).
+
+        `COALESCE(f.x, i.x)`라 이미 값이 있는 칸은 그대로다 — 재적재로 숫자가
+        바뀌지 않는다. WHERE에 '채울 것이 하나라도 있는 행'만 남기는 이유는 두
+        가지다: 같은 파일을 다시 적재했을 때 0을 돌려줘야 화면이 거짓말을 하지
+        않고, 안 바뀔 행을 전부 다시 쓰지 않는다.
+        """
+        skip = {*KEY9, "line_id", "key_hash"}
+        cols = [c for c in wide.columns if c not in skip]
+        if not cols:
+            return 0
+        sets = ", ".join(f'"{c}" = COALESCE(f."{c}", i."{c}")' for c in cols)
+        gap = " OR ".join(f'(f."{c}" IS NULL AND i."{c}" IS NOT NULL)'
+                          for c in cols)
+        got = self.con.execute(
+            f'UPDATE "{tbl}" AS f SET {sets} FROM incoming i '
+            f'WHERE f.key_hash = i.key_hash AND ({gap})').fetchone()
+        return int(got[0]) if got else 0
 
     # ── 뷰 체인 ───────────────────────────────────────────────
     def rebuild_views(self) -> None:
@@ -209,6 +241,10 @@ class Store:
 def pivot_and_load(store: Store, parquet_files: list[Path],
                    on_progress=None) -> int:
     """long parquet들 → key_hash 버킷 재파티션 → 버킷별 피벗 → 적재.
+
+    반환은 **새로 들어간 행 수**다. 겹친 행의 빈 칸을 채운 수는
+    `store.filled`에 쌓인다(§6) — 같은 기간을 item만 더해 다시 적재하면
+    반환값이 0인데 실제로는 값이 들어가므로, 화면이 그 둘을 함께 적어야 한다.
 
     item은 step 간 거의 중복(밀집)이므로 wide가 정답 구조다 — 계획서 §4 참조.
     피벗 메모리 피크는 버킷 수로 제어하되, 그 수는 데이터 모양(키 수 × item 수)을
@@ -251,7 +287,8 @@ def pivot_and_load(store: Store, parquet_files: list[Path],
         if part is not None and not part.is_empty():
             wide = part.pivot(on="item_id", index=[*KEY9, "line_id", "key_hash"],
                               values="value", aggregate_function="first")
-            total += store.load_wide(wide, src_file=f"bucket_{b}")
+            n, f = store.load_wide(wide, src_file=f"bucket_{b}")
+            total, store.filled = total + n, store.filled + f
         if on_progress:
             on_progress(b + 1, n_buckets)
     for p in parquet_files:

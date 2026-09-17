@@ -280,6 +280,7 @@ def load_state(state: AppState, db_path: str, table: str | None = None,
     # 손으로 배정한 그룹은 [적용]으로 DB를 다시 읽어도 살아남는다. 실험 조건
     # 배정보다 뒤에 걸어 사용자가 직접 고른 쪽이 이기게 한다.
     state.data = apply_manual_groups(state.data, state.manual_groups)
+    state.data = reattach_sources(state.data, state)
 
     items = item_columns(state.data)
     n_lot = state.data["lot"].n_unique() if "lot" in state.data.columns else 0
@@ -290,6 +291,25 @@ def load_state(state: AppState, db_path: str, table: str | None = None,
     return (f"{tbl} · {state.data.height:,} 포인트 · lot {lot_txt} "
             f"· item {len(items)} · 제외 {len(state.excluded)}"
             + (f" · 절대값 {n_abs}" if n_abs else ""))
+
+
+def reattach_sources(df: pl.DataFrame, state: AppState) -> pl.DataFrame:
+    """붙여 둔 fab tracking·inline 계측 열을 다시 붙인다(§1·§2).
+
+    [적용]은 DuckDB에서 프레임을 새로 만든다. 다시 붙이지 않으면 이름만
+    `state.track_columns`·`met_columns`에 남고 **컬럼은 사라져서**, 축 후보에는
+    보이는데 어디에도 반영되지 않는 상태가 된다("분석에 활용이 안 먹는다").
+    붙일 원본이 없으면(조회 전) 아무 일도 하지 않는다.
+    """
+    if df is None:
+        return df
+    if state.track_frame is not None:
+        from etreport.data import fabtracking as ft
+        df, _ = ft.attach(df, state.track_frame)
+    if state.met_frame is not None:
+        from etreport.data import metrology as mt
+        df, _ = mt.attach(df, state.met_frame, state.met_level)
+    return df
 
 
 def _normalize_pivoted(df: pl.DataFrame, prof: compat.TableProfile) -> pl.DataFrame:

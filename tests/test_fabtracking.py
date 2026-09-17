@@ -26,7 +26,18 @@ ROW = {"part_id": "DEV1", "process_id": "M1", "step_seq": 1,
 
 
 def _df(rows: list[dict]) -> pl.DataFrame:
-    return pl.DataFrame([{**ROW, **r} for r in rows])
+    """테스트 행 → 조회 결과 모양.
+
+    step 식별자는 **step_seq**다(§3). 여기서는 적지 않으면 process_id와 같은
+    값을 넣어, 아래 테스트들이 지금까지처럼 `M1`·`M5`로 step을 부를 수 있게 한다.
+    """
+    out = []
+    for r in rows:
+        row = {**ROW, **r}
+        if "step_seq" not in r:
+            row["step_seq"] = row["process_id"]
+        out.append(row)
+    return pl.DataFrame(out)
 
 
 # ── SQL ──────────────────────────────────────────────────────

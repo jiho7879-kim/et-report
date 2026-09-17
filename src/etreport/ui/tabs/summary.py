@@ -198,7 +198,9 @@ class SummaryTab(StaleMixin, QWidget):
     def _rebuild(self) -> None:
         import time
 
+        from etreport.export.excel import spec_cells
         from etreport.model.aggregate import offspec
+        from etreport.render.pptgen import SPEC_LABELS
         t0 = time.monotonic()
         while self.vbox.count():
             it = self.vbox.takeAt(0)
@@ -240,11 +242,16 @@ class SummaryTab(StaleMixin, QWidget):
             n_cat = max((len(r.subcats) for r in rows), default=0)
             cat_heads = [cat_names[i] if i < len(cat_names) else f"CAT{i + 2}"
                          for i in range(n_cat)]
-            n_lab = n_cat + 1
+            # 규격 열은 item 뒤·wafer 앞(§14). 표에 규격이 하나도 없으면 안 붙인다.
+            specs = {r.item_id: spec_cells(st.rf.by_alias.get(r.item_id))
+                     for r in rows}
+            spec_heads = (list(SPEC_LABELS)
+                          if any(any(v) for v in specs.values()) else [])
+            n_lab = n_cat + 1 + len(spec_heads)
             ncol = n_lab + sum(len(w) for _, w in header)
             t = QTableWidget(len(rows), ncol)
             t.setObjectName("sumTable")
-            heads = [*cat_heads, "item"]
+            heads = [*cat_heads, "item", *spec_heads]
             for lot, wl in header:
                 heads += [f"{lot}\n{w}" for w in wl]
             t.setHorizontalHeaderLabels(heads)
@@ -256,7 +263,7 @@ class SummaryTab(StaleMixin, QWidget):
                 rule = st.rf.by_alias.get(rs.item_id)
                 rv = ref.get(rs.item_id) if delta else None
                 labels = [*rs.subcats, *[""] * (n_cat - len(rs.subcats)),
-                          rs.item_id]
+                          rs.item_id, *(specs[rs.item_id] if spec_heads else [])]
                 for ci, txt in enumerate(labels):
                     t.setItem(ri, ci, QTableWidgetItem(txt))
                 ci = n_lab

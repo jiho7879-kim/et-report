@@ -287,10 +287,13 @@ def test_fake_tracking_splits_on_recipe_and_ppid(sources, state):
     steps = ft.split_steps(tr)
     assert len(steps) == 3, "조건이 갈리는 step만 factor가 되어야 한다"
 
+    # 열 이름은 **step_seq**다(§3) — 데모는 100·300·500을 갈리게 만든다
+    assert steps == ["100", "300", "500"]
+
     sm = ft.to_split_matrix(tr)
     codes = set(sm.wide[steps[0]].to_list()) | set(sm.wide[steps[-1]].to_list())
     assert any(c.startswith("RT_") for c in codes)      # PHOTO = reticle
-    assert any(c.startswith("I300_") for c in sm.wide["I300"].to_list())  # ppid
+    assert any(c.startswith("I300_") for c in sm.wide["300"].to_list())  # ppid
 
 
 def test_fake_s3_lists_uploads_and_downloads(sources, tmp_path):

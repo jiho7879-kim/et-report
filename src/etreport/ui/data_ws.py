@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from etreport.config.catalog import Catalog
 from etreport.config.settings import Condition, ExtractPreset, Settings
+from etreport.data import querybuilder
 from etreport.data.querybuilder import (
     ConditionError,
     build_extract_sql,
@@ -129,6 +130,7 @@ class ConditionRow(QWidget):
     def __init__(self, cond: Condition, catalog: Catalog, parent=None) -> None:
         super().__init__(parent)
         self.cond, self.catalog = cond, catalog
+        self._filling = False              # 모드 목록 교체 중 신호 무시
         h = QHBoxLayout(self)
         h.setContentsMargins(0, 0, 0, 0)
 
@@ -151,8 +153,6 @@ class ConditionRow(QWidget):
         h.addWidget(self.ed_val, 1)
 
         self.cmb_mode = QComboBox()
-        self.cmb_mode.addItems(["일반", "정규식"])
-        self.cmb_mode.setCurrentIndex(1 if cond.mode == "regexp" else 0)
         self.cmb_mode.setFixedWidth(88)
         self.cmb_mode.currentIndexChanged.connect(self._mode_changed)
         h.addWidget(self.cmb_mode)
@@ -177,9 +177,35 @@ class ConditionRow(QWidget):
         self.changed.emit()
 
     def _mode_changed(self, i: int) -> None:
-        self.cond.mode = "regexp" if i else "auto"
+        if self._filling:                  # 목록을 갈아 끼우는 중이다
+            return
+        self.cond.mode = self.cmb_mode.itemData(i) or "auto"
         self._sync()                       # 힌트 문구도 모드에 맞춘다
         self.changed.emit()
+
+    def _fill_modes(self, num: bool, ts: bool) -> None:
+        """모드 목록은 컬럼 타입을 따라간다(§4).
+
+        문자열이면 일반·정규식·LIKE, 숫자면 부등호를 고를 수 있다. 타입이
+        바뀌어 지금 모드를 쓸 수 없게 되면 `auto`로 되돌린다 — 남겨 두면
+        문자열 컬럼에 `>=`가 붙은 채로 SQL이 만들어진다.
+        """
+        items = ([("일반", "auto")] if ts or num else
+                 [("일반", "auto"), ("정규식", "regexp"), ("LIKE", "like")])
+        if num:
+            items += [(op, op) for op in querybuilder.CMP_MODES]
+        if self.cond.mode not in [d for _, d in items]:
+            self.cond.mode = "auto"
+        if [self.cmb_mode.itemData(i) for i in range(self.cmb_mode.count())] \
+                != [d for _, d in items]:
+            self._filling = True
+            self.cmb_mode.clear()
+            for label, data in items:
+                self.cmb_mode.addItem(label, data)
+            self._filling = False
+        self.cmb_mode.setCurrentIndex(
+            max(0, self.cmb_mode.findData(self.cond.mode)))
+        self.cmb_mode.setEnabled(not ts)
 
     def _sync(self) -> None:
         info = self.catalog.get(self.cond.col)
@@ -190,12 +216,15 @@ class ConditionRow(QWidget):
         self.badge.setProperty("kind", "num" if num else "ts" if ts else "str")
         self.badge.style().unpolish(self.badge)
         self.badge.style().polish(self.badge)
-        self.cmb_mode.setEnabled(not (num or ts))
-        rx = self.cond.mode == "regexp" and not (num or ts)
+        self._fill_modes(num, ts)
+        mode = self.cond.mode
         self.ed_val.setPlaceholderText(
             "2026-08-01 ~ 2026-08-10" if ts else
+            f"25   (앞에 {mode} 가 붙습니다)" if mode in querybuilder.CMP_MODES else
             ">=25   ·   25 85   ·   25~85   ·   !0" if num else
-            "P040 L040 P049   (띄어쓰기 = OR, 자동으로 | 로 잇습니다)" if rx else
+            "P040 L040 P049   (띄어쓰기 = OR, 자동으로 | 로 잇습니다)"
+            if mode == "regexp" else
+            "%PA12%  PB2_1   (％·＿를 직접 씁니다)" if mode == "like" else
             "PA12*  PB201  !PA125")
 
 

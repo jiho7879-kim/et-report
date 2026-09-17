@@ -147,6 +147,32 @@ def point_xy(ax) -> list[tuple[float, float]]:
     return out
 
 
+def _unpaired(data: dict[str, pl.DataFrame],
+              pairs: list[tuple[str, str]]) -> bool:
+    """x·y가 각각은 있는데 **같은 행에는 없는** 상태인가(§7).
+
+    산점도는 한 행에 x와 y가 함께 있어야 점이 된다. step_seq가 갈려 기록된
+    두 item은 읽을 때 합쳐지지만(§10.1), step_id·온도·site 수까지 다르면
+    합칠 수 없어 점이 0개가 된다 — 축도 규격 창도 그려지니 화면만 봐서는
+    "데이터가 없다"와 구별되지 않는다. 쌍 하나라도 그려지면 참견하지 않는다.
+    """
+    lonely = False
+    for ax_x, ax_y in pairs:
+        has_x = has_y = False
+        for df in data.values():
+            if ax_x not in df.columns or ax_y not in df.columns:
+                continue
+            x, y = pl.col(ax_x).is_not_null(), pl.col(ax_y).is_not_null()
+            # x·y가 같은 item일 수 있다 — 별칭을 안 주면 DuplicateError(§10.10)
+            hx, hy, hb = df.select(hx=x.any(), hy=y.any(),
+                                   hb=(x & y).any()).row(0)
+            if hb:
+                return False
+            has_x, has_y = has_x or hx, has_y or hy
+        lonely = lonely or (has_x and has_y)
+    return lonely
+
+
 def render(spec: PlotSpec,
            data: dict[str, pl.DataFrame],      # gid → (x, y, alias별 값 wide)
            styles: list[GroupStyle],
@@ -156,7 +182,8 @@ def render(spec: PlotSpec,
            excluded: pl.DataFrame | None = None,
            compact: bool = False,
            fig: Figure | None = None,
-           lot_split: bool = False) -> Figure:
+           lot_split: bool = False,
+           legend: bool = True) -> Figure:
     """compact=True면 슬롯/미니용 — 라벨을 줄이고 여백을 좁힌다.
 
     fig를 주면 그 Figure에 그린다(화면 캔버스용). 안 주면 새로 만든다(PPT용).
@@ -171,10 +198,11 @@ def render(spec: PlotSpec,
     if spec.type == "trend":
         return _render_trend(spec, data, styles, rf, log_patterns, figsize,
                              excluded=excluded, compact=compact, fig=fig,
-                             lot_split=lot_split)
+                             lot_split=lot_split, legend=legend)
     if spec.type == "box":
         return _render_box(spec, data, styles, rf, log_patterns, figsize,
-                           excluded=excluded, compact=compact, fig=fig)
+                           excluded=excluded, compact=compact, fig=fig,
+                           legend=legend)
     if fig is None:
         fig = Figure(figsize=figsize, dpi=140 if compact else 180)
         ax = fig.add_subplot(111)
@@ -216,6 +244,13 @@ def render(spec: PlotSpec,
                 points(ax, sub[ax_x], sub[ax_y], color=st.color,
                        size=st.size, marker=mark,
                        label=label if (ax_x, ax_y) == pairs[0] else None)
+
+    if spec.mode == "site" and _unpaired(data, pairs):
+        ax.text(0.5, 0.5, "x·y가 같은 측정점에 없습니다\n"
+                "(step_seq 말고 step·온도·site 수까지 달라 합쳐지지 않음)\n"
+                "집계를 [wafer 중앙값]으로 바꾸면 그려집니다",
+                transform=ax.transAxes, ha="center", va="center",
+                linespacing=1.6, fontsize=7 if compact else 9, color="#8e8e93")
 
     # 제외된 포인트 — 회색 빈 심볼로 남긴다(사라지지 않게)
     if excluded is not None and not excluded.is_empty():
@@ -296,7 +331,7 @@ def render(spec: PlotSpec,
     ax.grid(True, color="#ececee", lw=0.6, zorder=0)
     for sp in ax.spines.values():
         sp.set_color("#d2d2d7")
-    if not compact and ax.get_legend_handles_labels()[0]:
+    if legend and not compact and ax.get_legend_handles_labels()[0]:
         leg = ax.legend(fontsize=fs - 0.5, frameon=True, framealpha=0.95,
                         loc="upper left", bbox_to_anchor=(1.015, 1.0),
                         borderaxespad=0, markerscale=0.85)
@@ -340,7 +375,8 @@ def _render_trend(spec: PlotSpec,
                   excluded: pl.DataFrame | None = None,
                   compact: bool = False,
                   fig: Figure | None = None,
-                  lot_split: bool = False) -> Figure:
+                  lot_split: bool = False,
+                  legend: bool = True) -> Figure:
     """기하(W/L) trend — x=규격 기하값, y=item 값, 대표값 라인 + 점 스트립.
 
     scatter와 달리 X축이 데이터 컬럼이 아니라 리포메터의 기하값(W/L)이므로
@@ -470,7 +506,7 @@ def _render_trend(spec: PlotSpec,
     ax.grid(True, color="#ececee", lw=0.6, zorder=0)
     for sp in ax.spines.values():
         sp.set_color("#d2d2d7")
-    if not compact and ax.get_legend_handles_labels()[0]:
+    if legend and not compact and ax.get_legend_handles_labels()[0]:
         leg = ax.legend(fontsize=fs - 0.5, frameon=True, framealpha=0.95,
                         loc="upper left", bbox_to_anchor=(1.015, 1.0),
                         borderaxespad=0, markerscale=0.85)
@@ -494,7 +530,8 @@ def _render_box(spec: PlotSpec,
                 figsize: tuple[float, float],
                 excluded: pl.DataFrame | None = None,
                 compact: bool = False,
-                fig: Figure | None = None) -> Figure:
+                fig: Figure | None = None,
+                legend: bool = True) -> Figure:
     """boxplot — x는 **범주**, y는 item 값.
 
     산점도와 다른 점은 x가 데이터 컬럼(숫자)이 아니라 나눌 기준이라는 것뿐이다.
@@ -630,7 +667,7 @@ def _render_box(spec: PlotSpec,
     ax.grid(True, axis="y", color="#ececee", lw=0.6, zorder=0)
     for sp in ax.spines.values():
         sp.set_color("#d2d2d7")
-    if not compact and ax.get_legend_handles_labels()[0]:
+    if legend and not compact and ax.get_legend_handles_labels()[0]:
         leg = ax.legend(fontsize=fs - 0.5, frameon=True, framealpha=0.95,
                         loc="upper left", bbox_to_anchor=(1.015, 1.0),
                         borderaxespad=0)

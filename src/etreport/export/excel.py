@@ -25,6 +25,14 @@ class SummaryOptions:
     session_caption: str = ""
 
 
+def spec_cells(rule) -> list[str]:
+    """규격 하한·상한 셀(§14). 없는 쪽은 빈칸 — 한쪽만 있는 item이 흔하다."""
+    if rule is None:
+        return ["", ""]
+    return [fmt_value(v) if v is not None else ""
+            for v in (rule.speclow, rule.spechigh)]
+
+
 # ── 집계 ─────────────────────────────────────────────────────
 def build_table(state, cat1: str, opt: SummaryOptions) -> TableData:
     """AppState의 wide 데이터로 CAT1 표 하나를 만든다.
@@ -63,7 +71,7 @@ def build_table(state, cat1: str, opt: SummaryOptions) -> TableData:
                 vals.append(v)
                 offs.append(off)
         rows.append({"cats": rs.subcats, "item": rs.item_id,
-                     "values": vals, "offspec": offs})
+                     "spec": spec_cells(rule), "values": vals, "offspec": offs})
     return TableData(cat1, header, rows,
                      cat_names=list(getattr(state.report, "cat_names", []) or []))
 
@@ -125,7 +133,7 @@ def _group_wafer_table(state, cat1: str, opt: SummaryOptions) -> TableData:
                 vals.append(v)
                 offs.append(off)
         rows.append({"cats": rs.subcats, "item": rs.item_id,
-                     "values": vals, "offspec": offs})
+                     "spec": spec_cells(rule), "values": vals, "offspec": offs})
     # 그룹 기준 헤더면 wafer 셀에 "lot·wafer"를 남긴다(그룹 이름 ≠ lot)
     grouped = any(name != lot for name, pairs in header for lot, _ in pairs)
     header_lots = [(name, [f"{lot}·{w}" if grouped else w for lot, w in pairs])
@@ -179,7 +187,7 @@ def _group_table(state, cat1: str, opt: SummaryOptions) -> TableData:
             vals.append(v)
             offs.append(off)
         rows.append({"cats": rs.subcats, "item": rs.item_id,
-                     "values": vals, "offspec": offs})
+                     "spec": spec_cells(rule), "values": vals, "offspec": offs})
     return TableData(cat1, header, rows,
                      cat_names=list(getattr(state.report, "cat_names", []) or []))
 
@@ -279,8 +287,8 @@ def export_xlsx(tables: list[TableData], path: str, opt: SummaryOptions) -> None
         for td in tables:
             sht = wb.sheets.add(sheet_name(td.name, used), after=wb.sheets[-1])
             n_w = sum(len(ws) for _, ws in td.header_lots)
-            labels = td.labels()          # CAT2…CATn + item — 개수는 템플릿이
-            n_lab = len(labels)
+            labels = td.labels()          # CAT2…CATn + item + 규격(§14)
+            n_lab, n_spec = len(labels), len(td.spec_labels())
             vals = [td.label_values(r) for r in td.rows]
             # 제목
             sht["A1"].value = td.name
@@ -319,8 +327,8 @@ def export_xlsx(tables: list[TableData], path: str, opt: SummaryOptions) -> None
                     rng.color = RED_BG
                     rng.font.color = RED_TX
                     rng.font.bold = True
-            # CAT 세로 병합 — item 열은 빼고, 상위가 바뀌면 하위도 끊는다(§3.3)
-            for col in range(1, n_lab):
+            # CAT 세로 병합 — item·규격 열은 빼고, 상위가 바뀌면 하위도 끊는다
+            for col in range(1, n_lab - n_spec):
                 for r0, r1 in _runs([tuple(v[:col]) for v in vals]):
                     if r1 > r0:
                         rng = sht.range((4 + r0, col), (4 + r1, col))
