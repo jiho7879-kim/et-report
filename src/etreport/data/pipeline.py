@@ -91,9 +91,25 @@ def run(preset, d_from: date, d_to: date, catalog,
     if len(groups) > 1:
         on_log(f"조회 item {len(rf_items):,}개 (REAL만, ADDP 제외) — "
                f"상한 초과로 {len(groups)}개 그룹 분할")
-    units = extractor.plan_units(d_from, d_to, rf_items)
-    on_log(f"추출 시작 — {d_from} ~ {d_to} · 청크 {len(units)}개 "
-           f"· 워커 {extractor.N_WORKERS}")
+    # 날짜 프로브(§2) — lot 조건이 있으면 **데이터가 있는 날짜만** 먼저 묻는다.
+    # 빈 날짜에 무거운 GEN 조회를 던지던 낭비가 여기서 사라진다.
+    span = (d_to - d_from).days + 1
+    days = extractor.probe_days(preset.conditions, d_from, d_to, catalog)
+    if days is not None:
+        on_log(f"  lot 조건으로 날짜 먼저 확인 — {span}일 중 {len(days)}일에만 "
+               f"데이터가 있습니다")
+        if not days:
+            raise RuntimeError(
+                f"{d_from} ~ {d_to} 기간에 조건에 맞는 데이터가 없습니다")
+    # 청크 폭은 개발자 모드에서 바꾼다(기본 1일). 프리셋에 없으면 예전 그대로.
+    chunk_days = max(1, int(getattr(preset, "chunk_days", 1) or 1))
+    units = extractor.plan_units(d_from, d_to, rf_items,
+                                 max_days=chunk_days, days=days)
+    on_log(f"추출 시작 — {d_from} ~ {d_to} · 청크 {len(units)}개"
+           + (f" ({chunk_days}일씩)" if chunk_days > 1 else "")
+           + f" · 워커 최대 {extractor.N_WORKERS}"
+           + f" (코어 {extractor.available_cpus()}의 "
+             f"{extractor.WORKER_CPU_RATIO:.0%})")
     on_step("추출 중", 0, len(units))
 
     def on_prog(done: int, total: int, label: str) -> None:
@@ -106,13 +122,24 @@ def run(preset, d_from: date, d_to: date, catalog,
                "조회하지 않습니다")
     files = extractor.extract_to_parquet(
         preset.conditions, d_from, d_to, catalog, staging_dir(),
-        on_prog, stop, item_ids=rf_items, reuse=reuse)
+        on_prog, stop, item_ids=rf_items, reuse=reuse,
+        max_days=chunk_days, days=days)
     if not files:
         raise RuntimeError("중지되었거나 결과가 없습니다")
     res.files = len(files)
-    res.raw_rows = sum(pl.scan_parquet(str(f)).select(pl.len()).collect().item()
-                       for f in files)
+    # **빈 청크는 여기서 걸러 낸다**(§1). 행이 하나도 없는 날짜도 리포메팅을
+    # 돌면 ADDP 수식을 item 수만큼 세우고 parquet까지 쓴다 — 비용은 전부
+    # 들고 결과는 빈 파일이다. 행 수는 어차피 여기서 한 번 세므로 덤이다.
+    heights = [pl.scan_parquet(str(f)).select(pl.len()).collect().item()
+               for f in files]
+    res.raw_rows = sum(heights)
+    empty = [f for f, h in zip(files, heights) if not h]
+    files = [f for f, h in zip(files, heights) if h]
     on_log(f"추출 완료 — {res.raw_rows:,}행 (long) · {time.monotonic() - t:.1f}초")
+    if empty:
+        on_log(f"  빈 청크 {len(empty)}개 — 리포메팅·적재에서 건너뜁니다")
+    if not files:
+        raise RuntimeError("추출된 데이터가 없습니다 — 기간·조건을 확인하세요")
     on_log("  온도 보정 적용 — 5단위 정수로 맞춰 적재합니다 (23.9 → 25)")
 
     # 3) 리포메팅 --------------------------------------------------

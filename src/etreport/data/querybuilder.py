@@ -170,9 +170,13 @@ ITEM_ID_CHUNK = 9999
 # 세 빌더가 전부 _build_where를 거치므로 여기 한 줄이 추출·미리보기·probe에 함께 걸린다.
 DATA_CLASS = "GEN"
 
+# 날짜 프로브(build_date_probe_sql)가 보는 클래스. 요약 행이라 GEN보다 훨씬
+# 가벼워서 "이 lot이 어느 날짜에 찍혔나"만 먼저 묻는 데 쓴다.
+SUMMARY_CLASS = "SUM"
+
 
 def _build_where(conditions: list[Condition], d_from: date, d_to: date,
-                 catalog: Catalog) -> list[str]:
+                 catalog: Catalog, data_class: str = DATA_CLASS) -> list[str]:
     line = next((c for c in conditions if c.required), None)
     if line is None or not line.val.strip():
         raise ConditionError("line_id", "line_id는 필수입니다 (파티션 프루닝)")
@@ -182,7 +186,7 @@ def _build_where(conditions: list[Condition], d_from: date, d_to: date,
         condition_sql(line, catalog),
         f"tkout_time >= '{d_from:%Y-%m-%d} 00:00:00'",
         f"tkout_time <  '{hi:%Y-%m-%d} 00:00:00'",
-        f"data_class = '{DATA_CLASS}'",
+        f"data_class = '{data_class}'",
     ]
     where += [
         condition_sql(c, catalog)
@@ -262,6 +266,30 @@ def build_preview_sql(
                 f"\n-- 실행할 때 {groups}개 그룹(≤{ITEM_ID_CHUNK:,}개)으로 나눠 "
                 f"기간 × 그룹만큼 쿼리합니다")
     return sql
+
+
+def build_date_probe_sql(
+    conditions: list[Condition],
+    d_from: date,
+    d_to: date,
+    catalog: Catalog,
+    table: str = "eds.f_et_test",
+    data_class: str = SUMMARY_CLASS,
+) -> str:
+    """**데이터가 있는 날짜만** 먼저 알아내는 가벼운 프로브.
+
+    lot 조건(root_lot_id)이 좁으면 기간 대부분의 날짜에는 그 lot의 측정이 아예
+    없다. 그래도 지금까지는 하루가 곧 청크 하나라 빈 날짜마다 무거운 GEN 조회를
+    한 번씩 던졌다. 요약 클래스(SUM)로 날짜만 먼저 받아 **그 날짜의 청크만**
+    만들면 그 낭비가 통째로 사라진다.
+    """
+    where = _build_where(conditions, d_from, d_to, catalog, data_class)
+    body = "\n  AND  ".join(where)
+    return (
+        f"SELECT DISTINCT TO_DATE(tkout_time) AS tkout_date\n"
+        f"FROM   {table}\n"
+        f"WHERE  {body}"
+    )
 
 
 def build_item_probe_sql(

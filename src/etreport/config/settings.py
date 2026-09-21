@@ -55,6 +55,9 @@ class ExtractPreset:
     # 이미 받아 둔 추출 원본 parquet을 다시 쓸 것인가(§11). 조건이 같아도 원본
     # 테이블이 바뀌었으면 옛 값을 쓰게 되므로 **사용자가 켠다**. 기본은 꺼짐.
     reuse_staging: bool = False
+    # 추출 기간 청크 하나의 폭(일). 기본 1일 — 개발자 모드(비밀번호)에서만 바꾼다.
+    # lot 조건이 좁아 하루치가 가벼울 때 2~3일씩 묶으면 쿼리 왕복이 그만큼 준다.
+    chunk_days: int = 1
     # 예약 실행(§13) — 작업 스케줄러에 등록해 둔 내용을 여기에도 남긴다.
     # 스케줄러가 진실이지만, 화면이 "무엇을 걸어 뒀는지" 보여 주려면 사본이 필요하다
     # (schtasks /Query로는 우리가 넣은 --days를 되읽기 번거롭다).
@@ -95,6 +98,11 @@ class AnalysisConfig:
     tukey_enabled: bool = False
     tukey_k: float = 3.0
     tukey_scope: str = "cond"      # cond(step·온도별) | all(item 전체)
+    # 측정 조건 필터(step·site·temp) — 빈 값이면 좁히지 않는다.
+    # 이 조건이 표·plot·PPT가 만들어지는 범위를 정한다(`model/conditions.py`).
+    cond_step: str = ""
+    cond_site: str = ""
+    cond_temp: str = ""
 
 
 @dataclass

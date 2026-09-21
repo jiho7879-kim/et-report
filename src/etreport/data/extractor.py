@@ -58,14 +58,25 @@ class Chunk:
     d_to: date          # inclusive
 
 
-def plan_chunks(d_from: date, d_to: date, max_days: int = 1) -> list[Chunk]:
-    """기간을 일 단위로 쪼갠다. lot 조건이 좁으면 max_days를 늘려도 된다."""
+def plan_chunks(d_from: date, d_to: date, max_days: int = 1,
+                days: list[date] | None = None) -> list[Chunk]:
+    """기간을 `max_days`일씩 쪼갠다. lot 조건이 좁으면 max_days를 늘려도 된다.
+
+    `days`를 주면 **그 날짜만** 청크로 만든다(날짜 프로브 §2). 연속한 날짜끼리만
+    한 청크로 묶으므로, 비어 있는 날짜를 건너뛰면서도 청크 하나의 SQL은 여전히
+    연속 구간 하나다. 빈 리스트는 "조회할 날짜가 없다"는 뜻이라 청크도 없다.
+    """
+    span = [d_from + timedelta(days=i) for i in range((d_to - d_from).days + 1)] \
+        if days is None else sorted({d for d in days if d_from <= d <= d_to})
+    width = max(1, int(max_days))
     out: list[Chunk] = []
-    cur = d_from
-    while cur <= d_to:
-        end = min(cur + timedelta(days=max_days - 1), d_to)
-        out.append(Chunk(cur, end))
-        cur = end + timedelta(days=1)
+    for d in span:
+        last = out[-1] if out else None
+        if last is not None and last.d_to + timedelta(days=1) == d \
+                and (last.d_to - last.d_from).days + 1 < width:
+            out[-1] = Chunk(last.d_from, d)
+        else:
+            out.append(Chunk(d, d))
     return out
 
 
@@ -99,11 +110,12 @@ def item_groups(item_ids: list[str] | None,
 def plan_units(d_from: date, d_to: date,
                item_ids: list[str] | None = None,
                max_days: int = 1,
-               group_size: int = ITEM_ID_CHUNK) -> list[Unit]:
+               group_size: int = ITEM_ID_CHUNK,
+               days: list[date] | None = None) -> list[Unit]:
     """기간 × item 그룹의 **곱**을 실행 단위 목록으로 편다."""
     groups = item_groups(item_ids, group_size)
     return [Unit(ch, i, len(groups), ids)
-            for ch in plan_chunks(d_from, d_to, max_days)
+            for ch in plan_chunks(d_from, d_to, max_days, days)
             for i, ids in enumerate(groups)]
 
 
@@ -184,6 +196,54 @@ def _fetch(sql: str) -> pl.DataFrame:
     finally:
         # 반환 직후 원본 pandas 프레임을 계속 붙들면 워커마다 두 프레임이 남는다.
         del pdf
+
+
+#: 날짜 프로브를 켜는 조건 컬럼. 이 컬럼이 조건에 있으면 lot이 좁다는 뜻이라,
+#: 기간 대부분의 날짜에는 그 lot의 측정이 아예 없다(§2).
+LOT_COL = "root_lot_id"
+
+
+def has_lot_filter(conditions: list[Condition]) -> bool:
+    return any(c.col == LOT_COL and c.val.strip() for c in conditions)
+
+
+def _days_of(df: pl.DataFrame) -> list[date]:
+    """프로브 결과 한 컬럼을 date 목록으로. 문자열·시각·날짜 어느 쪽이든 받는다."""
+    s = df.to_series(0)
+    if s.dtype in (pl.Categorical, pl.Enum):
+        s = s.cast(pl.Utf8)
+    if s.dtype == pl.Utf8:
+        s = s.str.to_datetime(time_unit="us", strict=False)
+    if s.dtype == pl.Datetime:
+        s = s.dt.date()
+    elif s.dtype != pl.Date:
+        s = s.cast(pl.Date, strict=False)
+    return sorted(set(s.drop_nulls().to_list()))
+
+
+def probe_days(conditions: list[Condition], d_from: date, d_to: date,
+               catalog: Catalog) -> list[date] | None:
+    """lot 조건이 있으면 **데이터가 있는 날짜만** 먼저 알아낸다(§2).
+
+    반환이 `None`이면 예전 그대로 기간 전체를 돈다 — lot 조건이 없거나 프로브가
+    실패했을 때다. 프로브 실패로 추출 자체를 막지는 않는다(가벼운 최적화이지
+    정확성의 전제가 아니다). 빈 리스트는 "그 기간에 데이터가 없다"는 뜻이다.
+    """
+    if not has_lot_filter(conditions):
+        return None
+    try:
+        sql = build_date_probe_sql(conditions, d_from, d_to, catalog)
+        df = _fetch(sql)
+    except Exception as e:                  # noqa: BLE001 — 최적화 실패는 치명적이 아니다
+        log.warning("날짜 프로브 실패(%s) — 기간 전체를 조회합니다", e)
+        return None
+    if df.is_empty() or not df.width:
+        return []
+    try:
+        return _days_of(df)
+    except Exception as e:                  # noqa: BLE001
+        log.warning("날짜 프로브 결과를 읽지 못했습니다(%s)", e)
+        return None
 
 
 def _is_memory_error(error: BaseException) -> bool:
@@ -312,6 +372,8 @@ def extract_to_parquet(
     should_stop: Callable[[], bool] | None = None,
     item_ids: list[str] | None = None,
     reuse: bool = False,
+    max_days: int = 1,
+    days: list[date] | None = None,
 ) -> list[Path]:
     """청크별 parquet 파일 목록 반환. 파일명에 기간·item 그룹·SQL 해시 포함.
 
@@ -327,7 +389,7 @@ def extract_to_parquet(
     downstream(pivot_and_load)은 parquet 전체를 scan_parquet로 합치고 key_hash로
     dedup하므로 파일이 여러 개로 갈라져도 안전하다.
     """
-    units = plan_units(d_from, d_to, item_ids)
+    units = plan_units(d_from, d_to, item_ids, max_days=max_days, days=days)
     files: list[Path] = []
     total = len(units)
 
