@@ -695,6 +695,16 @@ class DataWorkspace(QWidget):
         ScheduleDialog(p, self).exec()
         self.settings.save()          # 창에서 바꾼 예약 설정을 남긴다
 
+    def open_dev_dialog(self) -> None:
+        """개발자 모드(상단바 [도구]) — 지금 고른 프리셋의 내부 값을 고친다.
+
+        값이 프리셋에 붙어 있으므로 예약 실행도 같은 값으로 돈다 — 저장해야
+        스케줄러가 읽으니 확인을 누르면 바로 저장한다.
+        """
+        from etreport.ui.widgets.dev_dialog import DevDialog
+        if DevDialog(self.preset(), self).exec():
+            self.settings.save()
+
     # ── 실행 ─────────────────────────────────────────────────
     def _run(self) -> None:
         p = self.preset()

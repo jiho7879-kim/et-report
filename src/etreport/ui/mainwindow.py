@@ -224,6 +224,11 @@ class MainWindow(QMainWindow):
             "누르면 캐시를 비우고 다음에 Excel에서 새로 읽습니다.")
         self.act_cache.triggered.connect(lambda: self.anal_ws._clear_cache())
         t.aboutToShow.connect(self._refresh_cache_action)
+        t.addSeparator()
+        act_dev = t.addAction("개발자 모드…")
+        act_dev.setToolTip("비밀번호를 넣어야 바꿀 수 있는 내부 설정 "
+                           "(추출 청크 폭 등)")
+        act_dev.triggered.connect(lambda: self.data_ws.open_dev_dialog())
 
         h = self.menuBar().addMenu("도움말")
         act = h.addAction("사용 설명서 (PDF)")
