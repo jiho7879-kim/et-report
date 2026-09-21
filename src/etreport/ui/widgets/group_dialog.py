@@ -748,7 +748,7 @@ class GroupDialog(QDialog):
         v = QVBoxLayout(w)
 
         top = QHBoxLayout()
-        top.addWidget(QLabel("lot"))
+        top.addWidget(QLabel("lot"), 0, Qt.AlignTop)
         # lot이 수십 개인 DB에서는 74px 목록을 굴려 찾는 것이 일이다. 레일의
         # lot 절과 **같은 관용구**로 검색을 둔다 — 검색은 숨기기만 하고 체크는
         # 건드리지 않는다(걸러 놓고 배정했는데 안 보이던 lot이 조용히 빠지면 안 된다).
