@@ -109,6 +109,7 @@ myenv/bin/ruff check --fix .                        # 안전한 것만 자동 �
 | `test_multi_lot.py` | **§9.2** lot 선택 SQL(안 고르면 예전과 동일)·커버리지·lot 심볼·표 lot 경계·기준 lot |
 | `test_requests_14.py` | 요청 14건 — GEN 조건·적재 보전·산점도 설명·공통 legend·SPEC 열·조건 모드(LIKE·부등호)·예약 실행 왕복·계측/tracking 재부착·step_seq 표 |
 | `test_requests_13.py` | 요청 13건 — 단일 exe·리소스 경로·빌드 스탬프·fab tracking 이름 컬럼·조회 조건 자동 채움·boxplot·plot 종류·VARCHAR 읽기·Tukey 필터·예약 실행 |
+| `test_extract_skip_empty.py` | 빈 청크 건너뛰기 · 날짜 프로브(SUM) · 청크 폭(개발자 모드) |
 | `test_bigset.py` (slow) | 실측 규모 성능·정확성 회귀 (`-s`로 단계별 시간 출력) |
 
 `tools/make_testset.py`는 **사내 PC에서 실제 앱으로** 리포메터를 확인하기 위한
@@ -160,7 +161,7 @@ UI는 스모크 수준만 있다(`test_ui_smoke.py`, offscreen). 화면을 바�
 
 **[데이터] 파이프라인** (`data/pipeline.py: run()`):
 ```
-리포메터 로드(xlwings) → querybuilder(Impala SQL) → extractor(일 단위 청크·4워커
+리포메터 로드(xlwings) → querybuilder(Impala SQL) → extractor(일 단위 청크·병렬
 → long parquet) → reformatter.apply(long, 청크별) → db.pivot_and_load(512 버킷
 피벗 → DuckDB et_data)
 ```
@@ -430,6 +431,21 @@ item은 9999개씩 나눠 쿼리 하나가 Impala IN 상한을 넘지 않게 한
 미리보기는 `build_preview_sql()`로 **개수 주석만** 만든다 — 목록을 문자열로 펴면
 24,180개 기준 43만 자가 되어 조건을 고칠 때마다 다시 그린다.
 
+**빈 날짜에 비용을 쓰지 않는다**(`tests/test_extract_skip_empty.py`).
+- **날짜 프로브** — 조건에 `root_lot_id`가 있으면 추출 전에
+  `build_date_probe_sql()`로 `SELECT DISTINCT TO_DATE(tkout_time) … data_class='SUM'`
+  을 한 번 던져 **데이터가 있는 날짜만** 청크로 만든다(`extractor.probe_days` →
+  `plan_chunks(days=…)`). lot이 좁으면 기간 대부분이 빈 날짜인데, 그 날짜마다
+  무거운 GEN 조회가 한 번씩 나가고 있었다. 프로브는 최적화일 뿐이라 **실패하면
+  `None`을 돌려 예전처럼 기간 전체를 돈다** — 빈 리스트(데이터 없음)와 구분된다.
+- **빈 청크는 리포메팅·적재에서 뺀다**(`pipeline.run`). 0행짜리 parquet도
+  리포메터를 통과시키면 ADDP 수식을 item 수만큼 세우고 파일까지 쓴다. 전부
+  비었으면 빈 DB를 만드는 대신 오류로 말한다.
+- **청크 폭은 `ExtractPreset.chunk_days`**(기본 1일). 늘려도 연속한 날짜끼리만
+  묶고 프로브가 건너뛴 날짜를 가로질러 붙지 않는다. 값은 **개발자 모드**에서만
+  바꾼다 — 상단바 [도구] → [개발자 모드…], 비밀번호는 `ui/widgets/dev_dialog.py`
+  의 `DEV_PASSWORD`. 잠금은 보안이 아니라 오조작 방지다(설정은 평문으로 남는다).
+
 **추출은 메모리 앞에서 겸손하다**(설계 §4-A). 한 조회는 변환 중 pandas와
 polars 두 벌이 동시에 살아 있어 워커 수가 곧 피크다. 그래서:
 - **`MemoryError`·`ArrowMemoryError`는 재시도하지 않는다.** 이미 터진 상태에서
@@ -437,6 +453,10 @@ polars 두 벌이 동시에 살아 있어 워커 수가 곧 피크다. 그래서
   줄이라"고 말한다. `RETRY`는 네트워크 같은 일시 오류에만 쓴다.
 - **첫 예외에서 남은 unit이 시작되지 않는다.** 전 단위를 한꺼번에 submit하지
   않고 내부 abort 플래그(`should_stop`과 같은 통로)로 큐를 멈춘다.
+- **병렬도 상한은 가용 코어의 60%**(`plan_cpu_workers`, `WORKER_CPU_RATIO`).
+  예전에는 `N_WORKERS = 4` 고정이라 16코어 PC가 4개만 썼다. 전부 쓰지 않는 것은
+  추출 중에도 같은 PC에서 Excel COM과 화면이 돌기 때문이다. 코어 수는
+  affinity(`sched_getaffinity`)를 먼저 보고 없으면 `os.cpu_count()`다.
 - **첫 청크는 단독 실행해 실측한다.** 그 크기로 `plan_workers()`가 병렬도를
   (상한 `N_WORKERS`, 하한 1) 정하고, `plan_group_size()`가 행 예산
   (`MAX_ROWS_PER_UNIT`)을 넘었으면 `resplit_units()`로 남은 단위의 item 그룹을
