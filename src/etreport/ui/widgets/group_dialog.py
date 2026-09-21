@@ -749,11 +749,22 @@ class GroupDialog(QDialog):
 
         top = QHBoxLayout()
         top.addWidget(QLabel("lot"))
+        # lot이 수십 개인 DB에서는 74px 목록을 굴려 찾는 것이 일이다. 레일의
+        # lot 절과 **같은 관용구**로 검색을 둔다 — 검색은 숨기기만 하고 체크는
+        # 건드리지 않는다(걸러 놓고 배정했는데 안 보이던 lot이 조용히 빠지면 안 된다).
+        lotbox = QVBoxLayout()
+        lotbox.setContentsMargins(0, 0, 0, 0)
+        self.m_search = QLineEdit()
+        self.m_search.setPlaceholderText("lot 검색")
+        self.m_search.setClearButtonEnabled(True)
+        self.m_search.textChanged.connect(self._m_filter_lots)
+        lotbox.addWidget(self.m_search)
         self.m_lots = QListWidget()
         self.m_lots.setSelectionMode(QListWidget.NoSelection)
         self.m_lots.setFixedHeight(74)
         self.m_lots.itemChanged.connect(self._m_lots_changed)
-        top.addWidget(self.m_lots, 1)
+        lotbox.addWidget(self.m_lots)
+        top.addLayout(lotbox, 1)
         side = QVBoxLayout()
         for text, on in (("전체", True), ("해제", False)):
             b = QPushButton(text)
@@ -865,6 +876,7 @@ class GroupDialog(QDialog):
             it.setCheckState(Qt.Checked if lot in picked else Qt.Unchecked)
             self.m_lots.addItem(it)
         self.m_lots.blockSignals(False)
+        self._m_filter_lots(self.m_search.text())
         self._m_filter_changed()
 
     def _m_selected_lots(self) -> list[str]:
@@ -872,11 +884,20 @@ class GroupDialog(QDialog):
                 for i in range(self.m_lots.count())
                 if self.m_lots.item(i).checkState() == Qt.Checked]
 
+    def _m_filter_lots(self, text: str) -> None:
+        """검색어에 안 맞는 lot을 **숨기기만** 한다 — 체크 상태는 그대로."""
+        q = text.strip().lower()
+        for i in range(self.m_lots.count()):
+            it = self.m_lots.item(i)
+            it.setHidden(bool(q) and q not in it.text().lower())
+
     def _m_check_all(self, on: bool) -> None:
+        """[전체]/[해제]는 **지금 보이는 lot에만** 건다 — 찾아 놓고 고르는 흐름."""
         self.m_lots.blockSignals(True)
         for i in range(self.m_lots.count()):
-            self.m_lots.item(i).setCheckState(
-                Qt.Checked if on else Qt.Unchecked)
+            it = self.m_lots.item(i)
+            if not it.isHidden():
+                it.setCheckState(Qt.Checked if on else Qt.Unchecked)
         self.m_lots.blockSignals(False)
         self._m_filter_changed()
 
