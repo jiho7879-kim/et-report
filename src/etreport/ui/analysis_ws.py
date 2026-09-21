@@ -58,7 +58,7 @@ log = logging.getLogger(__name__)
 _RAIL_WIDGETS = frozenset({
     "cfg_combo", "btn_cfg_menu", "btn_db", "btn_plot", "btn_tbl", "btn_rfm",
     "btn_split", "_file_values", "lot_section", "lot_list", "lot_search",
-    "btn_coverage",
+    "btn_coverage", "cond_section", "cond_combos", "btn_cond_clear",
     "tukey_section", "chk_tukey", "cmb_tukey_k", "cmb_tukey_scope",
     "btn_tukey_log", "sources_section", "lbl_sources", "btn_factor",
     "lbl_factor", "btn_apply", "lbl_apply", "btn_apply_log", "lbl_report", "lbl_summary",
@@ -368,6 +368,7 @@ class AnalysisWorkspace(QWidget):
         self.state.lot_split_symbols = self.chk_lot_split.isChecked()
         self._sync_tukey()
         self._load_lots(c.db_path)          # DB가 바뀌면 lot 목록도 바뀐다
+        self._sync_cond()
         self._show_report(c.report)
         self._mark_unapplied("설정을 불러왔습니다 — [적용]을 누르세요")
         self._refresh_dock()
@@ -412,9 +413,78 @@ class AnalysisWorkspace(QWidget):
         c.tukey_enabled = self.chk_tukey.isChecked()
         c.tukey_k = self._tukey_k()
         c.tukey_scope = self.cmb_tukey_scope.currentData() or outliers.SCOPE_COND
+        self._collect_cond(c)
         # lot 선택은 프리셋이 아니라 DB 경로별로 남긴다 — 프리셋을 바꿔도 같은
         # DB면 같은 lot을 보고 싶기 때문이다(§9.2).
         self._collect_lots()
+
+    # ── 측정 조건 필터 (§ 분석 범위) ────────────────────────
+    def _cond_values(self) -> dict[str, list[str]]:
+        """콤보에 채울 값 — 읽어 둔 프레임이 있으면 그것, 없으면 DB에서 가볍게.
+
+        `state.cond_choices`는 로딩이 **좁히기 전** 프레임으로 만들어 둔 것이라,
+        조건을 걸어 놓은 상태에서도 목록이 줄어들지 않는다.
+        """
+        from etreport.data import loader
+        if self.state.cond_choices:
+            return self.state.cond_choices
+        path = self.cfg().db_path
+        return loader.cond_index(path) if path else {}
+
+    def _sync_cond(self) -> None:
+        """설정 → 콤보. 프리셋을 갈아타거나 DB를 새로 읽은 뒤 부른다."""
+        from etreport.model import conditions
+        c = self.cfg()
+        vals = self._cond_values()
+        saved = {"step": getattr(c, "cond_step", ""),
+                 "site": getattr(c, "cond_site", ""),
+                 "temp": getattr(c, "cond_temp", "")}
+        for name, cmb in self.cond_combos.items():
+            want = str(saved.get(name) or conditions.ALL)
+            options = list(vals.get(name, []))
+            # 저장해 둔 값이 지금 DB에 없더라도 목록에 남긴다 — 조용히 '전체'로
+            # 풀리면 좁혀 놓은 줄 알고 전체 결과를 보게 된다.
+            if want and want not in options:
+                options.append(want)
+            cmb.blockSignals(True)
+            cmb.clear()
+            cmb.addItem("전체", conditions.ALL)
+            for v in options:
+                cmb.addItem(conditions.pretty(v), v)   # 보이는 글자만 정리
+            i = cmb.findData(want)
+            cmb.setCurrentIndex(i if i >= 0 else 0)
+            cmb.setEnabled(bool(options))
+            cmb.blockSignals(False)
+        self._refresh_cond_title()
+
+    def _collect_cond(self, c: AnalysisConfig) -> None:
+        from etreport.model import conditions
+        picked = {name: (cmb.currentData() or conditions.ALL)
+                  for name, cmb in self.cond_combos.items()}
+        c.cond_step = picked.get("step", "")
+        c.cond_site = picked.get("site", "")
+        c.cond_temp = picked.get("temp", "")
+
+    def _refresh_cond_title(self) -> None:
+        from etreport.model import conditions
+        txt = conditions.label({
+            name: (cmb.currentData() or conditions.ALL)
+            for name, cmb in self.cond_combos.items()})
+        self.cond_section.set_title(f"측정 조건  {txt}" if txt else "측정 조건")
+        self.btn_cond_clear.setEnabled(bool(txt))
+
+    def _cond_changed(self, _name: str) -> None:
+        """조건만 바꾸고 다시 읽지는 않는다 — lot 선택과 같은 지연 계산 규약."""
+        self._collect_cond(self.cfg())
+        self._refresh_cond_title()
+        self._mark_unapplied("측정 조건이 바뀌었습니다 — [적용] (F5)")
+
+    def _cond_clear(self) -> None:
+        for cmb in self.cond_combos.values():
+            cmb.blockSignals(True)
+            cmb.setCurrentIndex(0)
+            cmb.blockSignals(False)
+        self._cond_changed("")
 
     # ── 이상치 필터 ─────────────────────────────────────────
     def _tukey_k(self) -> float:
@@ -619,6 +689,9 @@ class AnalysisWorkspace(QWidget):
         # 재적용). 여기서 _apply_split을 또 부르면 그룹 편집에서 만든 그룹과
         # 손배정이 통째로 덮어써진다 — [적용] 후 그룹이 초기화되던 원인.
         self.settings.save()
+        # 읽고 나면 조건 목록이 **좁히기 전 프레임 기준**으로 채워져 있다 —
+        # 콤보를 그때 다시 만들어야 고른 값 말고 다른 값도 고를 수 있다.
+        self._sync_cond()
         self.bus.data_changed.emit()
         self.bus.report_changed.emit()
         self._refresh_dock()

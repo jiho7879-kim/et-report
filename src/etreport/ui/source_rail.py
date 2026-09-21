@@ -1,8 +1,9 @@
 """왼쪽 소스 레일 — "무엇을 보고 있나"(설계 §1 규칙 1).
 
 분석 **데이터셋을 정하는 것**만 여기 있다: 어떤 DB·템플릿·리포메터를 쓰는지,
-어느 lot을 읽는지, 어떤 점을 버리는지(이상치), 어떤 컬럼을 덧붙이는지
-(inline 계측·fab tracking). 이것들을 바꾸면 **볼 수 있는 것 자체가 달라진다.**
+어느 lot을 읽는지, 어떤 측정 조건(step·site·temp)만 볼지, 어떤 점을 버리는지
+(이상치), 어떤 컬럼을 덧붙이는지(inline 계측·fab tracking). 이것들을 바꾸면
+**볼 수 있는 것 자체가 달라진다.**
 표현만 바꾸는 것(로그 축·lot 심볼·그룹 색)은 오른쪽 인스펙터로 갔다.
 
 예전 도크는 10개 섹션짜리 스크롤 벽이었다(설계 §0 C). 줄인 방법:
@@ -41,7 +42,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from etreport.model import outliers
+from etreport.model import conditions, outliers
 from etreport.ui.tabs.common import on_combo
 from etreport.ui.widgets.cards import CollapsibleSection, GhostButton, SectionLabel
 
@@ -105,6 +106,7 @@ class SourceRail(QWidget):
         self._build_files(v)
         self._build_factor(v)
         self._build_lot(v)
+        self._build_cond(v)
         self._build_tukey(v)
         self._build_extra_sources(v)
         v.addStretch(1)
@@ -284,6 +286,36 @@ class SourceRail(QWidget):
         self.btn_coverage.clicked.connect(lambda: self.owner._open_coverage())
         box.addWidget(self.btn_coverage)
         v.addWidget(self.lot_section)
+
+    # ── 측정 조건 ────────────────────────────────────────────
+    def _build_cond(self, v: QVBoxLayout) -> None:
+        """표·plot이 **무엇으로 만들어지는지**를 정하는 자리(`model/conditions`).
+
+        그룹 편집 창 안의 같은 이름 필터는 *배정 범위*이고 여기는 *분석 범위*다.
+        레일에 두는 이유는 하나 — 결과를 보는 화면(요약 표·탐색·리포트)에서
+        **떠나지 않고** 보이고 바뀌어야 하기 때문이다. 창 안에 있으면 표를
+        보면서 "지금 무슨 조건으로 만든 표인가"를 알 길이 없다.
+        """
+        self.cond_section = CollapsibleSection("측정 조건", collapsed=True)
+        box = self.cond_section.body
+        hint = QLabel("고른 조건의 데이터로만 표·plot을 만듭니다")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        box.addWidget(hint)
+        self.cond_combos: dict[str, QComboBox] = {}
+        for label, name in conditions.FIELDS:
+            box.addWidget(SectionLabel(label))
+            cmb = QComboBox()
+            cmb.setToolTip(f"{label}를 고르면 그 값의 측정점만 분석합니다.\n"
+                           "'전체'면 좁히지 않습니다 — 예전과 같은 결과입니다.")
+            on_combo(cmb, lambda n=name: self.owner._cond_changed(n))
+            self.cond_combos[name] = cmb
+            box.addWidget(cmb)
+        self.btn_cond_clear = GhostButton("조건 지우기")
+        self.btn_cond_clear.setToolTip("세 조건을 모두 '전체'로 되돌립니다")
+        self.btn_cond_clear.clicked.connect(lambda: self.owner._cond_clear())
+        box.addWidget(self.btn_cond_clear)
+        v.addWidget(self.cond_section)
 
     # ── 이상치 필터 ──────────────────────────────────────────
     def _build_tukey(self, v: QVBoxLayout) -> None:
