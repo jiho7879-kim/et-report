@@ -17,7 +17,7 @@ import duckdb
 import polars as pl
 
 from etreport.data import compat, exclusions
-from etreport.model import wafers
+from etreport.model import conditions, wafers
 from etreport.model.state import AppState
 
 log = logging.getLogger(__name__)
@@ -214,6 +214,21 @@ def lot_index(db_path: str) -> pl.DataFrame:
     return idx.with_columns(pl.col("lot").cast(pl.Utf8))
 
 
+def cond_index(db_path: str) -> dict[str, list[str]]:
+    """DB에 들어 있는 측정 조건 값 — `{step: [...], site: [...], temp: [...]}`.
+
+    lot 목록(`lot_index`)과 같은 관용구다. DB를 **고르는 즉시**(=[적용] 전에)
+    돌아야 레일의 조건 콤보가 비어 있지 않다. item 컬럼은 건드리지 않는다.
+    """
+    if not Path(db_path).exists():
+        return {}
+    try:
+        return conditions.choices(wafer_index_from_db(db_path))
+    except Exception as e:                      # noqa: BLE001 — 못 읽어도 막지 않는다
+        log.info("측정 조건 목록 조회 실패(전체로 진행): %s", e)
+        return {}
+
+
 def wafer_index_empty() -> pl.DataFrame:
     return pl.DataFrame(schema={"lot": pl.Utf8, "wafer": pl.Utf8,
                                 "step": pl.Utf8, "temp": pl.Utf8,
@@ -263,6 +278,12 @@ def load_state(state: AppState, db_path: str, table: str | None = None,
         df = _normalize_pivoted(df, prof)
     df, n_abs = apply_absolute(df, state.rf)     # 음수로 적재된 기존 DB도 교정
 
+    # 측정 조건 필터(step·site·temp) — **여기 한 곳에서만** 좁힌다. 좁힌 결과가
+    # 곧 `state.data`라, 표·plot·PPT·복사가 저마다 필터를 기억할 필요가 없다.
+    # 콤보 목록은 좁히기 **전** 프레임으로 만든다(좁힌 뒤면 되돌릴 수 없다).
+    state.cond_choices = conditions.choices(df)
+    df, n_cond = conditions.apply(df, state.cond_filter)
+
     state.table = tbl
     state.profile = prof
     state.data = df
@@ -288,9 +309,11 @@ def load_state(state: AppState, db_path: str, table: str | None = None,
     # 요약 한 줄이 말해 주지 않으면, 빠진 lot을 데이터가 없는 것으로 오해한다.
     total = len(state.lots_all)
     lot_txt = f"{n_lot}/{total}" if lots and total > n_lot else str(n_lot)
+    cond_txt = conditions.label(state.cond_filter)
     return (f"{tbl} · {state.data.height:,} 포인트 · lot {lot_txt} "
             f"· item {len(items)} · 제외 {len(state.excluded)}"
-            + (f" · 절대값 {n_abs}" if n_abs else ""))
+            + (f" · 절대값 {n_abs}" if n_abs else "")
+            + (f" · 조건 {cond_txt} ({n_cond:,}행 제외)" if cond_txt else ""))
 
 
 def reattach_sources(df: pl.DataFrame, state: AppState) -> pl.DataFrame:

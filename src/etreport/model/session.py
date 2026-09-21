@@ -172,6 +172,13 @@ def apply_config(state: AppState, cfg: AnalysisConfig,
         tick("실험 조건 완료")
 
     # 4) DuckDB -----------------------------------------------
+    # 측정 조건 필터는 **DB를 읽기 전에** 정한다 — 로딩이 그 조건으로 좁힌 프레임을
+    # 돌려주므로, 표·plot·PPT는 아무것도 달리 하지 않아도 같은 범위를 본다.
+    from etreport.model import conditions
+    state.cond_filter = conditions.normalize({
+        "step": getattr(cfg, "cond_step", ""),
+        "site": getattr(cfg, "cond_site", ""),
+        "temp": getattr(cfg, "cond_temp", "")})
     if cfg.db_path:
         if on_progress:
             on_progress(step, total, "DB 읽는 중")

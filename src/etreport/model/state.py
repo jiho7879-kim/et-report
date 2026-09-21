@@ -57,6 +57,13 @@ class AppState:
     lots_all: list[str] = field(default_factory=list)
     lots_selected: list[str] = field(default_factory=list)
     lot_split_symbols: bool = False    # plot에서 lot마다 심볼을 달리할지(§5.2)
+    # 측정 조건 필터(`model/conditions.py`) — step·site·temp로 **분석에 쓸
+    # 데이터 자체**를 좁힌다. 빈 dict = 전체. 좁히기는 로딩 때 한 번만 걸리므로
+    # `data`가 이미 좁혀진 프레임이고, 읽는 쪽은 아무것도 달리 하지 않아도 된다.
+    cond_filter: dict[str, str] = field(default_factory=dict)
+    # 콤보에 보여 줄 값 목록 — **좁히기 전** 프레임에서 만든다(좁힌 뒤에 만들면
+    # 한 번 고른 값 말고는 목록에서 사라져 되돌릴 수 없다).
+    cond_choices: dict[str, list[str]] = field(default_factory=dict)
     profile: object | None = None      # data.compat.TableProfile
     excl_points: dict = field(default_factory=dict)   # key → {reason, at}
     # 그룹 편집에서 손으로 배정한 것 — (lot, wafer, step, temp, site) → gid.
