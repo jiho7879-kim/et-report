@@ -255,6 +255,67 @@ def _target_dtypes() -> dict[str, pl.DataType]:
     return {f.name: pl.from_arrow(pa.array([], f.type)).dtype for f in ARROW_SCHEMA}
 
 
+def canonicalize_schema_columns(df: pl.DataFrame,
+                                target: dict[str, pl.DataType]) -> pl.DataFrame:
+    """`getData`가 바꾼 키 컬럼 표기를 고정 스키마 이름으로 되돌린다.
+
+    Impala/bigdataquery 조합에 따라 같은 ``SELECT step_seq``도 결과 DataFrame에는
+    ``STEP_SEQ`` 또는 공백이 붙은 `` step_seq ``로 돌아올 수 있다. 예전 코드는
+    대소문자를 구분해 찾았으므로, 실제 값이 있어도 ``step_seq``가 "없는 컬럼"으로
+    취급되어 NULL 열을 새로 만들었다. 그 NULL은 key_hash와 retest 판정에서 서로
+    다른 seq를 한 행으로 보게 해 item 값을 잃게 만든다.
+
+    고정 스키마의 이름만 대소문자·앞뒤 공백 무시로 맞춘다. 같은 이름의 열이 둘
+    이상이면 첫 non-NULL 값을 합쳐 하나로 만든다. 원본 값을 버리기보다 합치는
+    편이 getData 드라이버가 중복 레이블을 반환한 경우에도 안전하다.
+    """
+    matched: dict[str, list[str]] = {}
+    for col in df.columns:
+        canonical = col.strip().casefold()
+        if canonical in target:
+            matched.setdefault(canonical, []).append(col)
+
+    # 중복 표기(`step_seq`와 `STEP_SEQ`)는 먼저 coalesce한다. rename부터 하면
+    # Polars가 같은 이름의 두 열을 허용하지 않아 값을 잃거나 예외가 난다.
+    for canonical, cols in matched.items():
+        if len(cols) < 2:
+            continue
+        ordered = ([canonical] if canonical in cols else []) + [
+            c for c in cols if c != canonical]
+        log.warning("조회 결과의 %s 열 %d개를 non-NULL 우선으로 합칩니다: %s",
+                    canonical, len(cols), ", ".join(cols))
+        df = df.with_columns(
+            pl.coalesce([pl.col(c) for c in ordered]).alias(canonical))
+        df = df.drop([c for c in cols if c != canonical])
+
+    # 중복을 정리한 뒤 단일 비표준 표기만 안전하게 rename한다.
+    rename: dict[str, str] = {}
+    for canonical in target:
+        cols = [c for c in df.columns if c.strip().casefold() == canonical]
+        if len(cols) == 1 and cols[0] != canonical:
+            rename[cols[0]] = canonical
+    return df.rename(rename) if rename else df
+
+
+def _coerce_numeric_strings(df: pl.DataFrame,
+                            target: dict[str, pl.DataType]) -> pl.DataFrame:
+    """문자열 수치 키를 안전하게 숫자로 읽는다.
+
+    일부 getData 결과는 INT/DECIMAL 열도 pandas object 문자열로 돌려주며,
+    특히 ``step_seq``가 ``"1.0"`` 형태가 된다. Polars의 String→Int32 직접
+    cast는 그 값을 NULL로 바꾸므로 Float64를 한 번 거쳐 고정 타입으로 내린다.
+    빈 문자열·숫자가 아닌 값은 기존과 같이 NULL이다.
+    """
+    numeric = {pl.Int32, pl.Float64}
+    exprs = [
+        pl.col(col).str.strip_chars().cast(pl.Float64, strict=False)
+        .cast(dtype, strict=False).alias(col)
+        for col, dtype in target.items()
+        if col in df.columns and dtype in numeric and df.schema[col] == pl.Utf8
+    ]
+    return df.with_columns(exprs) if exprs else df
+
+
 def normalize_categoricals(df: pl.DataFrame) -> pl.DataFrame:
     """Categorical → Utf8, 문자열 시각 → Datetime (§10.4).
 
@@ -290,6 +351,9 @@ def normalize_schema(df: pl.DataFrame) -> pl.DataFrame:
     `scan_parquet`로 한꺼번에 읽기 때문에 파일마다 컬럼이 다르면 적재가 깨진다.
     """
     target = _target_dtypes()
+    # getData가 SQL의 소문자 레이블을 대문자로 돌려도 값이 NULL 열로 바뀌지
+    # 않게, 타입 변환보다 먼저 키 이름을 표준화한다.
+    df = canonicalize_schema_columns(df, target)
 
     cat = [c for c, t in zip(df.columns, df.dtypes)
            if t in (pl.Categorical, pl.Enum)]
@@ -302,6 +366,7 @@ def normalize_schema(df: pl.DataFrame) -> pl.DataFrame:
     if parse:
         df = df.with_columns(parse)
 
+    df = _coerce_numeric_strings(df, target)
     df = df.cast({c: dt for c, dt in target.items() if c in df.columns},
                  strict=False)
 

@@ -17,7 +17,8 @@ import pytest
 
 from etreport.config.catalog import Catalog, ColumnInfo
 from etreport.config.settings import Condition
-from etreport.data import extractor
+from etreport.data import db, extractor, loader
+from etreport.model.state import AppState
 
 TARGET = extractor._target_dtypes()
 
@@ -87,6 +88,63 @@ def test_missing_columns_are_filled_so_chunks_share_a_schema():
     assert out.columns == list(TARGET)
     assert out.schema["temperature"] == TARGET["temperature"]
     assert out["step_seq"].null_count() == 2
+
+
+def test_getdata_uppercase_decimal_step_seq_survives_to_duckdb_and_analysis(
+        tmp_path, monkeypatch, appdata):
+    """실제 getData 표기(`STEP_SEQ='1.0'`)는 NULL seq로 바뀌면 안 된다.
+
+    DuckDB에는 seq별 두 물리 행이 남아야 하고, 분석용 프레임에서만 seq를
+    무시해 서로 다른 item을 한 측정점으로 조합해야 한다. 이 조합이 깨지면
+    summary와 scatter 모두 빈 값/점이 된다.
+    """
+    raw = pl.DataFrame({
+        "LINE_ID": ["L1", "L1"],
+        "ROOT_LOT_ID": ["PA100", "PA100"],
+        "WAFER_ID": ["01", "01"],
+        "CHIP_X_POS": ["3.0", "3.0"],
+        "CHIP_Y_POS": ["4.0", "4.0"],
+        "TEMPERATURE": ["25.0", "25.0"],
+        "STEP_ID": ["M2", "M2"],
+        "STEP_SEQ": ["1.0", "2.0"],
+        "TOTAL_SITE_CNT": ["9.0", "9.0"],
+        "TKOUT_TIME": ["2026-08-04 09:00:00", "2026-08-04 09:05:00"],
+        "ITEM_ID": ["Vt", "Ioff"],
+        "ET_VALUE": ["0.42", "1.5e-9"],
+    })
+    monkeypatch.setattr(extractor, "_fetch", lambda _sql: raw)
+    cat = Catalog()
+    cat.columns = [ColumnInfo("line_id", "STRING"),
+                   ColumnInfo("tkout_time", "TIMESTAMP")]
+    files = extractor.extract_to_parquet(
+        [Condition("line_id", "L1", required=True)],
+        date(2026, 8, 4), date(2026, 8, 4), cat, tmp_path)
+
+    staged = pl.read_parquet(files[0])
+    assert staged["step_seq"].to_list() == [1, 2]
+    assert staged["step_seq"].null_count() == 0
+
+    db_path = tmp_path / "et.duckdb"
+    store = db.Store(db_path)
+    try:
+        assert db.pivot_and_load(store, files) == 2
+    finally:
+        store.close()
+
+    con = __import__("duckdb").connect(str(db_path), read_only=True)
+    try:
+        stored = con.execute(
+            'SELECT step_seq, "Vt", "Ioff" FROM et_data ORDER BY step_seq').fetchall()
+    finally:
+        con.close()
+    assert stored == [(1, 0.42, None), (2, None, 1.5e-9)]
+
+    state = AppState()
+    loader.load_state(state, str(db_path))
+    assert state.data.height == 1                 # 분석에서만 step_seq를 무시
+    point = state.data.row(0, named=True)
+    assert point["Vt"] == pytest.approx(0.42)
+    assert point["Ioff"] == pytest.approx(1.5e-9)
 
 
 def test_extract_writes_chunks_that_scan_together(tmp_path, monkeypatch):
