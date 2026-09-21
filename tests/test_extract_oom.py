@@ -47,6 +47,15 @@ def test_oom_stops_unscheduled_units(tmp_path, monkeypatch):
     assert calls == ["fetch"]
 
 
+def test_worker_cap_follows_the_available_cores():
+    """4개 고정이면 16코어 PC가 4개만 쓴다 — 상한은 가용 코어의 60%다."""
+    assert [extractor.plan_cpu_workers(n) for n in (1, 2, 4, 8, 16, 32)] \
+        == [1, 1, 2, 5, 10, 19]
+    assert extractor.plan_cpu_workers(64, ratio=1.0) == 64
+    assert extractor.plan_cpu_workers() == extractor.N_WORKERS
+    assert extractor.available_cpus() >= 1
+
+
 def test_plan_workers_has_a_safe_lower_bound():
     assert extractor.plan_workers(100, 10_000) == 1
     assert extractor.plan_workers(None, None) == extractor.N_WORKERS

@@ -1,4 +1,4 @@
-"""Impala 추출 — 청크 분할 → 4워커 병렬 → long parquet(명시 스키마).
+"""Impala 추출 — 청크 분할 → 병렬(가용 코어의 60%) → long parquet(명시 스키마).
 
 bigdataquery(bdq)는 스레드 안전 확인됨. 청크는 (기간×lot) greedy binning으로
 비슷한 크기가 되도록 나누고, 실패 청크는 자동 재시도한다.
@@ -21,13 +21,43 @@ import pyarrow as pa
 
 from etreport.config.catalog import Catalog
 from etreport.config.settings import Condition
-from etreport.data.querybuilder import ITEM_ID_CHUNK, build_extract_sql
+from etreport.data.querybuilder import (
+    ITEM_ID_CHUNK,
+    build_date_probe_sql,
+    build_extract_sql,
+)
 from etreport.paths import STAGING_KEEP_DAYS
 
 log = logging.getLogger(__name__)
 
-N_WORKERS = 4
+#: 추출 병렬도 상한을 **가용 CPU의 몇 할로 잡을지**. 전부 쓰지 않는 이유는
+#: 추출이 도는 동안에도 같은 PC에서 Excel COM과 화면이 돌아야 하기 때문이다.
+WORKER_CPU_RATIO = 0.60
 RETRY = 2
+
+
+def available_cpus() -> int:
+    """이 프로세스가 실제로 쓸 수 있는 코어 수. 못 읽으면 1로 본다.
+
+    `os.cpu_count()`는 컨테이너·affinity 제한을 모른다 — 있으면 affinity를
+    먼저 본다(리눅스/WSL). 사내 Windows PC에서는 둘이 같은 값이다.
+    """
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        return max(1, os.cpu_count() or 1)
+
+
+def plan_cpu_workers(cpus: int | None = None,
+                     ratio: float = WORKER_CPU_RATIO) -> int:
+    """워커 상한 = 가용 코어 × 비율. 최소 1 — 1코어 PC에서도 추출은 돈다."""
+    n = available_cpus() if cpus is None else max(1, int(cpus))
+    return max(1, round(n * ratio))
+
+
+#: 동시에 띄우는 조회 수의 **상한**. 실제 병렬도는 첫 청크를 실측한 뒤
+#: `plan_workers()`가 메모리를 보고 이 값 이하로 다시 정한다.
+N_WORKERS = plan_cpu_workers()
 
 #: 한 실행 단위가 한 번에 들고 올 행 수의 예산. 넘으면 **다음 단위부터** item
 #: 그룹을 더 잘게 쪼갠다(`plan_group_size`). 실측 규모(20만행/일 · item 1000)는
