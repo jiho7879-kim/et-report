@@ -97,6 +97,7 @@ myenv/bin/ruff check --fix .                        # 안전한 것만 자동 �
 | `test_chunk_plan.py` | **§4.2·§10.10** 기간×item 그룹 청크 · 진행 라벨 · 미리보기 |
 | `test_dock_and_samples.py` | **§5.1·§11.4·§3.4·§14** REPORT 문구·예시 파일·붙여넣기·배정 lot |
 | `test_db_buckets.py` | 버킷 수가 저장 결과를 바꾸지 않는다는 불변식(예전 DB 호환) |
+| `test_cond_filter.py` | **측정 조건 필터** — 빈 조건=예전 그대로 · 로딩이 좁힌다 · 목록은 좁히기 전 기준 · 지연 계산 |
 | `test_analysis_core.py` | 축 범위 ×1.2 · 로그 패턴 · wafer 집계 · 자릿수 |
 | `test_review_fixes.py` | 코드 리뷰에서 고친 것들의 회귀(업데이트 가드·Figure 누수·연결·복사 값…) |
 | `test_theme.py` | **시각 토큰 계약** — 치환 누락·WCAG AA 대비·QSS가 덮는 범위 |
@@ -194,6 +195,7 @@ COM이 계정에 묶여 있어 로그인 없이 돌리면 조용히 빈 결과�
 | 축 범위·로그 판정 | `render/ranges.py` — SPEC∪데이터를 중심 기준 ×1.2 (로그 축이면 ×1.2도 로그 공간에서) |
 | boxplot x축 후보·값 | `model/categories.py` — `lot+wafer`(가상)·lot·wafer·gid·step·temp·site + tracking/계측 컬럼 |
 | plot 종류 목록 | `model/specs.py: PLOT_TYPES` — 화면 콤보와 템플릿 `Type` 열이 같은 목록을 본다 |
+| 분석 범위(step·site·temp) | `model/conditions.py` — 좁히기는 `loader.load_state` 한 곳 |
 | 그림·표에서 뺄 점 | `model/state.py: AppState.hidden()` = 손으로 찍은 제외 ∪ 이상치 필터 |
 | 이상치 판정 | `model/outliers.py` — Q1−k·IQR / Q3+k·IQR, 기본은 `(step, temp)`별 |
 | 조회 조건 기본값 | `data/lotcontext.py` — 분석 DB의 line·process·part + ET tkout 기준 180일 |
@@ -301,7 +303,7 @@ UI 구조: 분석 화면은 **왼쪽 레일 + 탭 + 오른쪽 인스펙터 + 하
 
 | 자리 | 무엇이 들어가나 | 코드 |
 |---|---|---|
-| 왼쪽 레일 | **무엇을 보고 있나** — DB·템플릿·리포메터·lot·이상치·추가 소스 | `ui/source_rail.py`(`SourceRail`) |
+| 왼쪽 레일 | **무엇을 보고 있나** — DB·템플릿·리포메터·lot·측정 조건·이상치·추가 소스 | `ui/source_rail.py`(`SourceRail`) |
 | 가운데 탭 | 측정면 하나 — 캔버스·표·슬라이드 | `ui/tabs/`(explore·summary·report) |
 | 오른쪽 인스펙터 | **그것을 어떻게 보일까** — 축·집계·슬롯·그룹·보기 | `ui/inspector.py` |
 | 하단 액션바 | 왼쪽 끝=주 동작, 가운데=상태, 오른쪽 끝=결과 꺼내기 | `ui/actionbar.py` |
@@ -381,6 +383,31 @@ plot 종류는 `scatter · box · trend` 셋이고 목록은 `model/specs.PLOT_T
 상자가 하나씩 생긴다) — `choices()`와 `is_category()`가 같은 기준을 써야 한다.
 상자는 범주 자리마다 **그 자리에 값이 있는 그룹끼리만** 폭을 나눈다: 전체 그룹
 수로 나누면 그룹과 범주가 1:1일 때 상자가 눈금에서 비켜 그려진다.
+
+### 측정 조건 필터 (step · site · temp)
+
+**표·plot이 무엇으로 만들어지는가**를 정하는 값이라 왼쪽 레일 `[측정 조건]`
+절에 있다(`model/conditions.py`). 그룹 편집 창 안의 같은 이름 4단 필터와
+헷갈리지 말 것 — 그쪽은 *배정 범위*(같은 wafer라도 step·온도가 다르면 다른
+측정점, §9.1)이고 이쪽은 *분석 범위*다. 예전에는 분석 범위가 아예 없어서,
+조건을 좁혀 보려면 요약 표 화면에서는 보이지도 않는 창을 열어야 하는 것처럼
+보였다("결과가 만들어지기 전에 조회 조건을 정할 자리가 없다").
+
+- **좁히는 곳은 `loader.load_state` 하나다.** 좁힌 결과가 곧 `state.data`라
+  표·plot·PPT·복사가 저마다 필터를 기억할 필요가 없다. `active()`·
+  `hidden()`에 손대지 않은 이유이기도 하다 — 거기 넣으면 제외 점처럼 회색
+  심볼로 남는데, 범위 밖 측정은 '제외한 점'이 아니라 '보지 않는 점'이다.
+- **빈 값 = 좁히지 않음**(lot 선택 §9.2와 같은 관용구). 고르지 않은 상태에서는
+  프레임이 **객체까지 그대로**다.
+- **콤보 목록은 좁히기 전 프레임으로 만든다**(`state.cond_choices`). 좁힌 뒤에
+  만들면 한 번 고른 값 말고는 목록에서 사라져 되돌릴 수 없다. [적용] 전에는
+  `loader.cond_index()`가 DB에서 가볍게 읽어 채운다(lot 목록과 같은 관용구).
+- **비교는 문자열로만** 한다. temp는 읽는 시점에 5단위로 보정되는데 DB 타입이
+  int인지 double인지에 따라 `25`·`25.0`으로 갈린다 — 양쪽을 같은 규칙으로
+  Utf8에 태워야 목록에 보이는 값과 걸리는 값이 일치한다. 화면 글자만
+  `conditions.pretty()`로 정리하고 **거르는 값은 원본 그대로** 쓴다.
+- 조건을 바꾸면 [적용]이 dirty가 될 뿐 **즉시 다시 읽지 않는다**(지연 계산).
+- 설정은 `AnalysisConfig.cond_step/cond_site/cond_temp`에 남는다.
 
 ### 이상치 필터 (Tukey)
 
