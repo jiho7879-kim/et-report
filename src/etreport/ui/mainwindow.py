@@ -1,6 +1,10 @@
 """메인 창 — 상단 [데이터 | 분석] 전환 + QStackedWidget."""
 from __future__ import annotations
 
+import logging
+import shutil
+from pathlib import Path
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -21,8 +25,11 @@ from etreport import APP_NAME, AUTHOR, __version__
 from etreport.config.catalog import Catalog
 from etreport.config.settings import Settings
 from etreport.model.state import AppState, StateBus
+from etreport.paths import appdata_dir
 from etreport.ui.analysis_ws import AnalysisWorkspace
 from etreport.ui.data_ws import DataWorkspace
+
+log = logging.getLogger(__name__)
 
 HELP_TEXT = """파일 4종은 이렇게 맞물립니다.
 
@@ -60,6 +67,31 @@ SHORTCUT_TEXT = """화면
   Ctrl+Z              제외한 점 되돌리기
   F9                  왼쪽 소스 레일 접기·펴기
   F10                 오른쪽 인스펙터 접기·펴기"""
+
+
+def _copy_out_of_bundle(pdf: Path) -> Path:
+    """번들 안의 PDF를 `%APPDATA%`로 복사해 **그 사본을** 열게 한다.
+
+    단일 exe는 실행할 때마다 `%TEMP%\\_MEIxxxxx`에 데이터를 풀고 끝날 때 지운다.
+    그런데 PDF 뷰어에 번들 안 경로를 그대로 넘기면 뷰어가 그 파일을 붙잡고 있어
+    앱이 끝날 때 폴더를 지우지 못하고 "Failed to remove temporary directory:
+    …\\_MEI000032a82"가 뜬다(업데이트 직후 종료에서 실제로 났다). 사본을 열면
+    앱을 닫아도 설명서가 살아 있어 읽던 자리를 잃지 않는 덤도 따라온다.
+
+    번들이 아닌 곳(소스 트리)에서 찾은 파일은 그대로 연다.
+    """
+    from etreport import resources
+    b = resources.bundle_dir()
+    if b is None or b not in pdf.parents:
+        return pdf
+    out = appdata_dir() / pdf.name
+    try:
+        if not out.exists() or out.stat().st_mtime < pdf.stat().st_mtime:
+            shutil.copy2(pdf, out)
+    except OSError as e:                       # 복사 못 하면 원본이라도 연다
+        log.warning("설명서를 %s로 복사하지 못했습니다: %s", out, e)
+        return pdf
+    return out
 
 
 class MainWindow(QMainWindow):
@@ -316,6 +348,7 @@ class MainWindow(QMainWindow):
                 "개발 트리에서는 다음으로 만들 수 있습니다:\n"
                 "  myenv/bin/python tools/make_manual.py")
             return
+        pdf = _copy_out_of_bundle(pdf)
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(pdf))):
             QMessageBox.information(self, "사용 설명서", str(pdf))
 

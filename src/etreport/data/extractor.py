@@ -335,15 +335,59 @@ def _coerce_numeric_strings(df: pl.DataFrame,
     특히 ``step_seq``가 ``"1.0"`` 형태가 된다. Polars의 String→Int32 직접
     cast는 그 값을 NULL로 바꾸므로 Float64를 한 번 거쳐 고정 타입으로 내린다.
     빈 문자열·숫자가 아닌 값은 기존과 같이 NULL이다.
+
+    **Utf8만 보지 않는다.** Impala DECIMAL이 pandas object로 돌아오면 Arrow
+    변환이 실패해 `pl.from_pandas` 폴백을 타고, 그때 dtype이 `Object`·
+    `Decimal`·`Binary`가 된다. 그 dtype에 `cast(Int32)`를 바로 걸면 예외도
+    경고도 없이 **열 전체가 NULL**이 된다 — step_seq가 통째로 비어 retest
+    파티션이 무너진 사고의 후보다. 숫자로 바로 못 내리는 dtype은 Utf8을 한 번
+    거쳐 같은 경로로 태운다.
     """
     numeric = {pl.Int32, pl.Float64}
-    exprs = [
-        pl.col(col).str.strip_chars().cast(pl.Float64, strict=False)
-        .cast(dtype, strict=False).alias(col)
-        for col, dtype in target.items()
-        if col in df.columns and dtype in numeric and df.schema[col] == pl.Utf8
-    ]
+    #: 이 dtype들은 Float64로 직접 cast해도 안전하다(값이 보존된다).
+    direct = (pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.UInt8, pl.UInt16,
+              pl.UInt32, pl.UInt64, pl.Float32, pl.Float64)
+    exprs = []
+    for col, dtype in target.items():
+        if col not in df.columns or dtype not in numeric:
+            continue
+        have = df.schema[col]
+        if have == dtype or have in direct:
+            continue
+        src = pl.col(col) if have == pl.Utf8 else pl.col(col).cast(pl.Utf8,
+                                                                  strict=False)
+        exprs.append(src.str.strip_chars().cast(pl.Float64, strict=False)
+                     .cast(dtype, strict=False).alias(col))
     return df.with_columns(exprs) if exprs else df
+
+
+#: 비면 조용히 분석을 망가뜨리는 키 컬럼. `step_seq`가 NULL이면 retest 중복
+#: 제거 파티션이 무너지고, `tkout_time`이 NULL이면 key_hash가 뭉친다.
+CRITICAL_KEYS = ("step_seq", "tkout_time", "temperature", "total_site_cnt")
+
+
+def _warn_emptied_keys(before: pl.DataFrame, after: pl.DataFrame) -> None:
+    """정규화가 키 컬럼을 통째로 NULL로 만들었으면 **로그에 이름을 적는다**.
+
+    현장 버그의 유일한 단서가 로그 파일이라(`app.py`), "값은 있는데 DB에는
+    NULL"을 눈으로 확인할 길이 여기밖에 없다. 조용히 넘어가면 DB를 열어 보기
+    전까지 아무도 모르고, 증상은 한참 뒤 산점도가 비는 것으로만 나타난다.
+    """
+    for col in CRITICAL_KEYS:
+        if col not in after.columns or after.height == 0:
+            continue
+        if after[col].null_count() < after.height:
+            continue
+        src = next((c for c in before.columns
+                    if c.strip().casefold() == col), None)
+        if src is None:
+            log.warning("조회 결과에 %s가 없어 NULL로 적재됩니다 "
+                        "— SELECT 절과 테이블 스키마를 확인하세요", col)
+        elif before[src].null_count() < before.height:
+            log.error("%s가 변환 중에 전부 NULL이 됐습니다 (원본 dtype=%s, "
+                      "예: %s) — 타입 변환 규칙을 확인하세요",
+                      col, before.schema[src],
+                      before[src].drop_nulls().head(3).to_list())
 
 
 def normalize_categoricals(df: pl.DataFrame) -> pl.DataFrame:
@@ -381,6 +425,7 @@ def normalize_schema(df: pl.DataFrame) -> pl.DataFrame:
     `scan_parquet`로 한꺼번에 읽기 때문에 파일마다 컬럼이 다르면 적재가 깨진다.
     """
     target = _target_dtypes()
+    raw = df
     # getData가 SQL의 소문자 레이블을 대문자로 돌려도 값이 NULL 열로 바뀌지
     # 않게, 타입 변환보다 먼저 키 이름을 표준화한다.
     df = canonicalize_schema_columns(df, target)
@@ -407,7 +452,9 @@ def normalize_schema(df: pl.DataFrame) -> pl.DataFrame:
                               for c in missing])
     df = correct_temperature(df)
     rest = [c for c in df.columns if c not in target]
-    return df.select([*target, *rest])
+    out = df.select([*target, *rest])
+    _warn_emptied_keys(raw, out)
+    return out
 
 
 def correct_temperature(df: pl.DataFrame,

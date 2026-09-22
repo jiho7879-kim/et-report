@@ -170,6 +170,17 @@ def apply_config(state: AppState, cfg: AnalysisConfig,
         except Exception as e:                       # noqa: BLE001
             rep.warnings.append(f"[실험] 조건 파일을 읽지 못했습니다: {e}")
         tick("실험 조건 완료")
+    elif state.split is not None:
+        # **출처를 떼면 상태에서도 떨어져야 한다.** 예전에는 이 else가 없어서
+        # 한 번 읽은 실험 조건이 설정에서 지워도 `state.split`에 그대로 남았고,
+        # factor 그룹만 화면에 떠 있는 채로 되돌릴 길이 없었다.
+        # 거기서 나온 그룹만 걷어 낸다 — 손으로 만든 그룹(그룹 편집·붙여넣기)은
+        # split의 gid가 아니라서 그대로 살아남는다.
+        from_split = ({g.gid for g in state.split.styles_for(state.factors)}
+                      if state.factors else set())
+        state.groups = [g for g in state.groups if g.gid not in from_split]
+        state.split, state.factors = None, []
+        rep.lines.append("실험 조건  연결 해제")
 
     # 4) DuckDB -----------------------------------------------
     # 측정 조건 필터는 **DB를 읽기 전에** 정한다 — 로딩이 그 조건으로 좁힌 프레임을

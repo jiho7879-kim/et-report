@@ -26,11 +26,16 @@ class SummaryOptions:
 
 
 def spec_cells(rule) -> list[str]:
-    """규격 하한·상한 셀(§14). 없는 쪽은 빈칸 — 한쪽만 있는 item이 흔하다."""
+    """LSL · Target · USL 셀(§14). 없는 쪽은 빈칸 — 한쪽만 있는 item이 흔하다.
+
+    Target을 **가운데**에 두는 것은 읽는 순서 그대로이기 때문이다 — 하한·목표·
+    상한이 한 줄에 놓이면 값이 어느 쪽으로 치우쳤는지 눈으로 바로 잡힌다.
+    열 이름은 `pptgen.SPEC_LABELS`가 갖는다(순서가 여기와 같아야 한다).
+    """
     if rule is None:
-        return ["", ""]
+        return ["", "", ""]
     return [fmt_value(v) if v is not None else ""
-            for v in (rule.speclow, rule.spechigh)]
+            for v in (rule.speclow, rule.target, rule.spechigh)]
 
 
 # ── 집계 ─────────────────────────────────────────────────────

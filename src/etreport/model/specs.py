@@ -27,12 +27,17 @@ POINT_MODES = ("site", "avg", "med", "std")
 #: plot 종류 — 템플릿의 `Type` 열과 같은 값. **화면 콤보와 템플릿이 같은 목록을
 #: 본다**(둘이 갈리면 템플릿으로 저장했다 다시 열 때 종류가 바뀐다).
 #: table은 표 전용 페이지라 사용자가 고르는 종류가 아니다(pptgen이 따로 만든다).
-PLOT_TYPES = ("scatter", "box", "trend")
+PLOT_TYPES = ("scatter", "box", "bar", "trend")
 PLOT_TYPE_LABELS = {
     "scatter": "산점도",
     "box":     "boxplot (범주별 분포)",
-    "trend":   "기하 trend (W·L)",
+    "bar":     "bar chart (범주별 평균)",
+    "trend":   "W/L Trend",
 }
+
+#: x가 **범주**인 종류 — boxplot과 bar chart는 입력 규칙이 같다(x=나눌 기준,
+#: y=item). 검증·자동완성·렌더러 분기가 전부 이 집합 하나를 본다.
+CAT_PLOTS = ("box", "bar")
 
 GEOM_COLUMNS = ("W", "L")   # trend chart X축 식별자 — 리포메터 WIDTH/LENGTH 컬럼에 매핑
 

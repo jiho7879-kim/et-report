@@ -172,3 +172,35 @@ def test_extract_writes_chunks_that_scan_together(tmp_path, monkeypatch):
     assert got.schema["tkout_time"] == TARGET["tkout_time"]
     assert got["tkout_time"].null_count() == 0
     assert dict(got.schema) == TARGET
+
+
+# ── step_seq가 통째로 NULL이 되는 경로 ───────────────────────
+def test_decimal_step_seq_survives_normalisation():
+    """★ Decimal로 돌아온 step_seq를 NULL로 만들지 않는다.
+
+    Impala DECIMAL이 pandas object로 오면 `pl.from_pandas` 폴백이 Decimal
+    dtype을 만든다. 예전 코드는 Utf8만 거쳐 보냈기 때문에 그 열에 곧바로
+    `cast(Int32)`가 걸려 **예외 없이 전부 NULL**이 됐다 — DuckDB의 step_seq가
+    비고, retest 중복 제거 파티션이 무너져 seq가 다른 item이 사라졌다.
+    """
+    from decimal import Decimal
+
+    df = pl.DataFrame({
+        "root_lot_id": ["PA1", "PA1"],
+        "wafer_id": ["01", "01"],
+        "step_seq": pl.Series([Decimal("1"), Decimal("2")],
+                              dtype=pl.Decimal(precision=8, scale=0)),
+        "item_id": ["Vt", "Ioff"],
+        "et_value": [0.4, 1e-9],
+    })
+    got = extractor.normalize_schema(df)
+    assert got["step_seq"].to_list() == [1, 2]
+
+
+def test_empty_key_column_is_logged(caplog):
+    """값이 있었는데 NULL이 되면 **로그에 이름이 남는다** — 현장의 유일한 단서."""
+    df = pl.DataFrame({"root_lot_id": ["PA1"], "step_seq": ["x"],
+                       "item_id": ["Vt"], "et_value": [0.4]})
+    with caplog.at_level("ERROR"):
+        extractor.normalize_schema(df)
+    assert any("step_seq" in r.getMessage() for r in caplog.records)

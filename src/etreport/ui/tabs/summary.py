@@ -109,9 +109,9 @@ class SummaryTab(StaleMixin, QWidget):
         바꾸므로 오른쪽이다(설계 §1 규칙 1)."""
         sec = ChromeSection("표")
         self.agg = QComboBox()
-        self.agg.addItems(["평균", "산포 (wafer 내)", "그룹별 평균",
+        self.agg.addItems(["평균", "Std (wafer 내)", "그룹별 평균",
                            "그룹별 wafer"])
-        self.agg.setToolTip("평균·산포는 wafer마다 한 열,\n"
+        self.agg.setToolTip("평균·Std는 wafer마다 한 열,\n"
                             "그룹별 평균은 그룹마다 한 열,\n"
                             "그룹별 wafer는 wafer 열을 그룹으로 묶어 정렬합니다.")
         on_combo(self.agg, self.mark_stale)

@@ -263,6 +263,12 @@ def load_state(state: AppState, db_path: str, table: str | None = None,
         raise FileNotFoundError(f"파일이 없습니다: {db_path}")
 
     close_store(state)                              # 이전 연결부터 정리
+    # **옛 프레임부터 놓는다.** 새 결과를 만드는 동안 이전 lot의 프레임과 그
+    # 파생 캐시(active·hidden)가 함께 살아 있으면 피크가 두 배가 된다 — lot을
+    # 바꿔 [적용]할 때만 간헐적으로 OOM이 나던 이유다. 조회가 실패하면 예전
+    # lot의 데이터가 새 설정 이름표를 달고 남는 것보다 비어 있는 편이 낫다.
+    state.data = None
+    state._active_cache = state._hidden_cache = None
     # 연결은 읽는 동안만 연다(readonly_query 참조). 열어 두면 조회 캐시가
     # 화면 수명만큼 남아 이후 모든 DuckDB 접근이 OOM이 된다.
     with readonly_query(db_path) as con:

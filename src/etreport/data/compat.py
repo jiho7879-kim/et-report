@@ -327,17 +327,19 @@ def select_sql(p: TableProfile, dedup_latest: bool = True,
                 f"PIVOT src ON item_id USING any_value(value) GROUP BY {gcols}")
 
     items = [p.numeric_expr(c) for c in p.items]
-    dedup = ""
-    if dedup_latest and "time" in p.roles and lot and waf:
+    has_time = dedup_latest and "time" in p.roles and lot and waf
+    rank = ""
+    if has_time:
         keys = [p.roles[r] for r in ("x", "y", "temp", "step", "site", "seq")
                 if r in p.roles]
         part = ", ".join(f'"{c}"' for c in [lot, waf, *keys])
-        dedup = (f' QUALIFY row_number() OVER (PARTITION BY {part} '
-                 f'ORDER BY "{p.roles["time"]}" DESC) = 1')
+        rank = (f'row_number() OVER (PARTITION BY {part} '
+                f'ORDER BY "{p.roles["time"]}" DESC)')
 
     if not merge:
         sel = ", ".join([f"{key} AS key", lot_sel, waf_sel, "'' AS gid",
                          *ctx_select(p), *items])
+        dedup = f" QUALIFY {rank} = 1" if rank else ""
         return f'SELECT {sel} FROM "{p.table}"{where}{dedup}'
 
     temp_col = p.roles.get("temp")
@@ -345,14 +347,29 @@ def select_sql(p: TableProfile, dedup_latest: bool = True,
     mc_sel = [f'{temp_expr(c)} AS "{c}"' if c == temp_col else f'"{c}"'
               for c in merge_cols(p)]
     mc = [f'"{c}"' for c in merge_cols(p)]
-    inner = (f'SELECT {", ".join([f"{key} AS key", lot_sel, waf_sel, *mc_sel, *items])} '
-             f'FROM "{p.table}"{where}{dedup}')
+    # **병합 경로에서는 retest를 QUALIFY로 지우지 않는다.** 파티션에 step_seq가
+    # 들어 있어도 그 값이 NULL이면(= 적재 당시 seq를 못 받아 온 DB) seq가 다른
+    # 두 행이 한 파티션에 들어가 늦은 쪽만 남고 **이른 쪽 item이 통째로
+    # 사라진다** — x는 있는데 y가 없어 산점도도 요약 표도 빈다. 대신 값은
+    # `arg_max(item, 시각)`으로 뽑는다: item마다 **NULL이 아닌 값 중 가장 늦은
+    # 것**을 고르므로 retest(같은 item 재측정 → 최신 값)와 seq 분산(서로 다른
+    # item → 한 행에 모임)이 같은 식 하나로 풀린다.
+    inner_sel = [f"{key} AS key", lot_sel, waf_sel, *mc_sel, *items]
+    if has_time:
+        inner_sel.append(f"{rank} AS __rn")
+        inner_sel.append(f'"{p.roles["time"]}" AS __t')
+    inner = f'SELECT {", ".join(inner_sel)} FROM "{p.table}"{where}'
     # step·temp·site는 병합 그룹 키이므로 집계 없이 그대로 뽑을 수 있다
     ctx = [f'"{p.roles[r]}" AS {r}' if r in p.roles else f"NULL AS {r}"
            for r in CTX_ROLES]
     # 바깥에서는 **이름만** 쓴다 — 안쪽에서 이미 TRY_CAST가 걸려 별칭이 붙었다.
     names = [f'"{c}"' for c in p.items]
-    outer = ", ".join(["min(key) AS key", "lot", "wafer", "'' AS gid", *ctx,
-                       *[f"any_value({c}) AS {c}" for c in names]])
+    # key는 예전과 같은 집합(= seq마다 최신 행)의 최솟값이어야 한다 — 제외
+    # 포인트 사이드카가 이 값으로 저장돼 있어서, 바뀌면 제외 이력이 사라진다.
+    key_agg = "min(key) FILTER (WHERE __rn = 1) AS key" if has_time \
+        else "min(key) AS key"
+    val_agg = [f"arg_max({c}, __t) AS {c}" for c in names] if has_time \
+        else [f"any_value({c}) AS {c}" for c in names]
+    outer = ", ".join([key_agg, "lot", "wafer", "'' AS gid", *ctx, *val_agg])
     return (f"SELECT {outer} FROM ({inner}) "
             f'GROUP BY {", ".join(["lot", "wafer", *mc])}')

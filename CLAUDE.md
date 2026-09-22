@@ -372,9 +372,15 @@ Ctrl+Enter는 보고 있는 탭의 `stale_button_attr` 버튼을 누른다 — �
 
 ### boxplot과 plot 종류
 
-plot 종류는 `scatter · box · trend` 셋이고 목록은 `model/specs.PLOT_TYPES`
+plot 종류는 `scatter · box · bar · trend` 넷이고 목록은 `model/specs.PLOT_TYPES`
 하나다 — 템플릿의 `Type` 열, 탐색 탭 [종류] 콤보, 리포트 슬롯 인스펙터가 같은
 목록을 본다(갈리면 템플릿으로 저장했다 다시 열 때 종류가 바뀐다).
+
+**box와 bar는 입력 규칙이 같다** — x=나눌 기준, y=item. 그 짝은
+`specs.CAT_PLOTS` 하나가 갖고 검증(`templates.py`)·자동완성(explore·report)·
+렌더러 분기가 전부 그것을 본다. 그리는 것도 `_render_box` 한 함수라 범주 정렬·
+자리 나누기·y축·규격선·범례가 한 벌이다(bar는 평균 막대 + std(n−1) 오차막대).
+`trend`의 화면 이름은 **W/L Trend**다.
 
 **boxplot의 x는 item이 아니라 범주다.** 무엇을 범주로 쓸 수 있는지와 값 만드는
 법은 `model/categories.py`가 독점한다 — `lot+wafer`는 DB에 없는 **가상 컬럼**
@@ -538,13 +544,23 @@ different configuration`), `duckdb.connect(..., read_only=True)`를 직접 부�
 - **`step_seq`만 다른 행은 읽으면서 한 측정점으로 합친다**(`compat.merges_seq`·
   `MERGE_ROLES`). x가 `step_seq=1`·y가 `2`에 기록되는 경우가 흔한데, 합치지
   않으면 x·y가 함께 있는 행이 0개가 되어 산점도가 통째로 빈다. 그룹 키는
-  `lot·wafer + die 좌표·온도·step_id·site_cnt`이고 각 item은 `any_value`(NULL이
-  아닌 값). **step_id·온도·site_cnt가 다르면 다른 측정점이므로 합치지 않는다.**
-  retest QUALIFY 파티션에는 반드시 `step_seq`를 포함한다 — 빼면 seq가 다른
-  정상 행이 '구버전'으로 지워진다. seq 컬럼이 없는 스키마는 병합하지 않는다
-  (키가 부족한 채로 그룹핑하면 wafer 하나가 한 점으로 뭉갠다).
-  합친 행의 `key`는 구성 행 key의 최솟값 — seq가 하나뿐인 DB에서는 예전 값과
-  같아서 제외 사이드카가 그대로 유지된다. 규칙은 `tests/test_step_seq_merge.py`.
+  `lot·wafer + die 좌표·온도·step_id·site_cnt`이고, 각 item 값은
+  **`arg_max(item, tkout_time)`** — NULL이 아닌 값 중 가장 늦게 찍힌 것이다.
+  **step_id·온도·site_cnt가 다르면 다른 측정점이므로 합치지 않는다.**
+  seq 컬럼이 없는 스키마는 병합하지 않는다(키가 부족한 채로 그룹핑하면 wafer
+  하나가 한 점으로 뭉갠다).
+
+  **병합 경로에서는 retest를 QUALIFY로 지우지 않는다.** 파티션에 `step_seq`를
+  넣어도 그 값이 `NULL`이면(= 적재 당시 seq를 못 받아 온 DB) seq가 다른 두 행이
+  한 파티션에 들어가 늦은 쪽만 남고 **이른 쪽 item이 통째로 사라졌다** — x는
+  있는데 y가 없어 산점도도 요약 표도 비는, 열 번 되풀이된 그 증상의 원인이다.
+  `arg_max` 하나가 retest(같은 item 재측정 → 최신 값)와 seq 분산(서로 다른
+  item → 한 행에 모임)을 같은 식으로 푼다. 병합하지 않는 경로는 예전처럼
+  QUALIFY로 지운다.
+
+  합친 행의 `key`는 `min(key) FILTER (WHERE __rn = 1)` — 예전과 같은 집합
+  (seq마다 최신 행)의 최솟값이라 제외 사이드카가 그대로 유지된다. 규칙은
+  `tests/test_step_seq_merge.py`.
 - 제외 포인트는 DB에 쓰지 않고 `data/exclusions.py`가
   `%APPDATA%\ETReport\exclusions\<DB>_<해시>.json` 사이드카에 DB 경로별로 저장한다.
 - 분석용 wide 프레임의 예약 컬럼은 `key, lot, wafer, gid, step, temp, site`이고

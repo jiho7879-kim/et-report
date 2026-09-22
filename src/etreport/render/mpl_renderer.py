@@ -9,6 +9,7 @@ pyplot은 쓰지 않는다(Figure를 직접 생성) — 전역 매니저에 쌓�
 from __future__ import annotations
 
 import logging
+from statistics import fmean, stdev
 
 import matplotlib
 
@@ -21,7 +22,7 @@ from matplotlib.ticker import MaxNLocator
 from etreport import fonts
 from etreport.data.reformatter import Reformatter
 from etreport.model.aggregate import group_representatives, wafer_stats
-from etreport.model.specs import GroupStyle, PlotSpec
+from etreport.model.specs import CAT_PLOTS, GroupStyle, PlotSpec
 from etreport.render.ranges import compute_range, resolve_axes, resolve_log
 from etreport.ui.theme import TOKENS
 
@@ -199,7 +200,7 @@ def render(spec: PlotSpec,
         return _render_trend(spec, data, styles, rf, log_patterns, figsize,
                              excluded=excluded, compact=compact, fig=fig,
                              lot_split=lot_split, legend=legend)
-    if spec.type == "box":
+    if spec.type in CAT_PLOTS:
         return _render_box(spec, data, styles, rf, log_patterns, figsize,
                            excluded=excluded, compact=compact, fig=fig,
                            legend=legend)
@@ -532,7 +533,11 @@ def _render_box(spec: PlotSpec,
                 compact: bool = False,
                 fig: Figure | None = None,
                 legend: bool = True) -> Figure:
-    """boxplot — x는 **범주**, y는 item 값.
+    """boxplot · bar chart — x는 **범주**, y는 item 값.
+
+    둘은 **입력 규칙도 축도 같고 그리는 모양만 다르다**(상자 ↔ 평균 막대). 그래서
+    범주 정렬·자리 나누기·y축·규격선·범례를 한 벌로 두고 `spec.type`에서만
+    갈린다 — 따로 쓰면 "boxplot은 눈금에 맞는데 bar는 비켜 있다" 식으로 어긋난다.
 
     산점도와 다른 점은 x가 데이터 컬럼(숫자)이 아니라 나눌 기준이라는 것뿐이다.
     무엇으로 나눌 수 있는지와 값을 만드는 법은 `model/categories.py`가 갖는다 —
@@ -603,6 +608,17 @@ def _render_box(spec: PlotSpec,
         if not vals:
             continue
         color = REF_COLOR if st.ref else st.color
+        if spec.type == "bar":
+            # 막대는 **평균**, 오차막대는 표본표준편차(n-1) — 화면 요약 표와 같은
+            # 뜻이다. 점이 하나뿐인 자리는 오차막대를 그리지 않는다.
+            ax.bar(pos, [fmean(v) for v in vals], width=width * 0.82,
+                   color=color, alpha=0.45, edgecolor=color, linewidth=1.0,
+                   zorder=2,
+                   yerr=[stdev(v) if len(v) > 1 else 0.0 for v in vals],
+                   capsize=2 if compact else 3,
+                   error_kw={"ecolor": TOKENS["TEXT"], "elinewidth": 0.8})
+            ax.plot([], [], color=color, linewidth=6, alpha=0.55, label=st.name)
+            continue
         bp = ax.boxplot(vals, positions=pos, widths=width * 0.82,
                         whis=BOX_WHIS, patch_artist=True, manage_ticks=False,
                         flierprops={"marker": ".", "markersize": 3,

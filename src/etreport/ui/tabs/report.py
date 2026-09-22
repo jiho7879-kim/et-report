@@ -187,14 +187,14 @@ class ReportTab(StaleMixin, QWidget):
         self.cmb_type.setToolTip(
             "산점도 — X·Y 모두 item\n"
             "boxplot — X는 나눌 기준(lot+wafer·그룹·온도·fab tracking 컬럼…)\n"
-            "기하 trend — X는 W 또는 L")
+            "W/L Trend — X는 W 또는 L")
         on_combo(self.cmb_type, self._type_changed)
         self.slot_card.body.addWidget(self.cmb_type)
         self.slot_card.body.addWidget(row("X", self.ed_sx, stretch_at=1))
         self.slot_card.body.addWidget(row("Y", self.ed_sy, stretch_at=1))
         self.cmb_point = QComboBox()
         self.cmb_point.addItems(["점: 측정점 그대로", "점: wafer 평균",
-                                 "점: wafer 중앙값", "점: wafer 산포(σ)"])
+                                 "점: wafer 중앙값", "점: wafer Std (σ)"])
         self.cmb_point.setToolTip("이 슬롯의 점을 무엇으로 찍을지 — 템플릿 Mode 열")
         on_combo(self.cmb_point, self._slot_edited)
         self.slot_card.body.addWidget(self.cmb_point)
@@ -253,9 +253,10 @@ class ReportTab(StaleMixin, QWidget):
     def _x_items(self) -> list[str]:
         """X 자동완성 — 종류에 따라 뜻이 다르다(탐색 탭과 같은 규칙)."""
         from etreport.model import categories as cat
+        from etreport.model.specs import CAT_PLOTS
         st = self.state
         typ = self.cmb_type.currentData() or "scatter"
-        if typ == "box":
+        if typ in CAT_PLOTS:
             return cat.choices(st.data, st.track_columns + st.met_columns)
         if typ == "trend":
             return list(GEOM_COLUMNS)

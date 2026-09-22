@@ -76,7 +76,9 @@ def test_no_lots_means_identical_sql(multi_db):
     assert compat.select_sql(p, lots=None) == base
     assert compat.select_sql(p, lots=[]) == base
     assert compat.wafer_index_sql(p) == compat.wafer_index_sql(p, None)
-    assert "WHERE" not in base.upper().replace("WHERE ROW", "")
+    # lot 필터의 WHERE만 본다 — 병합 경로의 `FILTER (WHERE __rn = 1)`은 별개다
+    assert "WHERE" not in (base.upper().replace("WHERE ROW", "")
+                           .replace("FILTER (WHERE __RN = 1)", ""))
 
 
 @pytest.mark.parametrize("is_long,merge", [(True, True), (False, False),

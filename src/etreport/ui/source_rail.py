@@ -341,7 +341,7 @@ class SourceRail(QWidget):
         self.cmb_tukey_k.addItems([f"{k:g}" for k in outliers.PRESET_K])
         self.cmb_tukey_k.setToolTip(
             "IQR의 몇 배 밖을 이상치로 볼지. 3.0·4.5가 흔히 쓰는 값입니다.\n"
-            "상자그림 수염(1.5)보다 크게 잡습니다 — 여기서 하는 일은 표시가\n"
+            "boxplot 수염(1.5)보다 크게 잡습니다 — 여기서 하는 일은 표시가\n"
             "아니라 '버리기'라, 1.5로 거르면 정상 산포의 꼬리까지 잘립니다.")
         self.cmb_tukey_k.currentTextChanged.connect(
             lambda _t: self.owner._tukey_changed())

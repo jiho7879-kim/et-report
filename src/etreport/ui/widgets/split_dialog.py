@@ -61,6 +61,7 @@ class SplitSourceDialog(QDialog):
         self.setWindowTitle("실험 조건 불러오기")
         self.resize(720, 620)
         self.matrix = None
+        self.cleared = False
         self.path, self.text = path, text
         self.baseline = baseline or BASELINE_DEFAULT
         # 기준(REF)으로 삼을 lot — 정해 두면 step마다 그 lot의 다수 조건이
@@ -104,6 +105,13 @@ class SplitSourceDialog(QDialog):
         v.addWidget(self.preview, 1)
 
         self.bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        # 뗄 자리는 **붙인 자리와 같은 창**에 둔다 — 파일을 고를 곳은 여기뿐인데
+        # 해제만 다른 데 있으면 한 번 연결한 조건을 되돌릴 길이 보이지 않는다.
+        self.btn_clear = self.bb.addButton("연결 해제",
+                                           QDialogButtonBox.ResetRole)
+        self.btn_clear.setToolTip("실험 조건을 떼고 factor 그룹을 되돌립니다")
+        self.btn_clear.setEnabled(bool(path or text))
+        self.btn_clear.clicked.connect(self._clear)
         self.bb.accepted.connect(self.accept)
         self.bb.rejected.connect(self.reject)
         v.addWidget(self.bb)
@@ -120,6 +128,13 @@ class SplitSourceDialog(QDialog):
         self._sync_ok()
 
     # ── 입력 ─────────────────────────────────────────────────
+    def _clear(self) -> None:
+        """출처를 떼고 창을 닫는다 — `cleared`를 보고 부른 쪽이 설정을 비운다."""
+        self.cleared = True
+        self.matrix, self.path, self.text = None, "", ""
+        self.baseline_lot = ""
+        self.accept()
+
     def _from_tracking(self) -> None:
         """fab tracking 조회 창을 연다(기능 A).
 

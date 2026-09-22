@@ -204,8 +204,12 @@ def apply_and_restart(source: Path, kind: str = "") -> None:
         argv = [str(os.getpid()), str(source), str(target), str(exe), str(blog)]
         log.info("업데이트 적용(폴더): %s → %s", source, target)
 
+    # **현재 폴더를 물려주지 않는다.** 자식은 부모의 CWD를 그대로 받는데, 단일
+    # exe는 그 자리가 `%TEMP%\_MEIxxxxx`일 수 있다 — 열려 있는 폴더는 지울 수
+    # 없어서 종료할 때 "Failed to remove temporary directory"가 뜬다.
     subprocess.Popen(
         ["cmd", "/c", str(bat), *argv],
+        cwd=str(update_tmp_dir()),
         creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
         close_fds=True,
     )

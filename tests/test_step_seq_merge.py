@@ -301,3 +301,40 @@ def test_cross_seq_std_groups_without_seq(tmp_path, appdata):
     st = _pipeline(tmp_path, _rf(("Spread", "Std({Id},{Ioff})")))
     exp = statistics.stdev([5.0, 6.0, 7.0, 1.0, 2.0, 3.0])
     assert st.data["Spread"].to_list() == pytest.approx([exp] * 6)
+
+
+# ── step_seq가 NULL로 적재된 DB ───────────────────────────────
+def test_null_seq_still_merges(tmp_path, appdata):
+    """★ step_seq가 **전부 NULL**로 적재된 DB에서도 합쳐져야 한다.
+
+    조회가 seq를 못 받아 오면 DuckDB에는 NULL이 들어간다. 그때 retest 중복
+    제거의 PARTITION에 step_seq를 넣어도 두 행이 **같은 파티션**이 되어, 늦게
+    찍힌 쪽만 남고 먼저 찍힌 item이 통째로 사라졌다 — 산점도도 요약 표도 빈다.
+    값은 `arg_max(item, 시각)`으로 뽑아 item마다 '가장 늦은 non-NULL'을 고른다.
+    """
+    st = _loaded(tmp_path, [
+        {"step_seq": None, "item_id": "Vt", "et_value": 0.42,
+         "tkout_time": datetime(2026, 8, 4, 9, 0)},
+        {"step_seq": None, "item_id": "Ioff", "et_value": 1.5e-9,
+         "tkout_time": datetime(2026, 8, 4, 9, 5)},
+    ])
+    assert st.data.height == 1
+    row = st.data.row(0, named=True)
+    assert row["Vt"] == pytest.approx(0.42)
+    assert row["Ioff"] == pytest.approx(1.5e-9)
+
+
+def test_null_seq_retest_still_keeps_latest(tmp_path, appdata):
+    """seq가 NULL이어도 **같은 item**을 두 번 찍었으면 늦은 값이 이긴다.
+
+    위 병합이 retest 중복 제거를 삼켜 버리지 않았는지 — 둘은 같은 식 하나로
+    풀린다(가장 늦은 non-NULL).
+    """
+    st = _loaded(tmp_path, [
+        {"step_seq": None, "item_id": "Vt", "et_value": 0.10,
+         "tkout_time": datetime(2026, 8, 4, 9, 0)},
+        {"step_seq": None, "item_id": "Vt", "et_value": 0.99,
+         "tkout_time": datetime(2026, 8, 4, 18, 0)},
+    ])
+    assert st.data.height == 1
+    assert st.data["Vt"][0] == pytest.approx(0.99)

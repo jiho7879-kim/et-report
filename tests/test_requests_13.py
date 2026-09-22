@@ -290,7 +290,10 @@ def test_varchar_values_are_read_as_numbers(tmp_path):
     finally:
         con.close()
     assert got.schema["VT_N"].is_numeric()
-    assert 1.5 in got["VT_N"].to_list()
+    # W01의 두 행은 seq만 다른 한 측정점(23.9·25.0 → 둘 다 25)이라 합쳐지고,
+    # 같은 item이 양쪽에 있으면 **늦게 찍힌 값**이 남는다(arg_max, §10.1).
+    # W02는 늦은 행의 'bad'가 NULL이라 이른 행의 1.7이 살아남는다.
+    assert sorted(got["VT_N"].to_list()) == [1.6, 1.7]
 
 
 def test_numeric_db_sql_is_unchanged():
@@ -373,6 +376,32 @@ def test_boxplot_renders_one_box_per_category(demo_state):
     assert ax.patches                       # 상자가 실제로 그려졌다
 
 
+def test_bar_chart_draws_the_mean_of_each_category(demo_state):
+    """bar chart는 boxplot과 **같은 범주·같은 자리**에 평균 막대를 그린다."""
+    from etreport.model.specs import PlotSpec
+    from etreport.render import mpl_renderer as R
+
+    st = demo_state
+    styles = [st.groups[0]]
+    data = {styles[0].gid: st.data.filter(pl.col("gid") == styles[0].gid)}
+    item = next(c for c in st.data.columns if c.startswith("Idsat"))
+    kw = {"title": "t", "x": "temp", "y": item, "mode": "site"}
+    box = R.render(PlotSpec(type="box", **kw), data, styles, st.rf,
+                   st.log_patterns, (6, 4))
+    bar = R.render(PlotSpec(type="bar", **kw), data, styles, st.rf,
+                   st.log_patterns, (6, 4))
+    def labels(f):
+        return [t.get_text() for t in f.axes[0].get_xticklabels()]
+
+    assert labels(bar) == labels(box)          # 축은 한 벌에서 나온다
+
+    df = data[styles[0].gid].drop_nulls(item)
+    want = (df.group_by(pl.col("temp").cast(pl.Utf8))
+              .agg(pl.col(item).mean()).sort("temp"))
+    got = sorted(p.get_height() for p in bar.axes[0].patches)
+    assert got == pytest.approx(sorted(want[item].to_list()))
+
+
 def test_boxplot_survives_an_unknown_category(demo_state):
     """x에 없는 이름을 적어도 죽지 않고 '그릴 값이 없습니다'로 끝난다."""
     from etreport.model.specs import PlotSpec
@@ -389,7 +418,7 @@ def test_plot_types_are_shared_by_template_and_ui():
     """화면 콤보와 템플릿 Type 열이 같은 목록을 봐야 한다(요청 7)."""
     from etreport.model.specs import PLOT_TYPE_LABELS, PLOT_TYPES
 
-    assert PLOT_TYPES == ("scatter", "box", "trend")
+    assert PLOT_TYPES == ("scatter", "box", "bar", "trend")
     assert set(PLOT_TYPE_LABELS) == set(PLOT_TYPES)
 
 
@@ -638,7 +667,8 @@ def test_explore_tab_has_a_plot_type_combo(qapp, demo_state):
 
     tab = ExploreTab(demo_state, StateBus())
     try:
-        assert tab.cmb_type.count() == 3
+        from etreport.model.specs import PLOT_TYPES
+        assert tab.cmb_type.count() == len(PLOT_TYPES)
         tab.cmb_type.setCurrentIndex(1)           # boxplot
         tab._type_changed()
         assert demo_state.explore.type == "box"

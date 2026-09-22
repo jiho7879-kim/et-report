@@ -312,7 +312,7 @@ def test_summary_tab_offers_three_modes(qapp, demo_state):
     tab = SummaryTab(demo_state, StateBus())
     labels = [tab.agg.itemText(i) for i in range(tab.agg.count())]
 
-    assert labels[:3] == ["평균", "산포 (wafer 내)", "그룹별 평균"]
+    assert labels[:3] == ["평균", "Std (wafer 내)", "그룹별 평균"]
     tab.agg.setCurrentIndex(2)
     assert tab.agg_mode() == "gavg" and tab.agg_label() == "그룹별 평균"
     tab.deleteLater()

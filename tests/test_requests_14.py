@@ -254,15 +254,15 @@ def _td(rows, cat_names=("CAT2",)):
 
 def test_spec_columns_sit_between_item_and_wafer():
     """규격은 item 바로 뒤·wafer 앞이다 — 값보다 기준을 먼저 본다. (§14)"""
-    td = _td([{"cats": ["누설"], "item": "Ioff", "spec": ["", "1.0"],
+    td = _td([{"cats": ["누설"], "item": "Ioff", "spec": ["", "0.5", "1.0"],
                "values": [1, 2], "offspec": [False, False]}])
-    assert td.labels() == ["CAT2", "item", "규격 하한", "규격 상한"]
-    assert td.label_values(td.rows[0]) == ["누설", "Ioff", "", "1.0"]
+    assert td.labels() == ["CAT2", "item", "LSL", "Target", "USL"]
+    assert td.label_values(td.rows[0]) == ["누설", "Ioff", "", "0.5", "1.0"]
 
 
 def test_spec_columns_vanish_when_nothing_has_a_spec():
-    """규격이 하나도 없으면 빈 열 두 개로 wafer를 밀어내지 않는다. (§14)"""
-    td = _td([{"cats": ["누설"], "item": "Ioff", "spec": ["", ""],
+    """규격이 하나도 없으면 빈 열로 wafer를 밀어내지 않는다. (§14)"""
+    td = _td([{"cats": ["누설"], "item": "Ioff", "spec": ["", "", ""],
                "values": [1, 2], "offspec": [False, False]}])
     assert td.labels() == ["CAT2", "item"]
     assert td.label_values(td.rows[0]) == ["누설", "Ioff"]
@@ -276,10 +276,10 @@ def test_spec_columns_are_not_merged_vertically():
     """세로 병합은 CAT까지만 — item·규격은 행마다 다르다. (§14)"""
     from etreport.render.pptgen import label_widths_in
 
-    td = _td([{"cats": ["누설"], "item": "Ioff", "spec": ["0.1", "1.0"],
+    td = _td([{"cats": ["누설"], "item": "Ioff", "spec": ["0.1", "0.5", "1.0"],
                "values": [1, 2], "offspec": [False, False]}])
     n_lab, n_spec = len(td.labels()), len(td.spec_labels())
-    assert (n_lab, n_spec) == (4, 2)
+    assert (n_lab, n_spec) == (5, 3)
     assert len(label_widths_in(n_lab, n_spec)) == n_lab   # 폭도 열 수와 맞는다
 
 
@@ -539,3 +539,30 @@ def test_tracking_table_columns_are_step_seq():
     assert wide.columns == ["lot", "wafer", "100", "300"]
     assert wide["100"].to_list() == ["RT_A", "RT_B"]     # PHOTO = reticle_id
     assert wide["300"].to_list() == ["I_LOW", "I_HI"]    # 그 외 = ppid
+
+
+# ── 실험 조건 연결 해제 ────────────────────────────────────────────
+def test_clearing_the_split_source_drops_the_split_and_its_groups(appdata):
+    """출처를 비우고 [적용]하면 실험 조건도 factor 그룹도 함께 떨어진다.
+
+    예전에는 `state.split`이 그대로 남아 "한번 설정하면 계속 남아 있다"가 됐다.
+    손으로 만든 그룹(split에서 나오지 않은 gid)은 살아남아야 한다.
+    """
+    from etreport import demo
+    from etreport.config.settings import AnalysisConfig
+    from etreport.model import session
+    from etreport.model.specs import GroupStyle
+    from etreport.model.state import AppState
+
+    st = AppState()
+    demo.load_demo(st)
+    assert st.split is not None and st.factors
+    mine = GroupStyle(gid="손수", name="손수", color="#000000")
+    st.groups = [*st.groups, mine]
+    n_split = len(st.groups) - 1
+
+    session.apply_config(st, AnalysisConfig(name="빈 설정"))
+    assert st.split is None
+    assert st.factors == []
+    assert st.groups == [mine]                    # split 그룹만 걷힌다
+    assert n_split > 0

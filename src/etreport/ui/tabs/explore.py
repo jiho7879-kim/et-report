@@ -36,6 +36,11 @@ from etreport.ui.widgets.autocomplete import AutoCompleteEdit
 from etreport.ui.widgets.cards import Card, GhostButton, row
 from etreport.ui.widgets.plot_canvas import PlotCanvas
 
+#: boxplot·bar chart 공용 안내 — 입력 규칙이 같아서 문장도 한 벌이다(CAT_PLOTS)
+_CAT_HINT = ("X는 **나눌 기준**입니다 — lot+wafer · 그룹 · 온도 ·\n"
+             "step · fab tracking에서 뽑은 컬럼\n"
+             "Y는 item(쉼표로 여러 개)\n")
+
 
 class ExploreTab(StaleMixin, QWidget):
     stale_button_attr = "btn_draw"
@@ -114,7 +119,7 @@ class ExploreTab(StaleMixin, QWidget):
         self.cmb_type.setToolTip(
             "산점도 — X·Y 모두 item\n"
             "boxplot — X는 나눌 기준(lot+wafer·그룹·온도·fab tracking 컬럼…)\n"
-            "기하 trend — X는 W 또는 L")
+            "W/L Trend — X는 W 또는 L")
         self.cmb_type.setCurrentIndex(
             PLOT_TYPES.index(state.explore.type)
             if state.explore.type in PLOT_TYPES else 0)
@@ -130,10 +135,10 @@ class ExploreTab(StaleMixin, QWidget):
         card.body.addWidget(row("Y", self.ed_y, stretch_at=1))
         self.cmb_point = QComboBox()
         self.cmb_point.addItems(["측정점 그대로", "wafer 평균", "wafer 중앙값",
-                                 "wafer 산포(σ)"])
+                                 "wafer Std (σ)"])
         self.cmb_point.setToolTip(
             "점 하나를 무엇으로 찍을지 고릅니다.\n"
-            "측정점 그대로(site) / wafer별 평균·중앙값·표준편차")
+            "측정점 그대로(site) / wafer별 평균·중앙값·Std")
         self.cmb_point.setCurrentIndex(
             POINT_MODES.index(state.explore.mode)
             if state.explore.mode in POINT_MODES else 0)
@@ -272,8 +277,9 @@ class ExploreTab(StaleMixin, QWidget):
         묻게 된다. 종류를 바꾼 순간 후보도 바뀌어야 한다.
         """
         from etreport.model import categories as cat
+        from etreport.model.specs import CAT_PLOTS
         st = self.state
-        if st.explore.type == "box":
+        if st.explore.type in CAT_PLOTS:
             return cat.choices(st.data, st.track_columns + st.met_columns)
         if st.explore.type == "trend":
             return list(GEOM_COLUMNS)
@@ -292,12 +298,13 @@ class ExploreTab(StaleMixin, QWidget):
         때만 손댄다 — 이미 맞으면 사용자가 적어 둔 값을 건드리지 않는다.
         """
         from etreport.model import categories as cat
+        from etreport.model.specs import CAT_PLOTS
         st = self.state
         typ = self.cmb_type.currentData() or "scatter"
         x = st.explore.x.strip()
         if typ == "trend" and x not in GEOM_COLUMNS:
             st.explore.x = GEOM_COLUMNS[0]
-        elif typ == "box" and not cat.is_category(x, st.data):
+        elif typ in CAT_PLOTS and not cat.is_category(x, st.data):
             st.explore.x = cat.LOT_WAFER
         elif typ == "scatter" and (x in GEOM_COLUMNS
                                    or cat.is_category(x, st.data)):
@@ -315,9 +322,8 @@ class ExploreTab(StaleMixin, QWidget):
         text = {
             "scatter": "쉼표로 여러 xy쌍 → 한 그림에 겹칩니다\n"
                        "X·Y 모두 item(리포메터 ALIAS)입니다\n" + common,
-            "box": "X는 **나눌 기준**입니다 — lot+wafer · 그룹 · 온도 ·\n"
-                   "step · fab tracking에서 뽑은 컬럼\n"
-                   "Y는 item(쉼표로 여러 개)\n" + common,
+            "box": _CAT_HINT + common,
+            "bar": _CAT_HINT + "막대는 평균, 오차막대는 std(n−1)\n" + common,
             "trend": "X는 W 또는 L (리포메터의 WIDTH·LENGTH)\n"
                      "Y에 적은 item들이 기하값 위에 늘어섭니다\n" + common,
         }.get(self.state.explore.type, common)

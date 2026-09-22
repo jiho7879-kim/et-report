@@ -58,13 +58,19 @@ def key(lot: object, wafer: object) -> tuple[str, str]:
 
 
 def map_gids(lots: Iterable[object], wafs: Iterable[object],
-             assign: dict[tuple[str, str], str]) -> list[str]:
+             assign: dict[tuple[str, str], str]) -> pl.Series:
     """(lot, wafer) 열 → gid 열. `assign`은 `key()`로 만든 키를 쓴다.
 
     실험 조건 배정을 프레임에 붙이는 자리가 네 곳(loader·analysis_ws·
     deckbuild·demo)이라 조회 규칙을 여기 한 번만 둔다.
+
+    **dtype을 명시해 Series로 돌려준다.** 리스트로 주면 프레임이 비었을 때
+    (lot 선택·측정 조건으로 0행이 되는 흔한 경우) polars가 dtype을 Null로
+    추론하고, 그 열에 `gid != ""`를 걸면 `series type Null does not have neq
+    operator`로 화면이 죽는다(리포트 탭 showEvent에서 발견).
     """
-    return [assign.get(key(lo, wa), "") for lo, wa in zip(lots, wafs)]
+    return pl.Series([assign.get(key(lo, wa), "") for lo, wa in zip(lots, wafs)],
+                     dtype=pl.Utf8)
 
 
 def index(values: Iterable[object]) -> dict[str, str]:

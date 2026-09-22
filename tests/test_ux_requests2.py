@@ -233,7 +233,7 @@ def test_summary_tab_offers_four_modes(qapp, demo_state):
     tab = SummaryTab(demo_state, StateBus())
     labels = [tab.agg.itemText(i) for i in range(tab.agg.count())]
 
-    assert labels == ["평균", "산포 (wafer 내)", "그룹별 평균", "그룹별 wafer"]
+    assert labels == ["평균", "Std (wafer 내)", "그룹별 평균", "그룹별 wafer"]
     tab.agg.setCurrentIndex(3)
     assert tab.agg_mode() == "gwafer"
     tab.rebuild()                                   # 화면도 그려진다

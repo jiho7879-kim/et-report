@@ -615,7 +615,15 @@ class AnalysisWorkspace(QWidget):
                                 baseline_lot=getattr(c, "split_baseline_lot", ""),
                                 lots=list(self.state.lots_selected),
                                 state=self.state)
-        if dlg.exec() and dlg.matrix is not None:
+        if not dlg.exec():
+            return
+        if dlg.cleared:
+            c.split_path = c.split_text = ""
+            c.split_baseline_lot = ""
+            self._mark_unapplied(
+                "실험 조건을 뗐습니다 — [적용]을 눌러 그룹을 되돌리세요")
+            return
+        if dlg.matrix is not None:
             c.split_path, c.split_text = dlg.path, dlg.text
             c.split_baseline = dlg.baseline
             c.split_baseline_lot = dlg.baseline_lot

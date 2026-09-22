@@ -38,7 +38,8 @@ BASE_H_IN = 7.5
 MARGIN_IN = 0.35
 TITLE_H_IN = 0.62
 LEGEND_H_IN = 0.40        # 페이지 공통 범례 한 줄(§8)
-SPEC_LABELS = ["규격 하한", "규격 상한"]   # 표의 규격 열 이름(§14)
+SPEC_LABELS = ["LSL", "Target", "USL"]   # 표의 규격 열(§14). 현장 표준 약어를
+#: 그대로 쓰고 순서는 읽는 순서대로 — 값은 `export.excel.spec_cells`가 만든다.
 WAFERS_PER_SLIDE = 12         # split 모드
 FONT_MIN = Pt(9)              # 9pt 하한 — 이 아래로 줄이지 않는다(§7.3)
 PLOT_DPI = 220                # plot 이미지 해상도(예전 150) — 확대해도 뭉개지지 않게
@@ -609,7 +610,7 @@ def _factor_slide(prs, layout, top: pl.DataFrame) -> None:
     if suspect:
         name += f"  — lot 효과 의심 {suspect}건"
     td = TableData(name,
-                   [("통계", ["상관 r", "lot 내 r", "그룹차 t", "n"])], rows,
+                   [("통계", ["r", "r (lot 내)", "Welch t", "n"])], rows,
                    cat_names=["계측 인자"])
     _table_slide(prs, layout, td)
 

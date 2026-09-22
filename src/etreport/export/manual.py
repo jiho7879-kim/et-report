@@ -135,7 +135,7 @@ def sections(shots: dict[str, Path] | None = None) -> list[Section]:
              "         후보와 X 값도 함께 맞춰 줍니다.",
              "· 축     쉼표로 여러 쌍을 넣으면 한 그림에 겹쳐 그립니다.",
              "         X에 W나 L을 넣으면 기하 trend로 알아서 바뀝니다.",
-             "· 점     측정점 그대로 / wafer 평균 · 중앙값 · 산포(σ) 중에 고릅니다.",
+             "· 점     측정점 그대로 / wafer 평균 · 중앙값 · Std(σ) 중에 고릅니다.",
              "· 범위   기본은 자동입니다(규격 ∪ 데이터를 중심 기준 ×1.2).",
              "         로그 축이면 여백도 로그로 줍니다 — 데이터가 있는 만큼만 열려서",
              "         빈 자릿수가 화면을 잡아먹지 않습니다.",
@@ -161,7 +161,7 @@ def sections(shots: dict[str, Path] | None = None) -> list[Section]:
              "",
              "리포메터에 WIDTH·LENGTH가 비어 있는 item은 조용히 빠집니다(그리다 멈추지",
              "않습니다). plot 템플릿에 넣을 때는 Type=trend, x=W(또는 L)로 적으세요.",
-             "대표값은 오른쪽 [점] 콤보에서 평균·중앙값·산포 중에 고를 수 있습니다."],
+             "대표값은 오른쪽 [점] 콤보에서 평균·중앙값·Std 중에 고를 수 있습니다."],
             shot=s.get("trend"), caption="탐색 — W trend"),
         Section(
             "boxplot — 나눠서 분포 보기",
@@ -192,7 +192,7 @@ def sections(shots: dict[str, Path] | None = None) -> list[Section]:
              "표 종류는 콤보에서 고릅니다."],
             rows=[
                 ("평균", "wafer마다 한 열"),
-                ("산포 (wafer 내)", "wafer 안의 표준편차(n−1)"),
+                ("Std (wafer 내)", "wafer 안의 표본표준편차(n−1)"),
                 ("그룹별 평균", "그룹마다 한 열"),
                 ("그룹별 wafer", "열은 wafer이되 그룹으로 묶어 정렬"),
             ],
@@ -224,7 +224,7 @@ def sections(shots: dict[str, Path] | None = None) -> list[Section]:
         Section(
             "이상치 필터 — 그리기 전에 걸러 내기",
             ["도크 [이상치 필터]를 켜면 표와 그림을 만들기 전에 사분위수 밖의 점을",
-             "빼 줍니다. 상자그림의 수염과 같은 계산이지만 배수가 다릅니다.",
+             "빼 줍니다. boxplot의 수염과 같은 계산이지만 배수가 다릅니다.",
              "",
              "  아래 한계 = Q1 − k × IQR       위 한계 = Q3 + k × IQR",
              "",
