@@ -96,8 +96,8 @@ def test_summary_table_and_copy_agree(win, monkeypatch):
     screen_first = [table.item(0, c).text()
                     for c in range(n_lab, table.columnCount())]
     tsv_first = tsv[2].split("\t")[n_lab:]
-    # 화면은 제외 개수를 '값  −N'으로 덧붙이므로 값 부분만 비교한다
-    assert [s.split("  ")[0] for s in screen_first] == tsv_first
+    # 셀은 값만 — 제외 개수는 머리글에 있다(셀에 붙이면 값이 깨진 것처럼 보였다)
+    assert screen_first == tsv_first
 
 
 def test_copy_puts_same_text_on_clipboard(win):
