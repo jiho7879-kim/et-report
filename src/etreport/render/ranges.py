@@ -102,10 +102,19 @@ def resolve_axes(spec: PlotSpec, rf: Reformatter, patterns: list[str],
         maxs = [data_ranges[a][1] for a in al if a in data_ranges]
         return (min(mins) if mins else None, max(maxs) if maxs else None)
 
-    if spec.range_mode == "manual" and None not in (
-            spec.xmin, spec.xmax, spec.ymin, spec.ymax):
-        return (spec.xmin, spec.xmax, lgx), (spec.ymin, spec.ymax, lgy)
     xm, xM = dminmax(xs)
     ym, yM = dminmax(ys)
-    return (*compute_range(xs, xm, xM, rf, lgx), lgx), \
-           (*compute_range(ys, ym, yM, rf, lgy), lgy)
+    return (*manual_range(spec, "x", *compute_range(xs, xm, xM, rf, lgx)), lgx), \
+           (*manual_range(spec, "y", *compute_range(ys, ym, yM, rf, lgy)), lgy)
+
+
+def manual_range(spec: PlotSpec, axis: str, lo, hi):
+    """수동 범위 — 적은 끝만 덮어쓴다. 한쪽만 적으면 나머지는 자동 그대로.
+
+    예전에는 네 칸(xmin·xmax·ymin·ymax)을 **전부** 적어야 걸려서, y 하한만
+    0으로 두고 싶어도 나머지 셋을 손으로 옮겨 적어야 했다.
+    """
+    if spec.range_mode != "manual":
+        return lo, hi
+    mn, mx = getattr(spec, f"{axis}min"), getattr(spec, f"{axis}max")
+    return (lo if mn is None else mn), (hi if mx is None else mx)

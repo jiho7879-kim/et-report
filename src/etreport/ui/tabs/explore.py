@@ -60,7 +60,9 @@ class ExploreTab(StaleMixin, QWidget):
         bar = QHBoxLayout()
         self.mode = QComboBox()
         self.mode.addItems(["클릭 → 제외", "클릭 → 복원"])
-        self.mode.setToolTip("캔버스의 점을 클릭했을 때 무엇을 할지")
+        self.mode.setToolTip("캔버스의 점을 클릭하거나 네모로 끌었을 때 무엇을 할지\n"
+                             "[복원]일 때만 지운 점이 회색 빈 심볼로 보입니다")
+        on_combo(self.mode, self._mode_changed)
         bar.addWidget(self.mode)
         bar.addStretch(1)
         lay.addLayout(bar)
@@ -78,6 +80,7 @@ class ExploreTab(StaleMixin, QWidget):
         # 빈 회색 캔버스만 보이면 무엇을 눌러야 하는지 알 수 없다(설계 §0 G).
         self.canvas = PlotCanvas(state)
         self.canvas.on_pick = self._pick
+        self.canvas.on_box = self._pick_many
         self.empty = QLabel()
         self.empty.setObjectName("emptyHint")
         self.empty.setAlignment(Qt.AlignCenter)
@@ -243,8 +246,8 @@ class ExploreTab(StaleMixin, QWidget):
     # `[그룹]` 섹션 하나가 갖는다(`ui/widgets/group_section.py`, 설계 §1 규칙 2) —
     # 예전에는 탐색과 리포트에 한 벌씩 있어 같은 개념이 두 화면에 복제됐다.
     def _groups_changed(self) -> None:
-        """그룹 토글·편집은 즉시 반영(확정 §3). 목록 갱신은 카드가 스스로 한다."""
-        self.refresh_if_visible()
+        """그룹 보이기·스타일은 dirty만 — [그리기]를 눌러야 반영한다(요청 §6)."""
+        self.mark_stale()
 
     # ── 지연 계산 (규약은 tabs/common.StaleMixin) ────────────
     def _on_exclusion(self) -> None:
@@ -323,7 +326,7 @@ class ExploreTab(StaleMixin, QWidget):
             "scatter": "쉼표로 여러 xy쌍 → 한 그림에 겹칩니다\n"
                        "X·Y 모두 item(리포메터 ALIAS)입니다\n" + common,
             "box": _CAT_HINT + common,
-            "bar": _CAT_HINT + "막대는 평균, 오차막대는 std(n−1)\n" + common,
+            "bar": _CAT_HINT + "막대는 평균 (범위 표시 없음)\n" + common,
             "trend": "X는 W 또는 L (리포메터의 WIDTH·LENGTH)\n"
                      "Y에 적은 item들이 기하값 위에 늘어섭니다\n" + common,
         }.get(self.state.explore.type, common)
@@ -353,17 +356,32 @@ class ExploreTab(StaleMixin, QWidget):
             self.cmb_type.blockSignals(False)
             self._sync_hint()
 
+    def _mode_changed(self) -> None:
+        """[복원]일 때만 지운 점을 보인다 — 평소에는 흔적 없이 사라진다."""
+        self.canvas.show_hidden = self.mode.currentIndex() == 1
+        if self.canvas.spec is not None and not self._stale:
+            self.canvas.draw_spec(self.canvas.spec)
+
     def _pick(self, key: str) -> None:
+        self._pick_many([key])
+
+    def _pick_many(self, keys: list[str]) -> None:
+        """클릭 한 점 또는 드래그한 네모 안 전부 — 사이드카는 한 번만 쓴다."""
         from etreport.data.loader import sync_exclusion
         st = self.state
         if self.mode.currentIndex() == 0:
-            if key not in st.excluded:
-                st.excluded.add(key)
-                st.undo_stack.append(key)
-                sync_exclusion(st, key, True)
+            new = [k for k in keys if k not in st.excluded]
+            if not new:
+                return
+            st.excluded.update(new)
+            st.undo_stack.append((st.excluded, new))
+            sync_exclusion(st, new, True)
         else:
-            st.excluded.discard(key)
-            sync_exclusion(st, key, False)
+            back = [k for k in keys if k in st.excluded]
+            if not back:
+                return
+            st.excluded.difference_update(back)
+            sync_exclusion(st, back, False)
         self.bus.exclusion_changed.emit()
 
     def _add_to_report(self) -> None:

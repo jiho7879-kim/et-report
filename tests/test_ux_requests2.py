@@ -88,7 +88,10 @@ def test_med_draws_one_point_per_wafer(qapp, demo_state):
     tab.redraw()                       # [그리기] — 지연 규약상 버튼으로 그린다
     med = len(mpl_renderer.point_xy(tab.canvas.figure.axes[0]))
 
-    n_wafer = demo_state.data.select(["lot", "wafer"]).unique().height
+    # 그리는 것은 그룹이 있는 wafer뿐이다(미배정 wafer는 그룹 스타일이 없다)
+    drawn = demo_state.active().filter(pl.col("gid").is_in(
+        [g.gid for g in demo_state.groups if g.visible]))
+    n_wafer = drawn.select(["lot", "wafer"]).unique().height
     assert med == n_wafer < site
     tab.deleteLater()
 

@@ -121,7 +121,7 @@ def test_getdata_uppercase_decimal_step_seq_survives_to_duckdb_and_analysis(
         date(2026, 8, 4), date(2026, 8, 4), cat, tmp_path)
 
     staged = pl.read_parquet(files[0])
-    assert staged["step_seq"].to_list() == [1, 2]
+    assert staged["step_seq"].to_list() == ["1", "2"]
     assert staged["step_seq"].null_count() == 0
 
     db_path = tmp_path / "et.duckdb"
@@ -137,7 +137,7 @@ def test_getdata_uppercase_decimal_step_seq_survives_to_duckdb_and_analysis(
             'SELECT step_seq, "Vt", "Ioff" FROM et_data ORDER BY step_seq').fetchall()
     finally:
         con.close()
-    assert stored == [(1, 0.42, None), (2, None, 1.5e-9)]
+    assert stored == [("1", 0.42, None), ("2", None, 1.5e-9)]
 
     state = AppState()
     loader.load_state(state, str(db_path))
@@ -194,13 +194,49 @@ def test_decimal_step_seq_survives_normalisation():
         "et_value": [0.4, 1e-9],
     })
     got = extractor.normalize_schema(df)
-    assert got["step_seq"].to_list() == [1, 2]
+    assert got["step_seq"].to_list() == ["1", "2"]
+
+
+def test_categorical_code_step_seq_is_kept():
+    """★ step_seq가 코드 문자열(Categorical)이어도 NULL이 되지 않는다(현장 로그).
+
+    `원본 dtype=Categorical, 예: ['LN08LPRF_MPW', 'LN08LPRF_MPW_D']` — Int32로
+    고정하던 스키마가 이 값을 전부 NULL로 만들었다.
+    """
+    df = pl.DataFrame({
+        "step_seq": pl.Series(["LN08LPRF_MPW", "LN08LPRF_MPW_D", "2.0", ""],
+                              dtype=pl.Categorical),
+        "item_id": ["Vt"] * 4, "et_value": [0.4] * 4})
+    got = extractor.normalize_schema(df)
+    assert got["step_seq"].to_list() == ["LN08LPRF_MPW", "LN08LPRF_MPW_D",
+                                         "2", None]
+
+
+def test_text_step_seq_loads_into_old_integer_db(tmp_path):
+    """예전 DB(step_seq INTEGER)에 코드 문자열 seq를 이어 적재해도 실패하지 않는다."""
+    import duckdb
+    path = tmp_path / "old.duckdb"
+    con = duckdb.connect(str(path))
+    con.execute("CREATE TABLE et_data(key_hash VARCHAR, step_seq INTEGER, "
+                "Vt DOUBLE)")
+    con.execute("INSERT INTO et_data VALUES ('a', 1, 0.4)")
+    con.close()
+    store = db.Store(path)
+    try:
+        store.load_wide(pl.DataFrame({"key_hash": ["b"],
+                                      "step_seq": ["LN08LPRF_MPW"],
+                                      "Vt": [0.5]}), "x")
+        got = store.con.execute(
+            "SELECT step_seq FROM et_data ORDER BY key_hash").fetchall()
+    finally:
+        store.close()
+    assert got == [("1",), ("LN08LPRF_MPW",)]
 
 
 def test_empty_key_column_is_logged(caplog):
     """값이 있었는데 NULL이 되면 **로그에 이름이 남는다** — 현장의 유일한 단서."""
-    df = pl.DataFrame({"root_lot_id": ["PA1"], "step_seq": ["x"],
+    df = pl.DataFrame({"root_lot_id": ["PA1"], "total_site_cnt": ["x"],
                        "item_id": ["Vt"], "et_value": [0.4]})
     with caplog.at_level("ERROR"):
         extractor.normalize_schema(df)
-    assert any("step_seq" in r.getMessage() for r in caplog.records)
+    assert any("total_site_cnt" in r.getMessage() for r in caplog.records)

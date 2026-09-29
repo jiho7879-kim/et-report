@@ -74,7 +74,9 @@ ARROW_SCHEMA = pa.schema([
     ("chip_y_pos", pa.int32()),
     ("temperature", pa.float64()),
     ("step_id", pa.string()),
-    ("step_seq", pa.int32()),
+    # 문자열이다 — 사이트에 따라 `1`·`2`가 아니라 `LN08LPRF_MPW` 같은 코드가 온다.
+    # Int32로 고정하던 시절에는 그 값이 변환 중에 전부 NULL이 됐다(`_seq_text`).
+    ("step_seq", pa.string()),
     ("total_site_cnt", pa.int32()),
     ("tkout_time", pa.timestamp("us")),
     ("item_id", pa.string()),
@@ -361,6 +363,27 @@ def _coerce_numeric_strings(df: pl.DataFrame,
     return df.with_columns(exprs) if exprs else df
 
 
+def _seq_text(df: pl.DataFrame, col: str = "step_seq") -> pl.DataFrame:
+    """step_seq를 **문자열 코드**로 맞춘다 — 숫자처럼 보이면 정수 표기로.
+
+    `1`·`1.0`·`Decimal(1)`은 모두 `"1"`이 된다. 예전 DB의 INTEGER seq를
+    `key_hash_expr()`가 Utf8로 바꾼 값과 같아야 이어 적재할 때 같은 측정이
+    중복으로 들어가지 않는다. 숫자가 아닌 코드(`LN08LPRF_MPW`)는 그대로 둔다.
+    """
+    if col not in df.columns:
+        return df
+    src = pl.col(col)
+    if df.schema[col] != pl.Utf8:
+        src = src.cast(pl.Utf8, strict=False)
+    txt = src.str.strip_chars()
+    num = txt.cast(pl.Float64, strict=False)
+    return df.with_columns(
+        pl.when(txt == "").then(None)
+        .when(num.is_not_null() & (num == num.round()))
+        .then(num.cast(pl.Int64, strict=False).cast(pl.Utf8))
+        .otherwise(txt).alias(col))
+
+
 #: 비면 조용히 분석을 망가뜨리는 키 컬럼. `step_seq`가 NULL이면 retest 중복
 #: 제거 파티션이 무너지고, `tkout_time`이 NULL이면 key_hash가 뭉친다.
 CRITICAL_KEYS = ("step_seq", "tkout_time", "temperature", "total_site_cnt")
@@ -442,6 +465,7 @@ def normalize_schema(df: pl.DataFrame) -> pl.DataFrame:
         df = df.with_columns(parse)
 
     df = _coerce_numeric_strings(df, target)
+    df = _seq_text(df)
     df = df.cast({c: dt for c, dt in target.items() if c in df.columns},
                  strict=False)
 

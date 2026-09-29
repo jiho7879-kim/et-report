@@ -9,7 +9,7 @@ pyplot은 쓰지 않는다(Figure를 직접 생성) — 전역 매니저에 쌓�
 from __future__ import annotations
 
 import logging
-from statistics import fmean, stdev
+from statistics import fmean
 
 import matplotlib
 
@@ -23,7 +23,12 @@ from etreport import fonts
 from etreport.data.reformatter import Reformatter
 from etreport.model.aggregate import group_representatives, wafer_stats
 from etreport.model.specs import CAT_PLOTS, GroupStyle, PlotSpec
-from etreport.render.ranges import compute_range, resolve_axes, resolve_log
+from etreport.render.ranges import (
+    compute_range,
+    manual_range,
+    resolve_axes,
+    resolve_log,
+)
 from etreport.ui.theme import TOKENS
 
 log = logging.getLogger(__name__)
@@ -253,7 +258,9 @@ def render(spec: PlotSpec,
                 transform=ax.transAxes, ha="center", va="center",
                 linespacing=1.6, fontsize=7 if compact else 9, color="#8e8e93")
 
-    # 제외된 포인트 — 회색 빈 심볼로 남긴다(사라지지 않게)
+    # 제외된 포인트 — `excluded`를 준 때만 회색 빈 심볼로 그린다. 화면은
+    # [클릭 → 복원] 모드에서만 넘긴다(찍을 자리가 보여야 하므로). 평소에는 흔적
+    # 없이 사라진다 — PPT도 넘기지 않으므로 "화면 = PPT"다.
     if excluded is not None and not excluded.is_empty():
         for ax_x, ax_y in pairs:
             if ax_x in excluded.columns and ax_y in excluded.columns:
@@ -420,7 +427,9 @@ def _render_trend(spec: PlotSpec,
             y_min = lo if y_min is None else min(y_min, lo)
             y_max = hi if y_max is None else max(y_max, hi)
     lgy = resolve_log(spec.logy_mode, plotted, log_patterns)
-    ylo, yhi = compute_range(plotted, y_min, y_max, rf, lgy)
+    ylo, yhi = manual_range(spec, "y",
+                            *compute_range(plotted, y_min, y_max, rf, lgy))
+    xlo, xhi = manual_range(spec, "x", xlo, xhi)
 
     markers = lot_markers(data) if lot_split else {}
     # 점 스트립은 lot으로 나누지 않는다 — 작은 점이라 모양을 구분하지 않고,
@@ -444,7 +453,8 @@ def _render_trend(spec: PlotSpec,
                       if (v := vals.get(it)) is not None]
             if not ys:
                 continue
-            ax.scatter([xpos[it]] * len(ys), ys, s=9, c=st.color,
+            ax.scatter([xpos[it]] * len(ys), ys, s=(st.size * 0.5) ** 2,
+                       c=st.color,
                        alpha=0.45, linewidths=0, zorder=2)
 
     line_agg = "med" if spec.mode == "site" else spec.mode
@@ -461,13 +471,11 @@ def _render_trend(spec: PlotSpec,
             if not pts:
                 continue
             xs, ys = zip(*pts)
-            if st.ref and not lot_split:
-                ax.plot(xs, ys, color=REF_COLOR, marker="d", markersize=4,
-                        linewidth=1.2, zorder=4, label=label)
-            else:
-                ax.plot(xs, ys, color=REF_COLOR if st.ref else st.color,
-                        marker=mark, markersize=3.5, linewidth=1.2,
-                        zorder=4, label=label)
+            # REF도 그룹 색을 쓴다 — REF 그룹은 만들 때 이미 회색이다. 여기서
+            # 회색으로 덮으면 REF 색만 "바꿨는데 안 바뀐다"가 된다.
+            ax.plot(xs, ys, color=st.color, marker=mark,
+                    markersize=st.size * 0.6, linewidth=1.2,
+                    zorder=4, label=label)
 
     # X축(WIDTH·LENGTH) 위치에 세로 점선은 그리지 않는다 — 규격은 y값의 한계라
     # x 위치에 그으면 의미 없는 격자만 늘어난다(사용자 요청).
@@ -590,36 +598,33 @@ def _render_box(spec: PlotSpec,
         return fig
 
     drawn = [st for st in styles if st.gid in series]
-    width = 0.8 / max(1, len(drawn))
-    # 자리는 **범주마다 그 자리에 실제로 값이 있는 그룹끼리만** 나눈다. 전체 그룹
-    # 수로 나누면, 그룹과 범주가 1:1인 경우(x축을 그룹으로 놓았을 때)에 상자
-    # 하나가 눈금에서 비켜서 그려진다.
+    # 자리와 폭은 **범주마다 그 자리에 실제로 값이 있는 그룹끼리만** 나눈다.
+    # 전체 그룹 수로 나누면 그룹과 범주가 1:1인 경우(x축을 그룹으로 놓았을 때)에
+    # 상자가 눈금에서 비켜 그려지고, 막대가 그룹 수만큼 가늘어진다.
     here = {c: [st.gid for st in drawn if series[st.gid].get(c)] for c in cats}
     for st in drawn:
-        pos, vals = [], []
+        pos, vals, widths = [], [], []
         for j, c in enumerate(cats):
             v = series[st.gid].get(c) or []
             if not v:
                 continue
             mates = here[c]
             k, m = mates.index(st.gid), len(mates)
+            width = 0.8 / m
             pos.append(j + (k - (m - 1) / 2) * width)
+            widths.append(width * 0.9)
             vals.append(v)
         if not vals:
             continue
-        color = REF_COLOR if st.ref else st.color
+        color = st.color          # REF도 그룹 색 — 만들 때 이미 회색이다
         if spec.type == "bar":
-            # 막대는 **평균**, 오차막대는 표본표준편차(n-1) — 화면 요약 표와 같은
-            # 뜻이다. 점이 하나뿐인 자리는 오차막대를 그리지 않는다.
-            ax.bar(pos, [fmean(v) for v in vals], width=width * 0.82,
-                   color=color, alpha=0.45, edgecolor=color, linewidth=1.0,
-                   zorder=2,
-                   yerr=[stdev(v) if len(v) > 1 else 0.0 for v in vals],
-                   capsize=2 if compact else 3,
-                   error_kw={"ecolor": TOKENS["TEXT"], "elinewidth": 0.8})
-            ax.plot([], [], color=color, linewidth=6, alpha=0.55, label=st.name)
+            # 막대는 **평균** 하나 — 범위(오차막대) 없이 평범한 막대그래프다.
+            ax.bar(pos, [fmean(v) for v in vals], width=widths,
+                   color=color, alpha=0.85, edgecolor=color, linewidth=0.8,
+                   zorder=2)
+            ax.plot([], [], color=color, linewidth=6, alpha=0.85, label=st.name)
             continue
-        bp = ax.boxplot(vals, positions=pos, widths=width * 0.82,
+        bp = ax.boxplot(vals, positions=pos, widths=widths,
                         whis=BOX_WHIS, patch_artist=True, manage_ticks=False,
                         flierprops={"marker": ".", "markersize": 3,
                                     "markerfacecolor": color,
@@ -638,11 +643,8 @@ def _render_box(spec: PlotSpec,
     # ── 축 ───────────────────────────────────────────────────
     lgy = resolve_log(spec.logy_mode, items, log_patterns)
     ys = [v for by in series.values() for vs in by.values() for v in vs]
-    if spec.range_mode == "manual" and None not in (spec.ymin, spec.ymax):
-        ylo, yhi = spec.ymin, spec.ymax
-    else:
-        ylo, yhi = compute_range(items, min(ys) if ys else None,
-                                 max(ys) if ys else None, rf, lgy)
+    ylo, yhi = manual_range(spec, "y", *compute_range(
+        items, min(ys) if ys else None, max(ys) if ys else None, rf, lgy))
     if lgy:
         ax.set_yscale("log")
     ax.set_ylim(ylo, yhi)

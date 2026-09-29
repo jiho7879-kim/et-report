@@ -11,7 +11,12 @@ import pytest
 from etreport.data.reformatter import Reformatter, Rule, validate
 from etreport.model.specs import GroupStyle, PlotSpec
 from etreport.render import mpl_renderer
-from etreport.render.mpl_renderer import REF_COLOR, SPEC_COLOR, TARGET_COLOR
+from etreport.render.mpl_renderer import (
+    MARKER,
+    REF_COLOR,
+    SPEC_COLOR,
+    TARGET_COLOR,
+)
 
 
 def rf_of_wl() -> Reformatter:
@@ -131,19 +136,24 @@ def test_trend_mode_aggregates_to_wafer_level():
         assert len(offsets) <= 4    # wafer 4장 이하로 집계
 
 
-def test_trend_ref_group_gray_diamond():
+def test_trend_ref_group_follows_its_style():
+    """REF 그룹도 그룹 스타일을 따른다 — 기본이 회색 다이아일 뿐(요청 §5).
+
+    예전에는 렌더러가 REF를 회색으로 덮어 색을 바꿔도 반영되지 않았다.
+    """
     from etreport.render.mpl_renderer import render
 
     rf = rf_of_wl()
     df = wide_of()
-    styles = [GroupStyle(gid="", name="기준", ref=True)]
-    fig = render(PlotSpec(type="trend", x="W", y="A,B"), {"": df},
-                 styles, rf, [], (4, 3))
-    ax = fig.axes[0]
-    lines = _lines(ax)
-    assert len(lines) == 1
-    assert lines[0].get_color() == REF_COLOR
-    assert lines[0].get_marker() == "d"
+    for color, symbol in ((REF_COLOR, "d"), ("#d55e00", "s")):
+        styles = [GroupStyle(gid="", name="기준", ref=True,
+                             color=color, symbol=symbol)]
+        fig = render(PlotSpec(type="trend", x="W", y="A,B"), {"": df},
+                     styles, rf, [], (4, 3))
+        lines = _lines(fig.axes[0])
+        assert len(lines) == 1
+        assert lines[0].get_color() == color
+        assert lines[0].get_marker() == MARKER.get(symbol, symbol)
 
 
 def test_trend_ignores_logx_and_keeps_linear():

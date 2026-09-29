@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import polars as pl
@@ -21,8 +22,23 @@ _ALL = GroupStyle(gid="", name="전체", color="#0071e3", symbol="o", size=6)
 
 
 def _styles_for(state: AppState, exp: str):
+    """실험(factor)별 페이지의 그룹 스타일.
+
+    factor 하나로 나눈 그룹은 화면의 그룹(factor 조합)과 다르다 — 그래도 이름이
+    같은 그룹이 화면에 있으면 **사용자가 정한 색·심볼·크기·보이기**를 따른다.
+    예전에는 늘 기본 팔레트로 새로 만들어서 PPT 색이 화면과 갈렸다(요청 §8).
+    """
     if exp and state.split is not None:
-        return state.split.styles_for([exp])
+        def bare(name: str) -> str:          # "A/B (12)" → "A/B"
+            return re.sub(r"\s*\(\d+\)$", "", name)
+        mine = {bare(g.name): g for g in state.groups}
+        out = state.split.styles_for([exp])
+        for g in out:
+            old = mine.get(bare(g.name))
+            if old is not None:
+                g.color, g.symbol, g.size, g.visible = (
+                    old.color, old.symbol, old.size, old.visible)
+        return out
     return state.groups or [_ALL]
 
 
@@ -41,7 +57,8 @@ def _plot_data(state: AppState, exp: str, spec: PlotSpec) -> dict[str, pl.DataFr
     df = state.data
     if df is None:
         return {}
-    hide = state.hidden()          # 손으로 찍은 제외 + 이상치 필터
+    # 손으로 찍은 제외 + 이상치 필터 + 이 plot에서만 뺀 점(화면과 같은 규칙)
+    hide = state.hidden() | spec.local_excluded
     active = df.filter(~pl.col("key").is_in(list(hide))) if hide else df
     from etreport.model import wafers
     assign = _assignment_for(state, exp)

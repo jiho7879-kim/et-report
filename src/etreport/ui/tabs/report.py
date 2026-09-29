@@ -88,7 +88,10 @@ class ReportTab(StaleMixin, QWidget):
         self.btn_ppt.clicked.connect(self._ppt)
 
         tools = QHBoxLayout()
-        self.chk_pick = QCheckBox("클릭으로 점 제외")
+        self.chk_pick = QCheckBox("클릭·드래그로 점 제외")
+        self.chk_pick.setToolTip(
+            "점을 클릭하거나 네모로 끌어 감싸면 그 점들이 빠집니다.\n"
+            "되돌리기는 Ctrl+Z — 한 번 끈 네모가 통째로 돌아옵니다.")
         self.chk_pick.toggled.connect(lambda _: self.rebuild())
         tools.addWidget(self.chk_pick)
         self.chk_all = QCheckBox("모든 plot에서 함께 제외")
@@ -97,6 +100,7 @@ class ReportTab(StaleMixin, QWidget):
             "켜면 같은 측정점이 모든 plot·표·PPT에서 함께 빠집니다.\n"
             "끄면 이 plot에서만 빠집니다.")
         self.chk_all.toggled.connect(self._all_toggled)
+        self.state.exclude_all_plots = True
         tools.addWidget(self.chk_all)
         tools.addSpacing(14)
         hint = QLabel("슬롯을 끌어다 놓으면 자리가 바뀝니다")
@@ -126,9 +130,9 @@ class ReportTab(StaleMixin, QWidget):
 
         self._sections = self._build_sections()
 
-        # [적용]·템플릿 변경은 dirty만, 그룹 토글은 즉시 반영(확정 §3)
-        bus.groups_changed.connect(self.refresh_if_visible)
-        for sig in (bus.report_changed, bus.data_changed):
+        # [적용]·템플릿·그룹 변경은 전부 dirty만 — [미리보기]를 눌러야 그린다
+        # (요청 §6: 바꿀 때마다 슬롯 6개를 다시 그리던 것이 병목이었다)
+        for sig in (bus.report_changed, bus.data_changed, bus.groups_changed):
             sig.connect(self.mark_stale)
         bus.exclusion_changed.connect(self._on_exclusion)
         self._stale = True
@@ -205,10 +209,37 @@ class ReportTab(StaleMixin, QWidget):
             "이 점 표시 방식을 모든 페이지의 모든 plot 슬롯에 적용합니다.")
         self.btn_point_all.clicked.connect(self._point_to_all)
         self.slot_card.body.addWidget(self.btn_point_all)
+        # 축 스케일 — 탐색 탭과 같은 세 값(auto·log·linear)
+        self.cmb_logx = QComboBox()
+        self.cmb_logx.addItems(["X축 자동", "X축 log", "X축 선형"])
+        on_combo(self.cmb_logx, self._slot_edited)
         self.cmb_log = QComboBox()
         self.cmb_log.addItems(["Y축 자동", "Y축 log", "Y축 선형"])
         on_combo(self.cmb_log, self._slot_edited)
-        self.slot_card.body.addWidget(self.cmb_log)
+        h = QHBoxLayout()
+        h.setContentsMargins(0, 0, 0, 0)
+        h.addWidget(self.cmb_logx, 1)
+        h.addWidget(self.cmb_log, 1)
+        w = QWidget()
+        w.setLayout(h)
+        self.slot_card.body.addWidget(w)
+        # 축 범위 — 적은 칸만 고정하고 빈칸은 자동이다(한쪽만 적어도 된다)
+        self.ed_range: dict[str, QLineEdit] = {}
+        for axis in ("x", "y"):
+            lo, hi = QLineEdit(), QLineEdit()
+            lo.setPlaceholderText("최소 (자동)")
+            hi.setPlaceholderText("최대 (자동)")
+            for name, ed in ((f"{axis}min", lo), (f"{axis}max", hi)):
+                ed.editingFinished.connect(self._slot_edited)
+                self.ed_range[name] = ed
+            h = QHBoxLayout()
+            h.setContentsMargins(0, 0, 0, 0)
+            h.addWidget(QLabel(f"{axis.upper()} 범위"))
+            h.addWidget(lo, 1)
+            h.addWidget(hi, 1)
+            w = QWidget()
+            w.setLayout(h)
+            self.slot_card.body.addWidget(w)
         # 빈 슬롯에 X·Y만 적어 바로 plot을 만든다(요청 §14)
         self.btn_make = GhostButton("이 슬롯에 plot 만들기")
         self.btn_make.setToolTip(
@@ -270,8 +301,7 @@ class ReportTab(StaleMixin, QWidget):
         spec = self._current_slot()
         if spec is not None and spec.type != "table":
             spec.type = self.cmb_type.currentData() or "scatter"
-            self.bus.report_changed.emit()
-            self.refresh_if_visible()
+            self.bus.report_changed.emit()      # dirty만 — [미리보기]가 그린다
 
     def _point_to_all(self) -> int:
         """점 표시 방식을 모든 페이지·모든 슬롯에 적용. 바뀐 슬롯 수 반환."""
@@ -288,7 +318,6 @@ class ReportTab(StaleMixin, QWidget):
                     n += 1
         if n:
             self.bus.report_changed.emit()
-            self.refresh_if_visible()
         return n
 
     def _make_slot(self) -> bool:
@@ -319,6 +348,7 @@ class ReportTab(StaleMixin, QWidget):
             type=typ,
             mode=POINT_MODES[i] if 0 <= i < len(POINT_MODES) else "site",
             logy_mode=("auto", "log", "linear")[self.cmb_log.currentIndex()])
+        self._read_axes(spec)
         st.report.pages[self.page_idx].slots[self.sel_slot] = spec
         self.bus.report_changed.emit()
         self.rebuild()
@@ -339,9 +369,23 @@ class ReportTab(StaleMixin, QWidget):
         spec.x = self.ed_sx.text()
         spec.y = self.ed_sy.text()
         spec.logy_mode = ("auto", "log", "linear")[self.cmb_log.currentIndex()]
+        self._read_axes(spec)
         i = self.cmb_point.currentIndex()
         spec.mode = POINT_MODES[i] if 0 <= i < len(POINT_MODES) else "site"
         self.bus.report_changed.emit()
+
+    def _read_axes(self, spec) -> None:
+        """X 스케일과 범위 칸을 spec에 옮긴다 — 한 칸이라도 적으면 수동 범위."""
+        spec.logx_mode = ("auto", "log", "linear")[self.cmb_logx.currentIndex()]
+        for name, ed in self.ed_range.items():
+            txt = ed.text().strip()
+            try:
+                setattr(spec, name, float(txt) if txt else None)
+            except ValueError:
+                ed.setText("")           # 숫자가 아니면 비운다(자동으로 되돌림)
+                setattr(spec, name, None)
+        spec.range_mode = ("manual" if any(
+            getattr(spec, n) is not None for n in self.ed_range) else "auto")
 
     def _clear_slot(self) -> None:
         st = self.state
@@ -362,7 +406,11 @@ class ReportTab(StaleMixin, QWidget):
                         (self.ed_sy, spec.y if spec else "")):
             ed.setText(val)
             ed.setEnabled(True)
-        for cmb in (self.cmb_log, self.cmb_point, self.cmb_type):
+        manual = spec is not None and spec.range_mode == "manual"
+        for name, ed in self.ed_range.items():
+            v = getattr(spec, name) if manual else None
+            ed.setText("" if v is None else f"{v:g}")
+        for cmb in (self.cmb_log, self.cmb_logx, self.cmb_point, self.cmb_type):
             cmb.setEnabled(True)
         # 표 전용 슬롯은 종류를 고르는 대상이 아니다(pptgen이 따로 만든다).
         self.cmb_type.setEnabled(spec is None or spec.type != "table")
@@ -372,6 +420,8 @@ class ReportTab(StaleMixin, QWidget):
             for cmb, idx in (
                     (self.cmb_log,
                      {"auto": 0, "log": 1, "linear": 2}.get(spec.logy_mode, 0)),
+                    (self.cmb_logx,
+                     {"auto": 0, "log": 1, "linear": 2}.get(spec.logx_mode, 0)),
                     (self.cmb_point,
                      POINT_MODES.index(spec.mode)
                      if spec.mode in POINT_MODES else 0),
@@ -397,18 +447,28 @@ class ReportTab(StaleMixin, QWidget):
     def _all_toggled(self, on: bool) -> None:
         self.state.exclude_all_plots = on
 
-    def _pick_point(self, key: str) -> None:
+    def _pick_point(self, key: str, spec=None) -> None:
+        self._pick_points([key], spec)
+
+    def _pick_points(self, keys: list[str], spec=None) -> None:
+        """찍은 점을 뺀다 — 켜져 있으면 모든 plot·표·PPT에서, 꺼져 있으면 이 plot만.
+
+        예전에는 체크를 꺼도 전역 제외에 넣고 사유 글자만 바꿨다(요청 §4).
+        되살리기는 Ctrl+Z다 — 지운 점은 흔적 없이 사라지므로 다시 찍을 수 없다.
+        """
         from etreport.data.loader import sync_exclusion
         st = self.state
-        if key in st.excluded:
-            st.excluded.discard(key)
-            sync_exclusion(st, key, False)
+        if st.exclude_all_plots or spec is None:
+            where = st.excluded
         else:
-            st.excluded.add(key)
-            st.undo_stack.append(key)
-            sync_exclusion(st, key, True,
-                           "리포트 구성에서 제외"
-                           if st.exclude_all_plots else "이 plot에서만 제외")
+            where = spec.local_excluded
+        new = [k for k in keys if k not in where and k not in st.excluded]
+        if not new:
+            return
+        where.update(new)
+        st.undo_stack.append((where, new))
+        if where is st.excluded:
+            sync_exclusion(st, new, True, "리포트 구성에서 제외")
         self.bus.exclusion_changed.emit()
 
     # ── 그리기 ───────────────────────────────────────────────
@@ -515,7 +575,10 @@ class ReportTab(StaleMixin, QWidget):
                     box.body.addWidget(cap)
                     cv = PlotCanvas(st, mini=True)
                     if self.chk_pick.isChecked():
-                        cv.on_pick = self._pick_point
+                        cv.on_pick = (lambda k, s=spec:
+                                      self._pick_point(k, s))
+                        cv.on_box = (lambda ks, s=spec:
+                                     self._pick_points(ks, s))
                     cv.draw_spec(spec)
                     self._canvases[idx] = cv
                     box.body.addWidget(cv, 1)

@@ -74,6 +74,10 @@ class PlotSpec:
     xmax: float | None = None
     ymin: float | None = None
     ymax: float | None = None
+    # 이 plot에서만 뺀 점(key) — [모든 plot에서 함께 제외]를 끈 채 찍은 것.
+    # 세션 안에서만 산다(템플릿에 되쓰지 않는다). 비교·repr에서 뺀다.
+    local_excluded: set[str] = field(default_factory=set, compare=False,
+                                     repr=False)
 
     def pairs(self) -> list[tuple[str, str]]:
         xs = [t.strip() for t in self.x.split(",") if t.strip()]

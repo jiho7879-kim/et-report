@@ -287,7 +287,7 @@ def _seed_catalog(catalog) -> None:
         ("root_lot_id", "STRING"), ("lot_id", "STRING"), ("wafer_id", "STRING"),
         ("slot_no", "INT"), ("chip_x_pos", "INT"), ("chip_y_pos", "INT"),
         ("site_no", "INT"), ("total_site_cnt", "INT"), ("temperature", "FLOAT"),
-        ("step_id", "STRING"), ("step_seq", "INT"), ("device_id", "STRING"),
+        ("step_id", "STRING"), ("step_seq", "STRING"), ("device_id", "STRING"),
         ("product_id", "STRING"), ("mask_set", "STRING"), ("flow_id", "STRING"),
         ("recipe_id", "STRING"), ("eqp_id", "STRING"), ("chamber_id", "STRING"),
         ("lot_type", "STRING"), ("item_id", "STRING"), ("value", "DOUBLE"),

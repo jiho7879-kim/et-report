@@ -73,13 +73,16 @@ def save_filtered(db_path: str, points: dict[str, dict]) -> None:
     save(db_path, points, FILTER_KIND)
 
 
-def add(db_path: str, points: dict[str, dict], key: str,
+def add(db_path: str, points: dict[str, dict], key: str | list[str],
         reason: str = "") -> None:
-    points[key] = {"reason": reason,
-                   "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+    """key 하나 또는 여러 개 — 드래그로 수백 점을 빼도 파일은 한 번만 쓴다."""
+    at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for k in [key] if isinstance(key, str) else key:
+        points[k] = {"reason": reason, "at": at}
     save(db_path, points)
 
 
-def remove(db_path: str, points: dict[str, dict], key: str) -> None:
-    points.pop(key, None)
+def remove(db_path: str, points: dict[str, dict], key: str | list[str]) -> None:
+    for k in [key] if isinstance(key, str) else key:
+        points.pop(k, None)
     save(db_path, points)

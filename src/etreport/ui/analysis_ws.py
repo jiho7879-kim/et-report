@@ -807,20 +807,11 @@ class AnalysisWorkspace(QWidget):
         순서는 loader와 같다: split 배정 → manual 배정(사용자가 고른 쪽이 이긴다).
         손으로 만든 그룹의 이름·색은 gid가 겹치면 보존한다.
         """
-        from etreport.data.loader import apply_manual_groups
+        from etreport.data.loader import apply_manual_groups, merge_split_styles
         st = self.state
         if st.split is None:
             return
-        keep = {g.gid: g for g in st.groups}
-        fresh = st.split.styles_for(st.factors)
-        for g in fresh:                     # 같은 gid면 사용자가 정한 이름·색 유지
-            old = keep.pop(g.gid, None)
-            if old is not None:
-                g.name, g.color, g.symbol, g.size = (old.name, old.color,
-                                                     old.symbol, old.size)
-        # split이 만들지 않은 그룹(손으로 추가한 것)은 뒤에 남긴다
-        used = set(st.manual_groups.values())
-        st.groups = fresh + [g for g in keep.values() if g.gid in used]
+        st.groups = merge_split_styles(st)
         if st.data is not None:
             from etreport.model import wafers
             assign = st.split.assignment(st.factors)
@@ -837,10 +828,12 @@ class AnalysisWorkspace(QWidget):
 
     def _undo(self) -> None:
         from etreport.data.loader import sync_exclusion
-        if self.state.undo_stack:
-            key = self.state.undo_stack.pop()
-            self.state.excluded.discard(key)
-            sync_exclusion(self.state, key, False)
+        st = self.state
+        if st.undo_stack:
+            where, keys = st.undo_stack.pop()
+            where.difference_update(keys)
+            if where is st.excluded:
+                sync_exclusion(st, keys, False)
             self.bus.exclusion_changed.emit()
 
     def _clear_cache(self) -> None:

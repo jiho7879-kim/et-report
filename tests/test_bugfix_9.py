@@ -146,24 +146,32 @@ def test_mark_stale_does_not_draw(qapp, appdata):
     tab.deleteLater()
 
 
-def test_groups_changed_redraws_immediately(qapp, appdata):
-    """그룹 토글은 즉시 반영(확정 Q3-2=B)."""
+def test_groups_changed_only_marks_dirty(qapp, appdata):
+    """그룹 변경은 dirty만 — [그리기]/[미리보기]가 반영한다(요청 §6, 예전 Q3-2=B 폐기).
+
+    바꿀 때마다 슬롯 6개를 다시 그리던 것이 병목이었다.
+    """
     from etreport import demo
     from etreport.model.state import StateBus
     from etreport.ui.tabs.explore import ExploreTab
+    from etreport.ui.tabs.report import ReportTab
 
     st = AppState()
     demo.load_demo(st)
     bus = StateBus()
-    tab = ExploreTab(st, bus)
-    tab.isVisible = lambda: True          # 창을 실제로 띄우지 않는다(뒤 테스트 오염)
+    tabs = [ExploreTab(st, bus), ReportTab(st, bus)]
     calls = []
-    tab.refresh = lambda: calls.append(1)
+    for tab in tabs:
+        tab.isVisible = lambda: True      # 창을 실제로 띄우지 않는다(뒤 테스트 오염)
+        tab.refresh = lambda: calls.append(1)
+        tab.mark_fresh()
 
     bus.groups_changed.emit()
 
-    assert calls, "그룹 변경은 보고 있는 탭에서 바로 반영돼야 한다"
-    tab.deleteLater()
+    assert not calls, "그룹 변경이 바로 다시 그리면 안 된다"
+    assert all(tab._stale for tab in tabs)
+    for tab in tabs:
+        tab.deleteLater()
 
 
 # ── 5 자동 그룹핑 ────────────────────────────────────────────

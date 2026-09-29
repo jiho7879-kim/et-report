@@ -34,7 +34,9 @@ class AppState:
     # wide 포인트 테이블: key, lot, wafer, gid + <ALIAS>…
     data: pl.DataFrame | None = None
     excluded: set[str] = field(default_factory=set)
-    undo_stack: list[str] = field(default_factory=list)
+    # 되돌리기 — (뺀 곳, 뺀 key들). 뺀 곳은 `excluded`이거나 어떤 plot의
+    # `local_excluded`다. 드래그 한 번이 한 칸이라 Ctrl+Z 한 번에 통째로 돌아온다.
+    undo_stack: list[tuple[set[str], list[str]]] = field(default_factory=list)
     # 이상치 필터(Tukey)가 걸러 낸 점 — key → {reason, item, at}.
     # **손으로 찍은 제외와 따로 둔다**: 필터를 끄면 이쪽만 비워야 하고,
     # 이력에도 "사람이 뺀 것"과 "규칙이 뺀 것"이 구분돼 남아야 한다.

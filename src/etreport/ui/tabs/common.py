@@ -124,10 +124,10 @@ class StaleMixin:
     그리고 refresh()를 구현한다.
 
     **신호별 정책**(확정): `data_changed`(=[적용])·`explore_changed`·
-    `report_changed`는 **dirty만** 남긴다 — [적용] 직후에는 어떤 탭도 자동으로
-    그리지 않고 [그리기]/[미리보기]/[표 만들기]를 눌러야 그린다. 반면
-    `groups_changed`(그룹 토글·그룹 편집)는 **즉시 반영**한다. 그리는 탭을
-    보고 있는데 토글이 반영되지 않으면 오히려 혼란스럽기 때문이다.
+    `report_changed`·`groups_changed`는 **dirty만** 남긴다 — 어떤 탭도 자동으로
+    그리지 않고 [그리기]/[미리보기]/[표 만들기]를 눌러야 그린다. 그룹 변경도
+    예전에는 즉시 다시 그렸는데, 색 하나 바꿀 때마다 슬롯 6개를 다시 그려
+    병목이 됐다(2026-09-29 요청 §6).
     탭을 켤 때(showEvent) stale이면 그리는 동작은 유지한다.
     """
 
@@ -146,14 +146,6 @@ class StaleMixin:
         set_dirty(getattr(self, self.stale_button_attr), True)
         if self.stale_label_attr:
             getattr(self, self.stale_label_attr).setText(self.stale_message)
-
-    def refresh_if_visible(self) -> None:
-        """즉시 반영이 필요한 신호(groups_changed)용 — 보고 있으면 다시 그린다."""
-        self._stale = True
-        if self.isVisible():
-            self.refresh()
-        else:
-            self.mark_stale()
 
     def mark_fresh(self) -> None:
         self._stale = False

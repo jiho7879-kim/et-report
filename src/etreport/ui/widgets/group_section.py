@@ -192,7 +192,7 @@ class GroupSection(ChromeSection):
         return None
 
     def _item_changed(self, item: QListWidgetItem) -> None:
-        """체크 = 보이기. 즉시 반영한다(확정 §3 — 그룹 토글은 지연 계산 예외)."""
+        """체크 = 보이기. 그리는 탭은 dirty가 되고 [그리기]/[미리보기]가 반영한다."""
         g = self.state.group(item.data(Qt.UserRole))
         if g is None:
             return
@@ -214,6 +214,14 @@ class GroupSection(ChromeSection):
             i = self.cmb_size.findText(str(g.size))
             self.cmb_size.setCurrentIndex(i if i >= 0 else 1)
             self.chk_ref.setChecked(g.ref)
+        # lot마다 심볼을 나누는 동안에는 그룹 심볼이 쓰이지 않는다 — 고를 수
+        # 있게 두면 "바꿨는데 안 바뀐다"가 된다(요청 §5). 이유는 툴팁으로 말한다.
+        if getattr(self.state, "lot_split_symbols", False):
+            self.cmb_symbol.setEnabled(False)
+            self.cmb_symbol.setToolTip(
+                "[lot마다 심볼 다르게]가 켜져 있어 심볼은 lot이 정합니다")
+        else:
+            self.cmb_symbol.setToolTip("")
         for w in (self.cmb_symbol, self.cmb_size, self.chk_ref):
             w.blockSignals(False)
 
@@ -252,7 +260,7 @@ class GroupSection(ChromeSection):
         c = QColorDialog.getColor(QColor(g.color), self, "그룹 색")
         if c.isValid():
             g.color = c.name()
-            self.to_controls()
+            self.fill_groups()            # 목록 글자색도 새 색으로
             self._announce()
 
     def _edit(self) -> None:

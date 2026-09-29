@@ -108,6 +108,7 @@ myenv/bin/ruff check --fix .                        # 안전한 것만 자동 �
 | `test_demo.py` | **데모 계약** — 기능 덮개·번들 파일 == 화면 값·가짜 소스로 추출→적재 |
 | `test_xlio_csv.py` | csv·tsv 입력(열 타입 규칙·0으로 시작하는 코드·되쓰기) |
 | `test_multi_lot.py` | **§9.2** lot 선택 SQL(안 고르면 예전과 동일)·커버리지·lot 심볼·표 lot 경계·기준 lot |
+| `test_requests_9.py` | 요청 9건 — 리포트 X 스케일·한쪽 범위·흔적 없는 제외·드래그 네모·plot별 제외·그룹 스타일 보존·PPT 색·막대 |
 | `test_requests_14.py` | 요청 14건 — GEN 조건·적재 보전·산점도 설명·공통 legend·SPEC 열·조건 모드(LIKE·부등호)·예약 실행 왕복·계측/tracking 재부착·step_seq 표 |
 | `test_requests_13.py` | 요청 13건 — 단일 exe·리소스 경로·빌드 스탬프·fab tracking 이름 컬럼·조회 조건 자동 채움·boxplot·plot 종류·VARCHAR 읽기·Tukey 필터·예약 실행 |
 | `test_extract_skip_empty.py` | 빈 청크 건너뛰기 · 날짜 프로브(SUM) · 청크 폭(개발자 모드) |
@@ -379,7 +380,9 @@ plot 종류는 `scatter · box · bar · trend` 넷이고 목록은 `model/specs
 **box와 bar는 입력 규칙이 같다** — x=나눌 기준, y=item. 그 짝은
 `specs.CAT_PLOTS` 하나가 갖고 검증(`templates.py`)·자동완성(explore·report)·
 렌더러 분기가 전부 그것을 본다. 그리는 것도 `_render_box` 한 함수라 범주 정렬·
-자리 나누기·y축·규격선·범례가 한 벌이다(bar는 평균 막대 + std(n−1) 오차막대).
+자리 나누기·y축·규격선·범례가 한 벌이다(bar는 평균 막대 하나 — 오차막대 없음,
+폭은 범주마다 그 자리의 그룹 수로 나눈다). REF 그룹도 **그룹 스타일 그대로** 그린다 —
+회색은 `styles_for`가 만들 때의 기본값일 뿐, 렌더러가 덮으면 REF 색만 안 바뀐다.
 `trend`의 화면 이름은 **W/L Trend**다.
 
 **boxplot의 x는 item이 아니라 범주다.** 무엇을 범주로 쓸 수 있는지와 값 만드는
@@ -425,7 +428,8 @@ plot 종류는 `scatter · box · bar · trend` 넷이고 목록은 `model/specs
 
 걸러진 점은 **버리지 않고 기록한다** — `state.filtered`에 남고
 `data/exclusions.py`의 **별도 사이드카**(`*.filter.json`)에 저장되며, 화면에는
-회색 빈 심볼로 그대로 보인다. 손으로 찍은 제외와 파일을 나눈 이유는 필터를 끌 때
+보통은 **흔적 없이** 빠진다(탐색 탭 [클릭 → 복원] 모드에서만 회색 빈 심볼로
+보인다 — `PlotCanvas.show_hidden`). 손으로 찍은 제외와 파일을 나눈 이유는 필터를 끌 때
 사람이 뺀 점까지 지우지 않기 위해서다. **읽는 쪽은 전부 `state.hidden()`을
 쓴다** — `excluded`만 보는 코드가 하나라도 남으면 그 화면에서만 필터가 빠져
 화면과 PPT의 숫자가 갈린다.
@@ -434,7 +438,17 @@ plot 종류는 `scatter · box · bar · trend` 넷이고 목록은 `model/specs
 표·plot·미리보기는 자동 재계산하지 않는다. 요약 [표 만들기] / 탐색 [그리기] /
 리포트 [미리보기] 버튼이 트리거이고, 변경이 생기면 버튼이 앰버색 + 라벨 끝에 `•`가
 되며(색만으로 알리지 않는다 — `tabs/common.set_dirty`) 보고 있는 탭만 갱신된다.
+**그룹 변경(`groups_changed` — 보이기·색·심볼·lot 심볼 토글)도 dirty만 남긴다**
+(2026-09-29 요청: 바꿀 때마다 슬롯 6개를 다시 그리던 것이 병목). 예외는 점 제외
+하나 — 찍은 결과가 바로 보여야 다음 점을 찍는다.
 새 기능을 넣을 때 이 지연 계산 규약을 깨지 않는다.
+
+**점 제외는 클릭 또는 드래그 네모**(`PlotCanvas.on_box`). 네모 하나가
+`undo_stack`의 한 칸(`(뺀 곳, keys)`)이고 사이드카도 한 번만 쓴다. 리포트의
+[모든 plot에서 함께 제외]를 끄면 `PlotSpec.local_excluded`(세션 한정, 템플릿에
+안 씀)에 들어가 그 plot의 화면·PPT에서만 빠진다. 실험 조건 그룹을 다시 세울 때는
+`loader.merge_split_styles` 하나로 — 같은 gid면 사용자가 고친 색·심볼·크기·보이기를
+살린다([적용]이 그걸 기본값으로 되돌리던 것이 "색이 될 때도 있고 안 될 때도"의 원인).
 
 ## 데이터 계층의 제약
 

@@ -301,7 +301,7 @@ def load_state(state: AppState, db_path: str, table: str | None = None,
 
     if state.split is not None and state.factors:
         assign = state.split.assignment(state.factors)
-        state.groups = state.split.styles_for(state.factors)
+        state.groups = merge_split_styles(state)
         state.data = state.data.with_columns(pl.Series(
             "gid", wafers.map_gids(df["lot"], df["wafer"], assign)))
     # 손으로 배정한 그룹은 [적용]으로 DB를 다시 읽어도 살아남는다. 실험 조건
@@ -377,9 +377,32 @@ def _normalize_pivoted(df: pl.DataFrame, prof: compat.TableProfile) -> pl.DataFr
     return df.select(front + [c for c in df.columns if c not in front])
 
 
-def sync_exclusion(state: AppState, key: str, exclude: bool,
+def merge_split_styles(state: AppState) -> list:
+    """실험 조건 그룹을 새로 세우되 **사용자가 고친 스타일은 살린다**.
+
+    예전에는 [적용]마다 `styles_for()`로 통째로 갈아 끼워서, 바꿔 둔 색·심볼·
+    크기·보이기가 기본값으로 돌아가고 손으로 만든 그룹은 목록에서 사라졌다
+    (점은 남아 있는데 그릴 스타일이 없어 화면에서 빠졌다). 같은 gid면 예전
+    값을 쓰고, split이 만들지 않은 그룹은 `manual_groups`가 쓰는 동안 남긴다.
+    [적용]과 factor 편집(`_apply_split`)이 이 함수 하나를 탄다.
+    """
+    keep = {g.gid: g for g in state.groups}
+    fresh = state.split.styles_for(state.factors)
+    for g in fresh:
+        old = keep.pop(g.gid, None)
+        if old is not None:
+            g.name, g.color, g.symbol, g.size, g.visible = (
+                old.name, old.color, old.symbol, old.size, old.visible)
+    used = set(state.manual_groups.values())
+    return fresh + [g for g in keep.values() if g.gid in used]
+
+
+def sync_exclusion(state: AppState, key: str | list[str], exclude: bool,
                    reason: str = "탐색 화면에서 제외") -> None:
-    """제외/복원은 사이드카에만 기록 — 원본 DB는 건드리지 않는다."""
+    """제외/복원은 사이드카에만 기록 — 원본 DB는 건드리지 않는다.
+
+    key는 여러 개여도 된다(드래그 선택) — 사이드카는 한 번만 쓴다.
+    """
     if not getattr(state, "db_path", ""):
         return
     if exclude:

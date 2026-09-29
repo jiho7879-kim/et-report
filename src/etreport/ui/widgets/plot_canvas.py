@@ -29,6 +29,13 @@ class PlotCanvas(FigureCanvasQTAgg):
         self.mini = mini
         self.spec: PlotSpec | None = None
         self.on_pick: Callable[[str], None] | None = None
+        # 드래그로 그린 네모 안의 점 전부 — 없으면 점마다 on_pick을 부른다
+        self.on_box: Callable[[list[str]], None] | None = None
+        # 제외한 점을 회색 빈 심볼로 보일지. 평소에는 **흔적 없이** 지우고,
+        # 탐색 탭의 [클릭 → 복원] 모드에서만 켠다(찍을 자리가 보여야 하므로).
+        self.show_hidden = False
+        self._press: tuple[float, float] | None = None
+        self._series_key: tuple | None = None
         # 히트테스트용 원본 좌표. **픽셀로 미리 변환해 두지 않는다** —
         # 슬롯 캔버스는 그린 뒤 레이아웃에서 크기가 바뀌므로 미리 캐시하면
         # 좌표가 어긋나 클릭이 먹지 않는다. 클릭 시점에 변환한다.
@@ -40,7 +47,9 @@ class PlotCanvas(FigureCanvasQTAgg):
         # 축 이름이 아래 슬롯 위에 겹쳐 그려진다 — 작게 줄어들 수 있게 한다.
         self.setMinimumSize(80, 60)
         self.setParent(parent)
-        self.mpl_connect("button_press_event", self._click)
+        self.mpl_connect("button_press_event", self._on_press)
+        self.mpl_connect("motion_notify_event", self._on_motion)
+        self.mpl_connect("button_release_event", self._on_release)
         # 크기가 바뀌면 여백(tight_layout)이 어긋나 축 이름이 밖으로 삐져나온다.
         # 리사이즈가 멎은 뒤 한 번만 다시 그린다.
         self._redraw_timer = QTimer(self)
@@ -56,6 +65,9 @@ class PlotCanvas(FigureCanvasQTAgg):
             return None
         styles = st.groups or [_ALL]
         active = st.active()
+        if spec.local_excluded:          # 이 plot에서만 뺀 점(요청 §4)
+            active = active.filter(
+                ~pl.col("key").is_in(list(spec.local_excluded)))
         if not st.groups:
             data = {"": active}
         else:
@@ -116,15 +128,13 @@ class PlotCanvas(FigureCanvasQTAgg):
         self.draw()          # 즉시 다시 칠한다 — 예전 라벨 잔상이 남지 않게
 
     def _excluded_frame(self) -> pl.DataFrame | None:
-        """회색 빈 심볼로 남길 점 — 손으로 찍은 제외 **과 이상치 필터**.
+        """회색 빈 심볼로 남길 점 — `show_hidden`일 때만.
 
-        필터가 걸러 낸 점도 그림에 남긴다. 계산에서는 빠지되 화면에서 통째로
-        사라지면 "왜 이 점이 없지"를 확인할 방법이 없다.
-
-        만드는 일은 `AppState`가 한다 — 슬롯 6개가 각자 만들면 같은 필터를
-        여섯 번 돌린다(캐시는 거기 있다).
+        예전에는 늘 남겼는데, 지운 점이 테두리만 남은 채 그대로 보여서 "지워도
+        지워지지 않는다"가 됐다. PPT도 넘기지 않으므로 평소 화면 = PPT다.
+        만드는 일은 `AppState`가 한다(캐시는 거기 있다).
         """
-        return self.state.hidden_frame()
+        return self.state.hidden_frame() if self.show_hidden else None
 
     def _collect_points(self, spec: PlotSpec) -> None:
         """히트테스트용 데이터 좌표 수집 (픽셀 변환은 클릭 때).
@@ -134,27 +144,89 @@ class PlotCanvas(FigureCanvasQTAgg):
         수만큼(6번) 실행됐다 — 20만 행이면 파이썬 문자열 객체 120만 개를
         만들었다가 버리는 셈이었다.
         """
-        self._series = []
-        if self.on_pick is None:
+        if self.on_pick is None and self.on_box is None:
+            self._series, self._series_key = [], None
             return
         if spec.type != "scatter" or spec.mode != "site":
+            self._series, self._series_key = [], None
             return
         st = self.state
         if st.data is None:
+            self._series, self._series_key = [], None
             return
+        # 숨긴 그룹의 점은 찍히지 않아야 한다 — 보이지 않는 점이 지워지면 안 된다
+        gids = ([g.gid for g in st.groups if g.visible] if st.groups else None)
+        # 같은 데이터·같은 축·같은 그룹이면 다시 모으지 않는다. 점을 하나 지울
+        # 때마다 슬롯 6개가 20만 개의 key를 파이썬 문자열로 다시 만들던 자리다.
+        cache = (id(st.data), tuple(spec.pairs()),
+                 None if gids is None else tuple(gids))
+        if cache == self._series_key:
+            return
+        self._series, self._series_key = [], cache
+        base = st.data
+        if gids is not None and "gid" in base.columns:
+            base = base.filter(pl.col("gid").is_in(gids))
         for ax_x, ax_y in spec.pairs():
-            if ax_x not in st.data.columns or ax_y not in st.data.columns:
+            if ax_x not in base.columns or ax_y not in base.columns:
                 continue
             # x·y가 같은 item일 수 있다 — 중복 열을 그대로 select하면
             # polars가 DuplicateError를 낸다(§10.10)
             cols = list(dict.fromkeys(["key", ax_x, ax_y]))
-            sub = st.data.select(cols).drop_nulls()
+            sub = base.select(cols).drop_nulls()
             if sub.is_empty():
                 continue
             self._series.append((sub[ax_x].to_numpy(), sub[ax_y].to_numpy(),
                                  sub["key"].to_list()))
 
-    # ── 클릭 → 제외/복원 ─────────────────────────────────────
+    # ── 클릭·드래그 → 제외/복원 ──────────────────────────────
+    def _on_press(self, ev) -> None:
+        self._press = None
+        if self.on_pick is None or ev.x is None or not self._series:
+            return
+        if getattr(ev, "button", 1) not in (1, None):
+            return
+        self._press = (ev.x, ev.y)
+
+    def _on_motion(self, ev) -> None:
+        if self._press is None or ev.x is None:
+            return
+        x0, y0 = self._press
+        # 고무줄 네모 — Qt 좌표는 위가 0이라 y를 뒤집는다
+        h = self.figure.bbox.height
+        self.drawRectangle([x0, h - y0, ev.x - x0, y0 - ev.y])
+
+    def _on_release(self, ev) -> None:
+        press, self._press = self._press, None
+        if press is None:
+            return
+        self.drawRectangle(None)
+        if ev.x is None or max(abs(ev.x - press[0]), abs(ev.y - press[1])) < 5:
+            self._click(ev)               # 거의 안 움직였으면 클릭이다
+            return
+        keys = self._keys_in(press, (ev.x, ev.y))
+        if not keys:
+            return
+        if self.on_box is not None:
+            self.on_box(keys)
+        else:
+            for k in keys:
+                self.on_pick(k)
+
+    def _keys_in(self, a, b) -> list[str]:
+        """드래그한 네모 안의 점 — 모서리 두 개만 역변환해 데이터 공간에서 고른다."""
+        if not self.figure.axes:
+            return []
+        inv = self.figure.axes[0].transData.inverted()
+        (ax0, ay0), (ax1, ay1) = inv.transform([a, b])
+        x0, x1 = sorted((ax0, ax1))
+        y0, y1 = sorted((ay0, ay1))
+        out: dict[str, None] = {}
+        for xs, ys, keys in self._series:
+            for i in np.flatnonzero((xs >= x0) & (xs <= x1)
+                                    & (ys >= y0) & (ys <= y1)):
+                out[keys[i]] = None
+        return list(out)
+
     def _click(self, ev) -> None:
         if self.on_pick is None or ev.x is None or not self._series:
             return

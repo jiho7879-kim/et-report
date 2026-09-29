@@ -167,11 +167,17 @@ class Store:
                 'CREATE TABLE "' + TABLE + '" AS SELECT * FROM incoming')
             inserted = len(wide)
         else:
-            have = {r[0] for r in self.con.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name=?", [tbl]).fetchall()}
+            have = dict(self.con.execute(
+                "SELECT column_name, data_type FROM information_schema.columns "
+                "WHERE table_name=?", [tbl]).fetchall())
             for col, dt in zip(wide.columns, wide.dtypes):
-                if col not in have:
+                if col in have and dt == pl.Utf8 and have[col] != "VARCHAR":
+                    # 예전 DB는 step_seq가 INTEGER다. 문자열 코드(`LN08…`)를
+                    # 그대로 INSERT하면 변환 오류로 적재가 통째로 실패한다.
+                    # 숫자 값은 VARCHAR로 바꿔도 key_hash가 같다(`"1"`).
+                    self.con.execute(
+                        f'ALTER TABLE "{tbl}" ALTER COLUMN "{col}" TYPE VARCHAR')
+                elif col not in have:
                     dd = "DOUBLE" if dt in (pl.Float64, pl.Float32) else "VARCHAR"
                     self.con.execute(
                         f'ALTER TABLE "{tbl}" ADD COLUMN "{col}" {dd}')
