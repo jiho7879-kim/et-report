@@ -178,18 +178,16 @@ def test_addp_may_reference_rows_above(fake_sheet):
     assert [r.alias for r in rf.addps()] == ["D1", "D2"]
 
 
-def test_forward_reference_is_dropped(fake_sheet):
-    """아래 행 참조 = 순환참조 차단 규칙 위반 → 그 item만 제외."""
+def test_forward_reference_is_resolved_independent_of_sheet_order(fake_sheet):
+    """REAL/ADDP가 아래에 있어도 의존성 순서로 계산한다."""
     fake_sheet(sheet(
         real("ET_A", "A"),
         addp("D", "{A}+{LATER}"),
         real("ET_L", "LATER"),
     ))
     rf = R.load("x.xlsx")
-    assert [r.alias for r in rf.rules] == ["A", "LATER"]
-    assert len(rf.warnings) == 1
-    assert "참조 불가" in rf.warnings[0].message
-    assert "LATER" in rf.warnings[0].message
+    assert [r.alias for r in rf.rules] == ["A", "LATER", "D"]
+    assert not rf.warnings
 
 
 def test_dropped_addp_cascades(fake_sheet):

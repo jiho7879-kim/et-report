@@ -110,6 +110,32 @@ def test_addp_chain_follows_sheet_order():
     assert (v["D1"], v["D2"], v["D3"]) == (6.0, 7.0, 42.0)
 
 
+def test_addp_chain_is_independent_of_sheet_order():
+    """수식을 엑셀에서 위아래로 옮겨도 참조 그래프대로 계산한다."""
+    rf = rf_of(
+        rule("ADDP", "", "D3", formula="{D2}*{D1}", row=2),
+        rule("ADDP", "", "D2", formula="{D1}+1", row=3),
+        rule("REAL", "ET_A", "A", row=4),
+        rule("ADDP", "", "D1", formula="{A}*2", row=5),
+    )
+    assert [r.alias for r in rf.addps()] == ["D1", "D2", "D3"]
+    v = values(apply(rf, long_of([("ET_A", 3.0)])))
+    assert (v["D1"], v["D2"], v["D3"]) == (6.0, 7.0, 42.0)
+
+
+def test_addp_cycle_and_dependents_are_excluded_without_harming_valid_items():
+    rf = Reformatter(rules=[
+        rule("REAL", "ET_A", "A"),
+        rule("ADDP", "", "CYCLE1", formula="{CYCLE2}+1", row=3),
+        rule("ADDP", "", "CYCLE2", formula="{CYCLE1}+1", row=4),
+        rule("ADDP", "", "CHILD", formula="{CYCLE1}+1", row=5),
+        rule("ADDP", "", "OK", formula="{A}+1", row=6),
+    ])
+    validate(rf)
+    assert [r.alias for r in rf.rules] == ["A", "OK"]
+    assert {w.alias for w in rf.warnings} == {"CYCLE1", "CYCLE2", "CHILD"}
+
+
 def test_std_addp_matches_excel_stdev():
     rf = rf_of(
         rule("REAL", "ET_A", "A"), rule("REAL", "ET_B", "B"),

@@ -56,7 +56,8 @@ def test_valid_template(fake_sheet, rf, monkeypatch):
     spec = T.build_report(t, "R1")
     assert len(spec.pages) == 1
     page = spec.pages[0]
-    assert page.number == 1 and page.title == "P"
+    assert page.number == 1 and page.title == "Page 1"
+    assert page.slots[0].title == "P"
     assert page.slots[0].x == "IT0000" and page.slots[1].y == "ADDP00"
     assert page.slots[2] is None
     assert spec.table_names() == ["DC"]
@@ -116,11 +117,11 @@ def test_comma_pairs_must_match(fake_sheet, rf, monkeypatch):
 
 def test_duplicate_slot_warns_and_last_wins(fake_sheet, rf, monkeypatch):
     t = load(fake_sheet,
-             [prow(1, "IT0000", "IT0001", 1, t2="first"),
-              prow(1, "IT0002", "IT0003", 1, t2="second")],
-             [["IT0000", "DC", "", "", "R1"]], rf, monkeypatch)
+                 [prow(1, "IT0000", "IT0001", 1, t2="first"),
+                  prow(1, "IT0002", "IT0003", 1, t2="second")],
+                 [["IT0000", "DC", "", "", "R1"]], rf, monkeypatch)
     assert any("중복" in w.message for w in t.warnings)
-    assert T.build_report(t, "R1").pages[0].slots[0].title == "second"
+    assert T.build_report(t, "R1").pages[0].slots[0].title == "P"
 
 
 def test_reports_are_separated(fake_sheet, rf, monkeypatch):
@@ -181,6 +182,42 @@ def test_trend_non_alias_y_is_skipped(fake_sheet, rf, monkeypatch):
     assert len(t.warnings) == 1
     assert "계산 불가" in t.warnings[0].message
     assert T.build_report(t, "R1").pages == []
+
+
+def test_titles_are_read_in_their_template_roles(fake_sheet, rf, monkeypatch):
+    t = load(fake_sheet,
+             [prow(1, "IT0000", "IT0001", 1, t1="plot title", t2="page title")],
+             [["IT0000", "DC", "", "", "R1"]], rf, monkeypatch)
+    page = T.build_report(t, "R1").pages[0]
+    assert page.title == "page title"
+    assert page.slots[0].title == "plot title"
+
+
+@pytest.mark.parametrize("typ", ["boxplot", " box ", "bar chart"])
+def test_categorical_template_type_alias_keeps_non_alias_x(fake_sheet, rf, monkeypatch, typ):
+    t = load(fake_sheet,
+             [prow(1, "wafer", "IT0000", 1, typ=typ)],
+             [["IT0000", "DC", "", "", "R1"]], rf, monkeypatch)
+    assert not t.warnings
+    assert T.build_report(t, "R1").pages[0].slots[0].type in {"box", "bar"}
+
+
+@pytest.mark.parametrize("typ", ["scatter", None])
+def test_builtin_category_x_is_read_as_box(fake_sheet, rf, monkeypatch, typ):
+    """x에 wafer를 적어 두면 Type을 안 고쳐도 plot이 빠지지 않는다(요청 §5)."""
+    t = load(fake_sheet,
+             [prow(1, "wafer", "IT0000", 1, typ=typ)],
+             [["IT0000", "DC", "", "", "R1"]], rf, monkeypatch)
+    assert not t.warnings
+    assert T.build_report(t, "R1").pages[0].slots[0].type == "box"
+
+
+def test_optional_spec_column_is_loaded(fake_sheet, rf):
+    plot = plot_sheet([prow(1, "IT0000", "IT0001", 1)])
+    plot = plot.with_columns(pl.lit("global").alias("SPEC"))
+    table = tbl_sheet([["IT0000", "DC", "", "", "R1"]])
+    t = T.from_frames(plot, table, rf)
+    assert T.build_report(t, "R1").pages[0].slots[0].spec == "global"
 
 
 def _plot_sheet_with_mode(rows):

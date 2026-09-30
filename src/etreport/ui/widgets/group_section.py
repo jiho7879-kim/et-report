@@ -28,14 +28,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from etreport.model.split import SYMBOLS
+from etreport.model.split import SYMBOL_CHOICES, SYMBOL_LABELS
 from etreport.model.state import AppState, StateBus
 from etreport.ui.tabs.common import on_combo
 from etreport.ui.widgets.cards import ChromeSection, GhostButton
 
 __all__ = ["SIZES", "SYMBOL_LABELS", "GroupSection", "swatch_qss"]
 
-SYMBOL_LABELS = ["● 원", "■ 사각", "▲ 삼각", "◆ 마름모", "＋ 십자"]
 SIZES = ["4", "6", "8", "10", "12"]
 
 #: 색 견본과 크기 콤보의 폭. 셋을 균등하게 나누면 '◆ 마름모'가 '◆ 마'로
@@ -210,7 +209,7 @@ class GroupSection(ChromeSection):
         if g is not None:
             self.btn_color.setStyleSheet(swatch_qss(g.color))
             self.cmb_symbol.setCurrentIndex(
-                SYMBOLS.index(g.symbol) if g.symbol in SYMBOLS else 0)
+                SYMBOL_CHOICES.index(g.symbol) if g.symbol in SYMBOL_CHOICES else 0)
             i = self.cmb_size.findText(str(g.size))
             self.cmb_size.setCurrentIndex(i if i >= 0 else 1)
             self.chk_ref.setChecked(g.ref)
@@ -229,7 +228,7 @@ class GroupSection(ChromeSection):
         g = self.current()
         if g is None:
             return
-        g.symbol = SYMBOLS[self.cmb_symbol.currentIndex()]
+        g.symbol = SYMBOL_CHOICES[self.cmb_symbol.currentIndex()]
         g.size = int(self.cmb_size.currentText())
         if self.chk_ref.isChecked():
             for other in self.state.groups:      # REF는 하나뿐

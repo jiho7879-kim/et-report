@@ -1,6 +1,7 @@
 """템플릿 로더.
 
 plot  : page · x · y · order · title1 · title2 · Report · Type · x_name · y_name
+        · spec(선택: global | functional)
         order = 1~6, 왼→오 (1·2·3 윗줄 / 4·5·6 아랫줄)
 table : item_id · CAT1 · CAT2 · CAT3 · Report   (item_id ≡ 리포메터 ALIAS)
 
@@ -16,6 +17,7 @@ from pathlib import Path
 import polars as pl
 
 from etreport.data.reformatter import Reformatter
+from etreport.model.categories import BUILTIN
 from etreport.model.specs import (
     CAT_PLOTS,
     GEOM_COLUMNS,
@@ -27,6 +29,35 @@ from etreport.model.specs import (
 
 PLOT_COLS = ["page", "x", "y", "order", "title1", "title2",
              "Report", "Type", "x_name", "y_name"]
+
+
+def normalize_plot_type(value) -> str:
+    """사용자가 흔히 쓰는 plot 종류 표기를 내부 타입 하나로 맞춘다.
+
+    템플릿의 범주축은 리포메터 ALIAS가 아니므로, 여기서 정규화가 빠지면
+    ``boxplot``/``bar chart`` 행이 산점도로 오인되어 통째로 skip된다.
+    """
+    raw = str(value or "scatter").strip().lower()
+    compact = re.sub(r"[\s_-]+", "", raw)
+    return {
+        "boxplot": "box", "box": "box",
+        "barchart": "bar", "bar": "bar",
+        "scatterplot": "scatter", "scatter": "scatter",
+        "wltrend": "trend", "trend": "trend",
+    }.get(compact, raw)
+
+
+def _row_type(r: dict) -> str:
+    """템플릿 한 행의 plot 종류 — 검증과 조립이 같은 판정을 쓴다.
+
+    Type을 비우거나 scatter로 둔 채 x에 `wafer`·`lot+wafer` 같은 기본 범주를
+    적으면 box로 읽는다. 범주는 리포메터 ALIAS가 아니라서 산점도로 보면
+    "계산 불가 ALIAS"로 그 plot이 통째로 빠진다(page에 그것뿐이면 page까지).
+    """
+    typ = normalize_plot_type(r["Type"])
+    if typ == "scatter" and str(r["x"] or "").strip() in BUILTIN:
+        return "box"
+    return typ
 
 
 def _with_rowno(df: pl.DataFrame) -> pl.DataFrame:
@@ -108,6 +139,12 @@ def from_frames(plot_df: pl.DataFrame, table_df: pl.DataFrame,
     파일을 거치지 않는 입구다(데모·테스트). 검증은 load()와 같은 코드를
     타므로 "파일로 읽었을 때만 걸리는 오류"가 생기지 않는다.
     """
+    # `spec`은 선택 열이라 기존 템플릿을 강제 변환하지 않는다. 다만 Excel에서
+    # `SPEC`처럼 대문자로 적어도 한 이름으로 읽어야 한다.
+    for col in plot_df.columns:
+        if str(col).strip().lower() == "spec" and col != "spec":
+            plot_df = plot_df.rename({col: "spec"})
+            break
     t = Templates()
     t.plot_rows = _with_rowno(plot_df)
     t.table_rows = _with_rowno(table_df)
@@ -126,7 +163,7 @@ def _validate(t: Templates, rf: Reformatter) -> None:
         seen: set[tuple] = set()
         for r in df.iter_rows(named=True):
             i = int(r["_row"])
-            typ = str(r["Type"] or "scatter").lower()
+            typ = _row_type(r)
             key = (r["Report"], r["page"], r["order"])
             if key in seen:
                 t.warnings.append(TemplateError(
@@ -210,22 +247,25 @@ def build_report(t: Templates, report: str) -> ReportSpec:
         for page_no in sorted({_int(p) for p in rows["page"].drop_nulls()}):
             prow = rows.filter(pl.col("page").cast(pl.Float64,
                                                    strict=False) == page_no)
-            title1 = next((str(v) for v in prow["title1"] if v), f"Page {page_no}")
-            page = PageSpec(number=page_no, title=title1)
+            # 사용자가 주로 보는 title1은 plot 제목, title2는 page 제목이다.
+            # 이전 구현은 둘을 반대로 읽어 템플릿과 화면의 역할이 바뀌었다.
+            title2 = next((str(v) for v in prow["title2"] if v), f"Page {page_no}")
+            page = PageSpec(number=page_no, title=title2)
             for r in prow.iter_rows(named=True):
                 if int(r["_row"]) in t.skip_plot:
                     continue
                 idx = max(0, min(5, _int(r["order"], 1) - 1))
-                typ = str(r["Type"] or "scatter").lower()
+                typ = _row_type(r)
                 mode = str(r.get("Mode") or "site").strip().lower()
                 if mode not in ("site", "avg", "med", "std"):
                     mode = "site"
                 page.slots[idx] = PlotSpec(
-                    title=str(r["title2"] or ""),
+                    title=str(r["title1"] or ""),
                     x=str(r["x"] or ""), y=str(r["y"] or ""),
                     x_name=str(r["x_name"] or ""), y_name=str(r["y_name"] or ""),
                     type=typ,
                     mode=mode,
+                    spec=str(r.get("spec") or "").strip().lower(),
                 )
             if any(page.slots):
                 spec.pages.append(page)

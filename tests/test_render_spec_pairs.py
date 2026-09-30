@@ -8,7 +8,7 @@ x·y를 컴마로 여러 개 적으면 한 plot에 쌍이 겹쳐 그려진다. �
 from __future__ import annotations
 
 import polars as pl
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Polygon, Rectangle
 
 from etreport.data.reformatter import Reformatter, Rule, validate
 from etreport.model.specs import GroupStyle, PlotSpec
@@ -98,3 +98,66 @@ def test_same_alias_pairs_draw_one_box():
     ax = _fig(PlotSpec(type="scatter", x="Ax", y="Ay,Ay", mode="site")).axes[0]
     assert len(_boxes(ax)) == 1
     assert len(_xmarks(ax)) == 1
+
+
+def _corner_polygons(ax) -> list[Polygon]:
+    return [p for p in ax.patches if isinstance(p, Polygon)]
+
+
+def test_global_corner_specs_keep_matched_corner_pairs():
+    """같은 이름의 corner를 짝지어 마름모/사다리꼴을 보존한다."""
+    rf = _rf()
+    rf.by_alias["Ax"].ffg, rf.by_alias["Ax"].fsg = 0.7, 0.2
+    rf.by_alias["Ax"].ssg, rf.by_alias["Ax"].sfg = 0.6, 0.4
+    rf.by_alias["Ay"].ffg, rf.by_alias["Ay"].fsg = 2.5, 1.0
+    rf.by_alias["Ay"].ssg, rf.by_alias["Ay"].sfg = 1.5, 2.0
+    fig = render(PlotSpec(type="scatter", x="Ax", y="Ay", spec="global"),
+                 {"": _df()}, [GroupStyle(gid="", name="전체")], rf, [], (4, 3))
+    poly, = _corner_polygons(fig.axes[0])
+    assert {tuple(map(float, p)) for p in poly.get_xy()[:-1]} == {
+        (0.7, 2.5), (0.2, 1.0), (0.6, 1.5), (0.4, 2.0)}
+
+
+def test_functional_corner_specs_replace_legacy_spec_box():
+    rf = _rf()
+    rf.by_alias["Ax"].ff, rf.by_alias["Ax"].ss = 0.3, 0.8
+    rf.by_alias["Ax"].sf, rf.by_alias["Ax"].fs = 0.5, 0.6
+    rf.by_alias["Ay"].ff, rf.by_alias["Ay"].ss = 1.1, 2.1
+    rf.by_alias["Ay"].sf, rf.by_alias["Ay"].fs = 1.7, 1.4
+    fig = render(PlotSpec(type="scatter", x="Ax", y="Ay", spec="functional"),
+                 {"": _df()}, [GroupStyle(gid="", name="전체")], rf, [], (4, 3))
+    poly, = _corner_polygons(fig.axes[0])
+    assert {tuple(map(float, p)) for p in poly.get_xy()[:-1]} == {
+        (0.3, 1.1), (0.8, 2.1), (0.5, 1.7), (0.6, 1.4)}
+
+
+def _crosses(a, b, c, d) -> bool:
+    def side(p, q, r):
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+    return side(a, b, c) * side(a, b, d) < 0 and side(c, d, a) * side(c, d, b) < 0
+
+
+def test_corner_polygon_does_not_self_cross_on_log_axis():
+    """자릿수가 다른 축(Idsat–Ioff)에서도 변이 엇갈리지 않는다 — 순서는 화면 좌표로."""
+    import math
+
+    rf = _rf()
+    ax_, ay_ = rf.by_alias["Ax"], rf.by_alias["Ay"]
+    ax_.ff, ax_.ss, ax_.sf, ax_.fs = 900.0, 500.0, 650.0, 750.0
+    ay_.ff, ay_.ss, ay_.sf, ay_.fs = 1e-7, 1e-10, 2e-8, 5e-10
+    fig = render(PlotSpec(type="scatter", x="Ax", y="Ay", spec="functional",
+                          logy_mode="log"),
+                 {"": _df()}, [GroupStyle(gid="", name="전체")], rf, [], (4, 3))
+    poly, = _corner_polygons(fig.axes[0])
+    a, b, c, d = [(x, math.log10(y)) for x, y in poly.get_xy()[:-1]]
+    assert not _crosses(a, b, c, d) and not _crosses(b, c, d, a)
+
+
+def test_hollow_symbol_draws_unfilled_markers_in_every_mode():
+    for mode in ("site", "avg"):
+        fig = render(PlotSpec(type="scatter", x="Ax", y="Ay", mode=mode),
+                     {"": _df()}, [GroupStyle(gid="", name="전체", symbol="o-open")],
+                     _rf(), [], (4, 3))
+        faces = [ln.get_markerfacecolor() for ln in fig.axes[0].lines
+                 if ln.get_gid() == "etreport.points"]
+        assert faces and all(f == "none" for f in faces), mode

@@ -18,6 +18,47 @@ log = logging.getLogger(__name__)
 #: pandas 프레임으로 올리다 OOM으로 죽기 전에 막는다.
 SBDF_WARN_ROWS = 2_000_000
 
+# pandas 전체 프레임과 SBDF 변환은 같은 데이터를 여러 벌 붙들 수 있다.
+SBDF_MAX_BYTES = 1 << 30
+
+
+def preflight_sbdf(con, sql: str) -> int:
+    """pandas/Arrow 할당 전에 안전하지 않은 전체 프레임 내보내기를 막는다.
+
+    행 수·문자열 payload 집계는 DuckDB 안에서 끝낸다. 행 수만이 아니라 넓은
+    프레임·객체 오버헤드·변환 중 복사본까지 예산에 넣는다. CSV/parquet COPY는
+    직접 스트리밍하므로 이 가드를 일부러 거치지 않는다.
+    """
+    from etreport.data.extractor import available_memory_bytes
+
+    query = sql.strip().rstrip(";")
+    rows = int(con.execute(f"SELECT count(*) FROM (\n{query}\n)").fetchone()[0])
+    if rows > SBDF_WARN_ROWS:
+        raise ValueError(f"SBDF 행 수 상한({SBDF_WARN_ROWS:,}) 초과: {rows:,}행. "
+                         "CSV 또는 parquet으로 저장하세요.")
+    columns = con.execute(f"DESCRIBE (\n{query}\n)").fetchall()
+    available = available_memory_bytes()
+    budget = min(SBDF_MAX_BYTES, available // 4) if available else SBDF_MAX_BYTES
+    estimated = rows * max(1, len(columns)) * 128 * 4
+    if estimated > budget:
+        raise ValueError("SBDF 메모리 안전 상한 초과 — CSV 또는 parquet으로 저장하세요.")
+    payloads = []
+    for name, dtype, *_ in columns:
+        if any(token in dtype for token in ("[", "STRUCT", "MAP", "UNION")):
+            raise ValueError("복합형 컬럼의 SBDF 메모리를 보장할 수 없습니다. "
+                             "CSV 또는 parquet으로 저장하세요.")
+        quoted = '"' + name.replace('"', '""') + '"'
+        if dtype == "VARCHAR":
+            payloads.append(f"coalesce(sum(octet_length(encode({quoted}))), 0)")
+        elif dtype == "BLOB":
+            payloads.append(f"coalesce(sum(octet_length({quoted})), 0)")
+    if payloads:
+        size = con.execute(f"SELECT {' + '.join(payloads)} FROM (\n{query}\n)").fetchone()[0]
+        estimated += int(size) * 4
+    if estimated > budget:
+        raise ValueError("SBDF 메모리 안전 상한 초과 — CSV 또는 parquet으로 저장하세요.")
+    return rows
+
 
 def import_sbdf() -> object | None:
     """SBDF 모듈을 돌려준다 — 공식 spotfire → 사내 레거시 순.
@@ -99,11 +140,7 @@ def save_wide(preset, on_log: Callable[[str], None] | None = None) -> list[str]:
         try:
             from etreport.data.loader import readonly_query
             with readonly_query(db_path) as con:
-                n = con.execute("SELECT count(*) FROM et_data").fetchone()[0]
-                if n > SBDF_WARN_ROWS:
-                    say(f"⚠ SBDF 저장 건너뜀 — {n:,}행이 상한"
-                        f"({SBDF_WARN_ROWS:,})을 넘습니다")
-                    return saved
+                preflight_sbdf(con, "SELECT * FROM et_data")
                 # pandas로 바로 받는다 — polars를 거치면 같은 표가 두 벌 생긴다
                 full = con.execute("SELECT * FROM et_data").df()
             sbdf.export_data(full, str(base) + ".sbdf")

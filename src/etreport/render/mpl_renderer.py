@@ -9,6 +9,7 @@ pyplot은 쓰지 않는다(Figure를 직접 생성) — 전역 매니저에 쌓�
 from __future__ import annotations
 
 import logging
+import math
 from statistics import fmean
 
 import matplotlib
@@ -16,7 +17,7 @@ import matplotlib
 matplotlib.use("Agg")
 import polars as pl
 from matplotlib.figure import Figure
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Polygon, Rectangle
 from matplotlib.ticker import MaxNLocator
 
 from etreport import fonts
@@ -34,7 +35,10 @@ from etreport.ui.theme import TOKENS
 log = logging.getLogger(__name__)
 
 # pyqtgraph 심볼 ↔ matplotlib 마커 (한 곳에서만 정의)
-MARKER = {"o": "o", "s": "s", "t": "^", "d": "D", "+": "+"}
+MARKER = {
+    "o": "o", "s": "s", "t": "^", "d": "D", "+": "+",
+    "o-open": "o", "s-open": "s", "t-open": "^", "d-open": "D",
+}
 SPEC_COLOR = "#d70015"      # 규격 — 빨간 실선
 TARGET_COLOR = "#0000FF"    # 타깃 — 파란 X
 REF_COLOR = "#8e8e93"       # REF 그룹 라인 — 회색
@@ -71,7 +75,7 @@ def lot_markers(data: dict[str, pl.DataFrame]) -> dict[str, str]:
     """
     lots = sorted({str(v) for df in data.values() if "lot" in df.columns
                    for v in df["lot"].unique().to_list() if v is not None})
-    marks = list(MARKER.values())
+    marks = list(dict.fromkeys(MARKER.values()))   # 빈 심볼은 모양이 같다
     return {lot: marks[i % len(marks)] for i, lot in enumerate(lots)}
 
 
@@ -94,6 +98,11 @@ def _lot_parts(df: pl.DataFrame, lot_split: bool, markers: dict[str, str],
         if not sub.is_empty():
             parts.append((sub, markers.get(lot, base), f"{st.name} ({lot})"))
     return parts or [(df, base, st.name)]
+
+
+def _is_hollow_symbol(symbol: str) -> bool:
+    """선택 가능한 빈 심볼은 내부 코드에만 ``-open``을 붙여 구분한다."""
+    return symbol.endswith("-open")
 
 
 #: 데이터 점 아티스트에 붙이는 표식(`point_xy`가 이것만 센다).
@@ -229,6 +238,19 @@ def render(spec: PlotSpec,
                 dr[a] = (min(lo, cur[0]) if cur else lo,
                          max(hi, cur[1]) if cur else hi)
 
+    # corner 규격을 고른 plot은 그 값도 자동 축에 들어가야 빨간 창이 잘리지
+    # 않는다. 빈 spec은 기존 SPECLOW/SPECHIGH 계산을 그대로 쓴다.
+    corner_kind = spec.spec.strip().lower()
+    if corner_kind in ("global", "functional"):
+        for alias in {a for pair in pairs for a in pair}:
+            rule = rf.by_alias.get(alias)
+            vals = rule.corner_values(corner_kind) if rule else []
+            if vals:
+                lo, hi = min(vals), max(vals)
+                old = dr.get(alias)
+                dr[alias] = (min(lo, old[0]) if old else lo,
+                             max(hi, old[1]) if old else hi)
+
     (xlo, xhi, lgx), (ylo, yhi, lgy) = resolve_axes(spec, rf, log_patterns, dr)
 
     # 포인트 — 모든 xy쌍이 그룹 스타일을 공유(확정 사양)
@@ -239,17 +261,20 @@ def render(spec: PlotSpec,
         if not st.visible or st.gid not in data:
             continue
         df = data[st.gid]
+        # lot 구분이 켜지면 그룹 symbol이 통째로 무시된다 — 채우기도 따라간다.
+        hollow = _is_hollow_symbol(st.symbol) and not lot_split
         for sub, mark, label in _lot_parts(df, lot_split, markers, st):
             if spec.mode != "site":
                 _scatter_aggregate(ax, sub, pairs, st, spec.mode, excluded_keys,
-                                   marker=mark, label=label)
+                                   marker=mark, label=label, hollow=hollow)
                 continue
             for ax_x, ax_y in pairs:
                 if ax_x not in sub.columns or ax_y not in sub.columns:
                     continue
                 points(ax, sub[ax_x], sub[ax_y], color=st.color,
                        size=st.size, marker=mark,
-                       label=label if (ax_x, ax_y) == pairs[0] else None)
+                       label=label if (ax_x, ax_y) == pairs[0] else None,
+                       hollow=hollow)
 
     if spec.mode == "site" and _unpaired(data, pairs):
         ax.text(0.5, 0.5, "x·y가 같은 측정점에 없습니다\n"
@@ -281,6 +306,20 @@ def render(spec: PlotSpec,
 
     seen_box: set[tuple] = set()
     for ax_x, ax_y in pairs:
+        if corner_kind in ("global", "functional"):
+            xr, yr = rf.by_alias.get(ax_x), rf.by_alias.get(ax_y)
+            xcorners = dict(xr.corner_points(corner_kind)) if xr else {}
+            ycorners = dict(yr.corner_points(corner_kind)) if yr else {}
+            # 각 corner 이름을 반드시 맞춰 짝지은 뒤 외곽을 정렬한다. X/Y를
+            # 따로 min/max하면 실제 사양의 마름모·사다리꼴이 직사각형으로
+            # 바뀌어 허용 영역을 거짓으로 넓히게 된다.
+            points_at_corner = [(xcorners[name], ycorners[name])
+                                for name in xcorners if name in ycorners]
+            box = tuple(sorted(points_at_corner))
+            if len(points_at_corner) >= 3 and box not in seen_box:
+                seen_box.add(box)
+                _spec_polygon(ax, points_at_corner, lgx, lgy)
+            continue
         x_lo, x_hi = _bounds(ax_x)
         y_lo, y_hi = _bounds(ax_y)
         box = (x_lo, x_hi, y_lo, y_hi)
@@ -352,7 +391,8 @@ def render(spec: PlotSpec,
 def _scatter_aggregate(ax, df: pl.DataFrame, pairs, st: GroupStyle,
                        agg: str, excluded_keys: set[str],
                        marker: str | None = None,
-                       label: str | None = None) -> None:
+                       label: str | None = None,
+                       hollow: bool = False) -> None:
     """mode=avg/med/std scatter — (lot,wafer) 집계 점 하나씩.
 
     marker·label을 주면 그것을 쓴다(lot 구분). 안 주면 그룹 스타일 그대로다.
@@ -371,7 +411,8 @@ def _scatter_aggregate(ax, df: pl.DataFrame, pairs, st: GroupStyle,
         if not xs:
             continue
         points(ax, xs, ys, color=st.color, size=st.size, marker=mark,
-               label=name if (ax_x, ax_y) == pairs[0] else None)
+               label=name if (ax_x, ax_y) == pairs[0] else None,
+               hollow=hollow)
 
 
 def _render_trend(spec: PlotSpec,
@@ -453,9 +494,11 @@ def _render_trend(spec: PlotSpec,
                       if (v := vals.get(it)) is not None]
             if not ys:
                 continue
+            hollow = _is_hollow_symbol(st.symbol)
             ax.scatter([xpos[it]] * len(ys), ys, s=(st.size * 0.5) ** 2,
-                       c=st.color,
-                       alpha=0.45, linewidths=0, zorder=2)
+                       facecolors="none" if hollow else st.color,
+                       edgecolors=st.color if hollow else "none",
+                       alpha=0.45, linewidths=0.8 if hollow else 0, zorder=2)
 
     line_agg = "med" if spec.mode == "site" else spec.mode
     for st in styles:
@@ -473,9 +516,12 @@ def _render_trend(spec: PlotSpec,
             xs, ys = zip(*pts)
             # REF도 그룹 색을 쓴다 — REF 그룹은 만들 때 이미 회색이다. 여기서
             # 회색으로 덮으면 REF 색만 "바꿨는데 안 바뀐다"가 된다.
-            ax.plot(xs, ys, color=st.color, marker=mark,
-                    markersize=st.size * 0.6, linewidth=1.2,
-                    zorder=4, label=label)
+            line_kw = {"color": st.color, "marker": mark,
+                       "markersize": st.size * 0.6, "linewidth": 1.2,
+                       "zorder": 4, "label": label}
+            if _is_hollow_symbol(st.symbol) and not lot_split:
+                line_kw.update(markerfacecolor="none", markeredgecolor=st.color)
+            ax.plot(xs, ys, **line_kw)
 
     # X축(WIDTH·LENGTH) 위치에 세로 점선은 그리지 않는다 — 규격은 y값의 한계라
     # x 위치에 그으면 의미 없는 격자만 늘어난다(사용자 요청).
@@ -745,6 +791,34 @@ def _spec_box(ax, x_lo, x_hi, y_lo, y_hi) -> None:
                        (x_lo, x_hi, y_lo, y_hi)]
 
 
+def _spec_polygon(ax, points_at_corner: list[tuple[float, float]],
+                  logx: bool = False, logy: bool = False) -> None:
+    """corner 쌍으로 만든 사각 규격 창. 입력 순서와 무관하게 외곽을 잇는다.
+
+    꼭짓점 순서는 **화면에 보이는 좌표**에서 정한다 — 로그 축이면 로그 공간,
+    그리고 축마다 0~1로 맞춘 뒤 중심 둘레의 각도로 돈다. 원래 값 그대로 재면
+    Idsat(수백)–Ioff(1e-9)처럼 자릿수가 다른 쌍에서 각도가 전부 0·π로 뭉개져
+    변이 서로 엇갈린(나비넥타이) 사각형이 된다.
+    """
+    # 같은 점이 중복되면 angle 정렬 뒤 선이 되돌아가 경계가 굵어 보인다.
+    points_at_corner = list(dict.fromkeys(points_at_corner))
+    if len(points_at_corner) < 3:
+        return
+
+    def shown(vals: list[float], is_log: bool) -> list[float]:
+        if is_log and min(vals) > 0:
+            vals = [math.log10(v) for v in vals]
+        lo, span = min(vals), (max(vals) - min(vals)) or 1.0
+        return [(v - lo) / span for v in vals]
+
+    sx = shown([x for x, _y in points_at_corner], logx)
+    sy = shown([y for _x, y in points_at_corner], logy)
+    cx, cy = fmean(sx), fmean(sy)
+    ordered = [points_at_corner[i] for i in sorted(
+        range(len(sx)), key=lambda i: math.atan2(sy[i] - cy, sx[i] - cx))]
+    ax._spec_polygons = [*getattr(ax, "_spec_polygons", []), ordered]
+
+
 def _flush_spec_box(ax) -> None:
     for b in getattr(ax, "_spec_bounds", []):
         if all(v is None for v in b):
@@ -760,3 +834,7 @@ def _flush_spec_box(ax) -> None:
             (left, bottom), right - left, top - bottom,
             fill=False, edgecolor=SPEC_COLOR, linewidth=1.2,
             linestyle="-", zorder=2.2, clip_on=True))
+    for points_at_corner in getattr(ax, "_spec_polygons", []):
+        ax.add_patch(Polygon(
+            points_at_corner, closed=True, fill=False, edgecolor=SPEC_COLOR,
+            linewidth=1.2, linestyle="-", zorder=2.2, clip_on=True))

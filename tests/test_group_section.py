@@ -179,3 +179,12 @@ def test_confound_warning_sits_next_to_the_groups(sec):
     assert sec.lbl_confound is not None
     cf = sec.state.split.confounds(sec.state.factors) if sec.state.split else []
     assert sec.lbl_confound.isVisibleTo(sec) == bool(cf)
+
+
+def test_hollow_symbol_selection_round_trips(sec):
+    from etreport.model.split import SYMBOL_CHOICES
+
+    sec.list.setCurrentRow(0)
+    sec.cmb_symbol.setCurrentIndex(SYMBOL_CHOICES.index("o-open"))
+    sec.from_controls()
+    assert sec.state.groups[0].symbol == "o-open"

@@ -4,8 +4,8 @@ UNIT·SPECLOW·SPECHIGH·TARGET.
 처리 순서(확정 사양):
   1) REAL item에 SCALE FACTOR 적용  (수식 계산 **전**)
   2) ABSOLUTE == 'Y' 이면 절대값
-  3) ADDP를 시트의 **행 순서대로** 계산 — 아래 행은 위 행의 ADDP를 참조할 수
-     있고 그 반대는 검증 오류. 순서 규칙이 곧 순환참조 차단이다.
+  3) ADDP를 **참조 관계 순서대로** 계산. 시트에서 앞뒤를 바꿔도 값은 같고,
+     순환 참조만 검증 오류다.
 
 수식 문법: ``{ALIAS}`` 참조, 사칙연산, 그리고 화이트리스트 함수만.
 eval()은 쓰지 않는다 — ast로 파싱해 직접 걷는다.
@@ -31,6 +31,13 @@ COLUMNS = [
     "CATEGORY", "ITEMID", "ALIAS", "ABSOLUTE", "SCALE FACTOR",
     "ADDP FORM", "UNIT", "SPECLOW", "SPECHIGH", "TARGET",
 ]
+
+# 기본 규격 열은 종전 템플릿과 호환되도록 필수다. corner 규격은 선택 열이라
+# 없는 리포메터도 그대로 읽는다. Global/functional 선택은 plot 템플릿이 한다.
+SPEC_CORNER_COLUMNS = (
+    "FFG", "FSG", "SSG", "SFG",     # global corners
+    "FF", "SS", "SF", "FS",          # functional corners
+)
 
 log = logging.getLogger(__name__)
 
@@ -115,6 +122,27 @@ class Rule:
     row: int                 # 시트 행 번호(오류 표시·계산 순서)
     w: float | None = None   # 옵션 기하 컬럼 "WIDTH" (폭)
     l: float | None = None   # 옵션 기하 컬럼 "LENGTH" (길이)  # noqa: E741
+    ffg: float | None = None
+    fsg: float | None = None
+    ssg: float | None = None
+    sfg: float | None = None
+    ff: float | None = None
+    ss: float | None = None
+    sf: float | None = None
+    fs: float | None = None
+
+    def corner_values(self, kind: str) -> list[float]:
+        """선택한 corner 규격의 유효값. 빈/알 수 없는 종류는 빈 목록이다."""
+        return [v for _name, v in self.corner_points(kind)]
+
+    def corner_points(self, kind: str) -> list[tuple[str, float]]:
+        """선택한 corner 이름과 값. X/Y의 같은 corner를 짝지을 때 쓴다."""
+        names = {
+            "global": ("ffg", "fsg", "ssg", "sfg"),
+            "functional": ("ff", "ss", "sf", "fs"),
+        }.get(kind.strip().lower(), ())
+        return [(name, v) for name in names if (v := getattr(self, name)) is not None
+                and math.isfinite(v)]
 
 
 @dataclass
@@ -171,7 +199,7 @@ def from_frame(raw: pl.DataFrame) -> Reformatter:
     # 있으면 그걸 우선하고, 없을 때만 정규화가 일치하는 헤더를 표준명으로 받는다.
     raw_norm = {_norm_header(c): c for c in raw.columns}
     rename: dict[str, str] = {}
-    for canon in COLUMNS:
+    for canon in (*COLUMNS, *SPEC_CORNER_COLUMNS):
         if canon in raw.columns:
             continue
         src = raw_norm.get(_norm_header(canon))
@@ -211,6 +239,7 @@ def from_frame(raw: pl.DataFrame) -> Reformatter:
             # WIDTH/LENGTH는 옵션 기하 컬럼 — 시트에 있을 때만 읽는다.
             w=_num(row.get("WIDTH")) if "WIDTH" in raw.columns else None,
             l=_num(row.get("LENGTH")) if "LENGTH" in raw.columns else None,
+            **{name.lower(): _num(row.get(name)) for name in SPEC_CORNER_COLUMNS},
         ))
     validate(rf)
     return rf
@@ -221,8 +250,8 @@ def validate(rf: Reformatter) -> None:
     """문제 행을 **버리고** 나머지로 진행한다 (사용자 요청 사양).
 
     - ALIAS 중복 → 마지막 행만 남긴다 (엑셀에서 아래에 덮어쓰는 습관과 일치)
-    - ADDP가 미정의·아래 행 참조·수식 오류 → 그 행을 뺀다
-    - 빠진 ADDP를 참조하던 아래 ADDP도 연쇄적으로 뺀다
+    - ADDP는 행 위치와 무관하게 참조 가능한 항목을 쓸 수 있다
+    - 미정의·수식 오류·순환 참조와 그 의존 ADDP만 뺀다
     빠진 내용은 warnings에 남아 UI가 한 번에 보여준다.
     """
     # 1) ALIAS 중복 — 마지막 승자
@@ -238,24 +267,24 @@ def validate(rf: Reformatter) -> None:
             continue
         kept.append(r)
 
-    # 2) ADDP 해석 — 위에서 아래로, 실패한 행은 제외
-    defined: set[str] = set()
-    final: list[Rule] = []
+    # 2) ADDP를 의존 그래프로 검증·정렬한다. 엑셀에서 수식을 옮기거나 새 행을
+    # 중간에 넣어도 결과가 바뀌면 안 된다. 실제 계산 순서는 여기서 만든 위상
+    # 순서를 쓰므로, vector/row/cross-seq 경로가 모두 같은 계약을 따른다.
+    reals = [r for r in kept if r.category != "ADDP"]
+    all_aliases = {r.alias for r in kept}
+    candidates: list[Rule] = []
     for r in kept:
         if r.category != "ADDP":
-            defined.add(r.alias)
-            final.append(r)
             continue
         if not r.formula:
             rf.warnings.append(ReformatterError(
                 r.row, r.alias, "ADDP FORM이 비어 있어 제외했습니다"))
             continue
-        missing = [ref for ref in _REF.findall(r.formula) if ref not in defined]
+        missing = sorted(set(_REF.findall(r.formula)) - all_aliases)
         if missing:
             rf.warnings.append(ReformatterError(
                 r.row, r.alias,
-                f"참조 불가 {', '.join(missing)} — 미정의이거나 아래 행에 있어"
-                " 이 item을 제외했습니다"))
+                f"참조 불가 {', '.join(missing)} — 정의되지 않은 item이라 제외했습니다"))
             continue
         try:
             compile_formula(r.formula)
@@ -263,10 +292,35 @@ def validate(rf: Reformatter) -> None:
             rf.warnings.append(ReformatterError(
                 r.row, r.alias, f"{e} — 이 item을 제외했습니다"))
             continue
-        defined.add(r.alias)
-        final.append(r)
+        candidates.append(r)
 
-    rf.rules = final
+    pending = {r.alias: r for r in candidates}
+    defined = {r.alias for r in reals}
+    ordered: list[Rule] = []
+    while pending:
+        ready = [r for r in candidates
+                 if r.alias in pending
+                 and set(_REF.findall(r.formula)).issubset(defined)]
+        if not ready:
+            break
+        for r in ready:
+            pending.pop(r.alias)
+            defined.add(r.alias)
+            ordered.append(r)
+
+    if pending:
+        # 남은 노드는 순환 참조 그 자체이거나, 그것에 의존하는 노드다. 어느 쪽도
+        # 계산할 수 없지만 정상 ADDP까지 같이 버리지는 않는다.
+        blocked = set(pending)
+        for r in candidates:
+            if r.alias in blocked:
+                deps = sorted(set(_REF.findall(r.formula)) & blocked)
+                rf.warnings.append(ReformatterError(
+                    r.row, r.alias,
+                    f"순환 참조 또는 그 의존 항목({', '.join(deps)}) — 이 item을 제외했습니다"))
+
+    # REAL은 사용자가 보던 시트 순서를 보존하고, ADDP만 계산 가능한 순서로 둔다.
+    rf.rules = [*reals, *ordered]
 
 
 # ── 수식 엔진 ─────────────────────────────────────────────────

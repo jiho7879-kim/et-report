@@ -332,6 +332,8 @@ def reattach_sources(df: pl.DataFrame, state: AppState) -> pl.DataFrame:
     """
     if df is None:
         return df
+    if state.split is not None:
+        df = state.split.attach_conditions(df)
     if state.track_frame is not None:
         from etreport.data import fabtracking as ft
         df, _ = ft.attach(df, state.track_frame)

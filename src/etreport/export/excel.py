@@ -217,6 +217,57 @@ def to_tsv(td: TableData, opt: SummaryOptions | None = None) -> str:
     return "\n".join(lines)
 
 
+def to_html(td: TableData, opt: SummaryOptions | None = None) -> str:
+    """일반 TSV 폴백과 함께 넣는 Excel 호환 서식 클립보드 표."""
+    from html import escape
+
+    labels = td.labels()
+    values = [td.label_values(row) for row in td.rows]
+    n_cat = len(labels) - len(td.spec_labels()) - 1
+    spans = {}
+    covered = set()
+    for col in range(n_cat):
+        for start, end in _runs([tuple(v[:col + 1]) for v in values]):
+            spans[start, col] = end - start + 1
+            covered.update((row, col) for row in range(start + 1, end + 1))
+
+    def cell(text, *, header=False, rowspan=1, colspan=1, style=""):
+        tag = "th" if header else "td"
+        base = "border:1px solid #cccccc;padding:4px;vertical-align:middle;"
+        if header:
+            base += "background-color:#f2f3f5;font-weight:bold;text-align:center;"
+        return (f'<{tag} rowspan="{rowspan}" colspan="{colspan}" '
+                f'style="{base}{style}">{escape(str(text))}</{tag}>')
+
+    out = ['<html><head><meta charset="utf-8"></head><body>',
+           '<table style="border-collapse:collapse;font-family:Arial;font-size:10pt">',
+           '<tr>']
+    out.extend(cell(label, header=True, rowspan=2) for label in labels)
+    out.extend(cell(lot, header=True, colspan=len(ws))
+               for lot, ws in td.header_lots if ws)
+    out.append('</tr><tr>')
+    out.extend(cell(w, header=True) for _, ws in td.header_lots for w in ws)
+    out.append('</tr>')
+    delta = bool(opt and opt.delta_vs_ref)
+    for ri, row in enumerate(td.rows):
+        out.append('<tr>')
+        for ci, value in enumerate(values[ri]):
+            if (ri, ci) not in covered:
+                out.append(cell(value, rowspan=spans.get((ri, ci), 1),
+                                style="background-color:#fafafb;" if ci < n_cat else ""))
+        for value, off in zip(row["values"], row["offspec"]):
+            style = "text-align:right;"
+            if off:
+                style += "background-color:#ffecee;color:#d70015;font-weight:bold;"
+            out.append(cell(fmt_value(value, delta), style=style))
+        out.append('</tr>')
+    out.append('</table>')
+    if opt and opt.session_caption:
+        out.append(f'<p>{escape(opt.session_caption)}</p>')
+    out.append('</body></html>')
+    return ''.join(out)
+
+
 def number_format(v: float | None) -> str | None:
     """셀 하나의 표시 자릿수 — `model/specs.fmt_value`와 같은 경계(<1·≤10)."""
     if v is None:

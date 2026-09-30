@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from etreport.data.exporting import SBDF_WARN_ROWS, copy_to, import_sbdf
+from etreport.data.exporting import copy_to, import_sbdf, preflight_sbdf
 
 log = logging.getLogger(__name__)
 
@@ -67,7 +67,14 @@ def preview_query(db_path: str, sql: str,
     """
     from etreport.data.loader import readonly_query
     with readonly_query(db_path) as con:
-        return con.execute(f"{_sub(sql)} LIMIT {int(rows)}").pl(), None
+        # `.pl()`은 DuckDB 결과 전체를 Arrow 버퍼로 바꾸는 경로를 탄다. LIMIT가
+        # 있어도 아주 넓은 결과/큰 문자열에서는 그 버퍼 할당이 실패할 수 있다.
+        # 미리보기는 200행이면 충분하므로 DB-API 행만 받고 작게 프레임을 만든다.
+        cur = con.execute(f"{_sub(sql)} LIMIT {int(rows)}")
+        names = [d[0] for d in cur.description]
+        # 타입은 전 행을 보고 정한다 — 앞 100행이 비어 있는 item 열이 흔하다.
+        return pl.DataFrame(cur.fetchall(), schema=names, orient="row",
+                            infer_schema_length=None), None
 
 
 class SqlExportDialog(QDialog):
@@ -242,26 +249,11 @@ class SqlExportDialog(QDialog):
                                            "SBDF (*.sbdf)")
         if not p:
             return
-        # SBDF는 pandas 전체 프레임을 요구한다. 행 수가 아직 없다면 이 저장
-        # 경로에서만 세어, 미리보기 때 SQL을 두 번 돌리지 않는다.
+        # Hard safety gate shared with scheduled exports; no unsafe override.
         from etreport.data.loader import readonly_query
         try:
             with readonly_query(self.db_path) as con:
-                got = con.execute(
-                    f"SELECT count(*) FROM (\n{self.sql_text()}\n)").fetchone()
-                self.n_rows = int(got[0]) if got else 0
-        except Exception as e:                       # noqa: BLE001
-            QMessageBox.critical(self, "SBDF 저장 실패", str(e))
-            return
-        if self.n_rows > SBDF_WARN_ROWS and QMessageBox.question(
-                self, "SBDF 저장",
-                f"{self.n_rows:,}행을 한 번에 메모리로 올립니다.\n"
-                f"parquet으로 저장하면 메모리를 쓰지 않습니다.\n\n계속할까요?"
-        ) != QMessageBox.Yes:
-            return
-        try:
-            # pandas로 바로 받는다 — polars를 거치면 같은 표가 두 벌 생긴다
-            with readonly_query(self.db_path) as con:
+                self.n_rows = preflight_sbdf(con, self.sql_text())
                 full = con.execute(self.sql_text()).df()
             sbdf.export_data(full, p)
             del full

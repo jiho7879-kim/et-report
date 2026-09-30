@@ -61,13 +61,19 @@ def reformatter_sample() -> Sample:
         ("SCALE FACTOR", "원시값에 곱할 배율", "1e-6", "수식 계산 **전에** 적용된다"),
         ("ADDP FORM", "계산식", "{Idsat N}/{Vtlin N}",
          "함수: ABS SQRT LN LOG LOG10 EXP MIN MAX AVG SUM STD · "
-         "LN=자연로그, LOG·LOG10=상용로그 · 참조 대상은 **위쪽 행**에 있어야 한다"),
+         "LN=자연로그, LOG·LOG10=상용로그 · 참조 행 순서는 상관없고 순환 참조만 제외한다"),
         ("UNIT", "단위 — 축 이름에 자동으로 붙는다", "uA/um", "비워도 된다"),
         ("SPECLOW/SPECHIGH", "규격", "500 / 900",
          "표의 규격 이탈 표시, plot의 빨간 규격 박스, 축 범위 산정에 쓰인다"),
         ("TARGET", "목표값", "700", "plot에 파란 X로 표시된다"),
         ("WIDTH / LENGTH", "기하 (선택)", "1 / 0.03",
          "trend 차트의 X축으로 쓴다(템플릿 x에는 W·L로 적는다). 없어도 된다"),
+        ("FFG/FSG/SSG/SFG", "global corner 규격 (선택)", "0.35 / 0.55 / 0.36 / 0.54",
+         "plot 템플릿 spec=global일 때 x·y item의 같은 corner 값을 짝지은 "
+         "네 점을 이어 사각 규격 창을 그린다"),
+        ("FF/SS/SF/FS", "functional corner 규격 (선택)", "0.36 / 0.54 / 0.37 / 0.53",
+         "plot 템플릿 spec=functional일 때 x·y item의 같은 corner 값을 짝지은 "
+         "네 점을 이어 사각 규격 창을 그린다"),
     ])
     return Sample("reformatter", "리포메터", data, desc)
 
@@ -80,14 +86,15 @@ def plot_sample() -> Sample:
         "y": ["Idsat N", "Ioff N", "Ioff N, Ioff P", "Vt spread",
               "Idsat N, Ioff N", "Idsat N"],
         "order": [1, 2, 3, 1, 2, 3],
-        "title1": ["NMOS 특성", None, None, "산포·기하", None, None],
-        "title2": ["Idsat–Vt", "Ioff–Vt", "N·P 겹쳐 보기", "Vt spread",
+        "title1": ["Idsat–Vt", "Ioff–Vt", "N·P 겹쳐 보기", "Vt spread",
                    "W trend", "wafer별 분포"],
+        "title2": ["NMOS 특성", None, None, "산포·기하", None, None],
         "Report": ["M2_ET"] * 6,
         "Type": ["scatter", "scatter", "scatter", "scatter", "trend", "box"],
         "x_name": [None, None, None, None, None, None],
         "y_name": [None, None, None, None, None, None],
         "Mode": ["site", "site", "avg", "site", "med", "site"],
+        "spec": [None, None, None, None, None, None],
     })
     desc = _desc([
         ("page", "페이지 번호", "1", "같은 번호끼리 한 슬라이드에 모인다"),
@@ -95,8 +102,8 @@ def plot_sample() -> Sample:
          "1·2·3 윗줄 / 4·5·6 아랫줄, 왼쪽에서 오른쪽"),
         ("x, y", "축에 쓸 리포메터 ALIAS", "Vtlin N",
          "쉼표로 여러 개를 적으면 순서대로 xy쌍이 되어 한 그림에 겹친다"),
-        ("title1", "페이지 제목", "NMOS 특성", "같은 page의 첫 행에만 적는다"),
-        ("title2", "이 plot의 제목", "Idsat–Vt", ""),
+        ("title1", "이 plot의 제목", "Idsat–Vt", ""),
+        ("title2", "페이지 제목", "NMOS 특성", "같은 page의 첫 행에만 적는다"),
         ("Report", "리포트 이름", "M2_ET",
          "table 템플릿과 짝을 이루는 키. 한 파일에 여러 리포트를 담을 수 있다"),
         ("Type", "그림 종류", "scatter",
@@ -107,6 +114,9 @@ def plot_sample() -> Sample:
         ("Mode", "점을 무엇으로 찍을지 (선택)", "site",
          "site(측정점 그대로) / avg(wafer 평균) / med(wafer 중앙값) / "
          "std(wafer 산포) — 없으면 site. 화면에서도 plot마다 바꿀 수 있다"),
+        ("spec", "규격 창 종류 (선택)", "global",
+         "비움=SPECLOW/SPECHIGH(기존). global=FFG/FSG/SSG/SFG, "
+         "functional=FF/SS/SF/FS — 같은 corner의 x·y 값을 짝지은 네 점을 이은 사각 규격 창"),
         ("(trend)", "기하 trend 그리기", "Type=trend · x=W",
          "x에 W 또는 L을 적으면 리포메터의 WIDTH·LENGTH 값을 X축으로 쓴다. "
          "탐색 탭에서도 X에 W·L을 넣으면 자동으로 trend가 된다"),

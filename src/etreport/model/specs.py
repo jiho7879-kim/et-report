@@ -67,6 +67,9 @@ class PlotSpec:
     y_name: str = ""
     type: str = "scatter"            # scatter | box | trend | table(표 전용 페이지)
     mode: str = "site"               # site | avg | med | std — 그릴 데이터 레벨
+    # 빈 값은 종전 SPECLOW/SPECHIGH 규격 창. global/functional이면 리포메터의
+    # 대응 corner 규격으로 만든 창을 쓴다.
+    spec: str = ""
     logx_mode: str = "auto"          # auto | log | linear
     logy_mode: str = "auto"
     range_mode: str = "auto"         # auto | manual
@@ -90,7 +93,7 @@ class PlotSpec:
 @dataclass
 class PageSpec:
     number: int
-    title: str = ""                  # title1
+    title: str = ""                  # title2 (페이지 제목)
     slots: list[PlotSpec | None] = field(default_factory=lambda: [None] * 6)
 
 

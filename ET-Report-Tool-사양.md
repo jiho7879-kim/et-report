@@ -86,8 +86,11 @@ table 템플릿 ─┘
   - 함수: `ABS SQRT LN LOG LOG10 EXP MIN MAX AVG SUM STD` (대소문자 무관)
   - **[확정] LN = 자연로그(밑 e), LOG·LOG10 = 상용로그** (엑셀 관례)
   - `Std(A,B,…)` = 인자들을 각각 한 점으로 보는 표본표준편차(n−1), NULL 제외
-  - 참조 대상은 **위쪽 행**에 있어야 함 (행 순서 = 계산 순서, 순환참조 차단)
+  - 참조 대상 행의 위·아래 순서는 상관없음. 참조 관계 순서로 계산하며 순환참조만 제외
 - `SPECLOW/SPECHIGH`: 표의 규격 이탈 표시 + plot 규격 박스 + 축 범위 산정
+- 선택 열 `FFG/FSG/SSG/SFG`는 global corner 규격, `FF/SS/SF/FS`는 functional
+  corner 규격이다. plot 템플릿의 `spec`에 `global` 또는 `functional`을 적으면
+  같은 corner의 x·y 값을 짝지은 네 점을 이어 사각 규격 창을 그린다.
 - `TARGET`: plot에 파란 X로 표시
 
 **[확정] 검증 정책 — 문제 행은 버리고 진행**
@@ -101,17 +104,19 @@ table 템플릿 ─┘
 
 ### 3.2 plot 템플릿
 
-컬럼: `page, x, y, order, title1, title2, Report, Type, x_name, y_name`
+컬럼: `page, x, y, order, title1, title2, Report, Type, x_name, y_name, spec(선택)`
 
 - `page`: 페이지 번호. 같은 번호끼리 한 슬라이드
 - `order`: 페이지 안 위치 **1~6, 왼쪽에서 오른쪽** (1·2·3 윗줄 / 4·5·6 아랫줄)
 - `x`, `y`: 리포메터 ALIAS. **[확정] 쉼표로 여러 개 → 순서대로 xy쌍이 되어
   한 그림에 겹침** (`x: A, B` + `y: C, D` → (A,C)(B,D)). 그룹 스타일은 공유
-- `title1`: 페이지 제목 (같은 page의 첫 행에만)
-- `title2`: 이 plot의 제목
+- `title1`: 이 plot의 제목
+- `title2`: 페이지 제목 (같은 page의 첫 행에만)
 - `Report`: 리포트 이름. 한 파일에 여러 리포트를 담고 UI에서 선택
 - `Type`: `scatter`. **[확정] `table`은 더 이상 쓰지 않음** (§7 참조)
 - `x_name`, `y_name`: 축 표시 이름. 비우면 `ALIAS + 단위` 자동
+- `spec`: 비우면 기존 `SPECLOW/SPECHIGH`, `global`이면 FFG/FSG/SSG/SFG,
+  `functional`이면 FF/SS/SF/FS corner 규격을 쓴다.
 
 **템플릿에 두지 않는 것**: 로그 축 여부와 축 범위. 로그는 item 이름 패턴
 (`Ioff*`, `*Leak*`, `Jg*` — 설정에서 관리), 범위는 자동 규칙(§6). 대신 화면에서

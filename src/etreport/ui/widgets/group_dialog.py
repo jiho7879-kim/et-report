@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
 
 from etreport.data import loader
 from etreport.model import wafers as wnorm
-from etreport.model.split import PALETTE_OKABE, REF_COLOR, SYMBOLS
+from etreport.model.split import PALETTE_OKABE, REF_COLOR, SYMBOL_CHOICES, SYMBOL_LABELS, SYMBOLS
 from etreport.model.state import AppState
 
 ALL = "전체"                       # 필터 콤보의 '좁히지 않음'
@@ -1058,7 +1058,7 @@ class GroupDialog(QDialog):
         h = QHBoxLayout(w)
         h.addWidget(QLabel("일괄 적용"))
         self.cmb_sym = QComboBox()
-        self.cmb_sym.addItems(["심볼 —", "● 원", "■ 사각", "▲ 삼각", "◆ 마름모", "＋ 십자"])
+        self.cmb_sym.addItems(["심볼 —", *SYMBOL_LABELS])
         h.addWidget(self.cmb_sym)
         self.cmb_size = QComboBox()
         self.cmb_size.addItems(["크기 —", "4", "6", "8", "10"])
@@ -1085,7 +1085,7 @@ class GroupDialog(QDialog):
         si, zi = self.cmb_sym.currentIndex(), self.cmb_size.currentIndex()
         for g in self.state.groups:
             if si > 0:
-                g.symbol = SYMBOLS[(si - 1) % len(SYMBOLS)]
+                g.symbol = SYMBOL_CHOICES[si - 1]
             if zi > 0:
                 g.size = int(self.cmb_size.currentText())
         QMessageBox.information(self, "적용됨",

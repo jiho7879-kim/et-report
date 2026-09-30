@@ -111,6 +111,8 @@ myenv/bin/ruff check --fix .                        # 안전한 것만 자동 �
 | `test_requests_9.py` | 요청 9건 — 리포트 X 스케일·한쪽 범위·흔적 없는 제외·드래그 네모·plot별 제외·그룹 스타일 보존·PPT 색·막대 |
 | `test_requests_14.py` | 요청 14건 — GEN 조건·적재 보전·산점도 설명·공통 legend·SPEC 열·조건 모드(LIKE·부등호)·예약 실행 왕복·계측/tracking 재부착·step_seq 표 |
 | `test_requests_13.py` | 요청 13건 — 단일 exe·리소스 경로·빌드 스탬프·fab tracking 이름 컬럼·조회 조건 자동 채움·boxplot·plot 종류·VARCHAR 읽기·Tukey 필터·예약 실행 |
+| `test_export_safety.py` | 적재 후 자동 [적용] 없음 · SBDF 사전 점검(행 수·메모리 예산)이 `.df()`보다 먼저 · CSV/parquet은 COPY 그대로 |
+| `test_ui_feature_requests.py` | 실험 조건 열이 범주 축으로 붙는다 · 빈 심볼 · 요약 표 복사(HTML: 병합·색 + TSV) |
 | `test_extract_skip_empty.py` | 빈 청크 건너뛰기 · 날짜 프로브(SUM) · 청크 폭(개발자 모드) |
 | `test_bigset.py` (slow) | 실측 규모 성능·정확성 회귀 (`-s`로 단계별 시간 출력) |
 
@@ -442,6 +444,9 @@ plot 종류는 `scatter · box · bar · trend` 넷이고 목록은 `model/specs
 (2026-09-29 요청: 바꿀 때마다 슬롯 6개를 다시 그리던 것이 병목). 예외는 점 제외
 하나 — 찍은 결과가 바로 보여야 다음 점을 찍는다.
 새 기능을 넣을 때 이 지연 계산 규약을 깨지 않는다.
+**적재가 끝나도 [적용]을 대신 누르지 않는다**(`AnalysisWorkspace.connect_db`) — DB
+경로와 lot 목록만 채우고 [적용]을 dirty로 둔다. lot이 많은 DB를 통째로 읽는 것이
+병목이라, 무엇을 읽을지는 사용자가 lot을 고른 뒤 정한다.
 
 **점 제외는 클릭 또는 드래그 네모**(`PlotCanvas.on_box`). 네모 하나가
 `undo_stack`의 한 칸(`(뺀 곳, keys)`)이고 사이드카도 한 번만 쓴다. 리포트의
@@ -703,9 +708,11 @@ line·process·part와 기간 기본값은 `data/lotcontext.py`가 DuckDB에서 
 
 **리포메터** (`data/reformatter.py`): `CATEGORY ITEMID ALIAS ABSOLUTE
 "SCALE FACTOR" "ADDP FORM" UNIT SPECLOW SPECHIGH TARGET`.
-처리 순서는 확정 사양 — ① REAL에 SCALE 적용 → ② ABSOLUTE → ③ ADDP를 **시트 행
-순서대로**. 아래 행은 위 행의 ADDP를 참조할 수 있고 그 반대는 검증 오류다(행 순서
-규칙이 곧 순환참조 차단). 수식은 `eval()`이 아니라 ast 화이트리스트로 파싱하며,
+처리 순서는 확정 사양 — ① REAL에 SCALE 적용 → ② ABSOLUTE → ③ ADDP를 **참조 관계
+순서대로**(2026-09-30 요청 §1). 시트에서 행을 위아래로 옮겨도 값이 같다 — `validate()`가
+의존 그래프를 위상 정렬해 `rf.rules`를 `[REAL(시트 순서)…, ADDP(계산 순서)…]`로 두고,
+벡터·행 단위·cross-seq 경로가 전부 그 순서를 쓴다. 빠지는 것은 미정의 참조·수식
+오류·**순환 참조와 그것에 기대는 ADDP**뿐이다. 수식은 `eval()`이 아니라 ast 화이트리스트로 파싱하며,
 `_compile_expr()`가 polars 식으로 번역해 벡터 계산하고 번역 불가한 것만 행 단위
 폴백으로 떨어진다(로그에 남음). `Std(...)`(`STDEV`·`STDDEV` 표기도 같다)는
 **6키(`STD_KEYS`: root_lot_id·wafer_id·step_id·step_seq·total_site_cnt·
@@ -745,7 +752,17 @@ SUM STD`. **`LN`은 자연로그(밑 e), `LOG`·`LOG10`은 상용로그(밑 10)*
 `TRUE`로 적은 행의 절대값이 조용히 무시된다.
 
 **템플릿** (`model/templates.py`): plot 시트는 `page x y order title1 title2
-Report Type x_name y_name`, table 시트는 `item_id CAT1 … Report`.
+Report Type x_name y_name` + 선택 열 `Mode`·`spec`, table 시트는 `item_id CAT1 … Report`.
+**`title1`이 plot 제목, `title2`가 페이지 제목이다**(2026-09-30에 뒤집었다 — 사양서
+초판과 반대다. 읽기 `build_report`·되쓰기 `template_writer`·예시·데모가 같은 뜻을 쓴다).
+plot 종류는 `_row_type()` 하나가 판정한다: `boxplot`·`bar chart` 같은 표기를 받아 주고,
+Type이 비었거나 scatter인데 x가 기본 범주(`categories.BUILTIN`)면 box로 읽는다 —
+범주는 ALIAS가 아니라서 산점도로 보면 그 plot이 통째로 빠진다.
+`spec` 열은 규격 창의 종류다: 비우면 `SPECLOW/SPECHIGH` 사각형 그대로, `global`이면
+리포메터 선택 열 `FFG/FSG/SSG/SFG`, `functional`이면 `FF/SS/SF/FS`를 **같은 corner끼리
+(x, y)로 짝지은** 네 점의 다각형을 그린다(`mpl_renderer._spec_polygon`). 꼭짓점 순서는
+화면 좌표(로그 축이면 로그 공간, 축마다 0~1로 맞춤)에서 중심 둘레 각도로 정한다 —
+원래 값으로 재면 Idsat–Ioff처럼 자릿수가 다른 쌍에서 변이 엇갈린다.
 `Report` 컬럼이 두 시트의 공통 키 — 한 파일에 여러 리포트를 담고 UI에서 고른다.
 `order`는 1~6(윗줄 1·2·3 / 아랫줄 4·5·6). `item_id`와 plot의 x/y는 리포메터
 ALIAS여야 하고, 아니면 그 행만 건너뛴다.

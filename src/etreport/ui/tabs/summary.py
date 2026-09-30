@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QMimeData, Qt
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -359,12 +359,15 @@ class SummaryTab(StaleMixin, QWidget):
         예전에는 여기서 표를 다시 조립하느라 Δ vs REF가 빠져 화면과 다른 숫자가
         복사됐다. 이제 xlsx·PPT와 같은 build_table 경로만 쓴다.
         """
-        from etreport.export.excel import build_table, to_tsv
+        from etreport.export.excel import build_table, to_html, to_tsv
         st = self.state
         if st.report is None or st.data is None:
             return
         td = build_table(st, cat1, self._options())
-        QApplication.clipboard().setText(to_tsv(td, self._options()))
+        mime = QMimeData()
+        mime.setText(to_tsv(td, self._options()))
+        mime.setHtml(to_html(td, self._options()))
+        QApplication.clipboard().setMimeData(mime)
         QMessageBox.information(self, "복사됨", f"{cat1} 표를 클립보드에 복사했습니다")
 
     def _options(self):

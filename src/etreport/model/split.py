@@ -24,6 +24,10 @@ LABEL_SEP = " · "                # 표시용 구분자 (계산에는 쓰지 않
 PALETTE_OKABE = ["#E69F00", "#56B4E9", "#009E73", "#F0E442",
                  "#0072B2", "#D55E00", "#CC79A7", "#000000"]
 SYMBOLS = ["o", "s", "t", "d", "+"]
+# 자동 배정의 기존 순환은 유지하고, 빈 심볼은 사용자가 명시적으로 고른다.
+SYMBOL_CHOICES = [*SYMBOLS, "o-open", "s-open", "t-open", "d-open"]
+SYMBOL_LABELS = ["● 원", "■ 사각", "▲ 삼각", "◆ 마름모", "＋ 십자",
+                 "○ 빈 원", "□ 빈 사각", "△ 빈 삼각", "◇ 빈 마름모"]
 REF_COLOR = "#8E8E93"
 
 
@@ -150,6 +154,22 @@ class SplitMatrix:
             pl.col(s).fill_null(codes.get(s, baseline)) for s in steps])
         return cls(steps=steps, wide=wide, baseline=baseline,
                    baseline_codes=codes, baseline_lot=baseline_lot if codes else "")
+
+    def attach_conditions(self, data: pl.DataFrame) -> pl.DataFrame:
+        """ET 값은 건드리지 않고 이름 붙인 실험 조건을 범주 축으로 붙인다."""
+        from etreport.data.fabtracking import attach
+        from etreport.data.loader import RESERVED
+
+        if self.wide is None or not self.steps:
+            return data
+        # 숫자 측정값·예약 식별자/문맥 열은 절대 덮어쓰지 않는다.
+        names = [s for s in self.steps if s not in RESERVED
+                 and (s not in data.columns or not data.schema[s].is_numeric())]
+        if not names:
+            return data
+        values = self.wide.select("lot", "wafer", *names).with_columns(
+            pl.col(names).cast(pl.Utf8))
+        return attach(data, values)[0]
 
     # ── 그룹핑 ────────────────────────────────────────────────
     def combo_label(self, row: dict, factors: list[str]) -> str:

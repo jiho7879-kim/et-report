@@ -30,13 +30,15 @@ def rows_from_report(spec: ReportSpec) -> list[dict]:
                 "x": s.x,
                 "y": s.y,
                 "order": i + 1,
-                "title1": page.title if first else "",
-                "title2": s.title,
+                # title1은 plot 제목, title2는 page 제목 — 읽기와 같은 계약이다.
+                "title1": s.title,
+                "title2": page.title if first else "",
                 "Report": spec.report,
                 "Type": s.type,
                 "x_name": s.x_name,
                 "y_name": s.y_name,
                 "Mode": s.mode,
+                "spec": s.spec,
             })
             first = False
     return out

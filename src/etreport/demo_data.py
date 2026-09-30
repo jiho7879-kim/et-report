@@ -207,7 +207,7 @@ def real_items() -> list[tuple[str, str]]:
 
 # ── 템플릿 ───────────────────────────────────────────────────
 _PLOT_ROWS: list[tuple] = [
-    # page, x, y, order, title1, title2, Report, Type, x_name, y_name, Mode
+    # page, x, y, order, title2(페이지 제목), title1(plot 제목), Report, Type, …
     (1, "Vtlin N SVT", "Idsat N SVT", 1, "NMOS 특성", "Idsat–Vtlin",
      "M2_ET", "scatter", "", "", "site"),
     (1, "Vtlin N SVT", "Ioff N SVT", 2, "", "Ioff–Vtlin (자동 로그축)",
@@ -270,7 +270,7 @@ _TABLE_ROWS: list[tuple] = [
     ("BVox", "신뢰성", "Ox", "", "", "DEV_EVAL"),
 ]
 
-PLOT_COLUMNS = ["page", "x", "y", "order", "title1", "title2",
+PLOT_COLUMNS = ["page", "x", "y", "order", "title2", "title1",
                 "Report", "Type", "x_name", "y_name", "Mode"]
 TABLE_COLUMNS = ["item_id", "CAT1", "CAT2", "CAT3", "CAT4", "Report"]
 

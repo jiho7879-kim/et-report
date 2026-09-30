@@ -818,6 +818,9 @@ class AnalysisWorkspace(QWidget):
             st.data = st.data.with_columns(pl.Series(
                 "gid", wafers.map_gids(st.data["lot"], st.data["wafer"], assign)))
             st.data = apply_manual_groups(st.data, st.manual_groups)
+            # 붙여넣은 실험 조건도 gid만 남기지 않고 원래 열 이름으로 붙인다.
+            # 그래야 box/bar의 X축 후보와 템플릿이 같은 데이터를 본다.
+            st.data = st.split.attach_conditions(st.data)
         if not silent:
             self.bus.groups_changed.emit()
 
@@ -908,4 +911,4 @@ class AnalysisWorkspace(QWidget):
         # 방금 적재한 DB다. lot 목록을 먼저 읽어야 [적용]이 무엇을 볼지 정해진다 —
         # 기억해 둔 선택이 있으면 그대로, 없으면 전부.
         self._load_lots(path)
-        self.apply_config()
+        self._mark_unapplied("적재 완료 — lot을 선택한 뒤 [적용]을 눌러 분석하세요")
