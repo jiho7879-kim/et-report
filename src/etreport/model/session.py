@@ -195,8 +195,11 @@ def apply_config(state: AppState, cfg: AnalysisConfig,
             on_progress(step, total, "DB 읽는 중")
         try:
             from etreport.data.loader import load_state
+            # item은 템플릿·슬롯·탐색 축이 쓰는 것만 읽는다 — 수천 개를 통째로
+            # 올리면 그것만으로 OOM이다(나머지는 고를 때 ensure_items가 읽는다)
             rep.lines.append("DB  " + load_state(state, cfg.db_path,
-                                                 lots=state.lots_selected))
+                                                 lots=state.lots_selected,
+                                                 items=state.needed_items()))
         except Exception as e:                       # noqa: BLE001
             rep.ok = False
             rep.error = f"DB 열기 실패: {e}"

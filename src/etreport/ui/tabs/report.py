@@ -279,7 +279,8 @@ class ReportTab(StaleMixin, QWidget):
         st = self.state
         if st.rf.rules:
             return st.aliases()
-        return item_columns(st.data) if st.data is not None else []
+        return st.db_items or (item_columns(st.data)
+                               if st.data is not None else [])
 
     def _x_items(self) -> list[str]:
         """X 자동완성 — 종류에 따라 뜻이 다르다(탐색 탭과 같은 규칙)."""

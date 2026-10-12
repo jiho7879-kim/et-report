@@ -53,6 +53,9 @@ class AppState:
     templates: object | None = None    # model.templates.Templates
     db_path: str = ""
     table: str = ""                    # 실제 조회 테이블 (기본 et_data)
+    # DB에 있는 item 이름 전부(값은 안 읽음). `data`에는 그중 일부만 올라와 있을
+    # 수 있다 — 나머지는 고를 때 `loader.ensure_items`가 읽는다.
+    db_items: list[str] = field(default_factory=list)
     # 도크 lot 선택(§9.2) — lots_all은 DB에 있는 전부, lots_selected는 체크한 것.
     # **빈 리스트 = 전부**로 읽는다. 설정 파일이 없던 예전 상태와 새 상태가 같은
     # 뜻이 되어야 lot 선택을 모르는 DB에서도 지금까지처럼 동작한다.
@@ -111,10 +114,32 @@ class AppState:
 
         base = self.aliases()
         if not base:
-            base = item_columns(self.data) if self.data is not None else []
+            base = self.db_items or (item_columns(self.data)
+                                     if self.data is not None else [])
         cols = getattr(self.data, "columns", ())
         return base + [c for c in self.met_columns
                        if c in cols and c not in base]
+
+    def needed_items(self) -> list[str]:
+        """[적용]이 DB에서 읽을 item — 템플릿 전체(모든 Report) + 리포트 슬롯 + 탐색 축.
+
+        Report를 바꿔도 다시 읽지 않게 **모든 Report**의 item을 담는다. 범주
+        (`lot`·`gid` 같은 boxplot x)가 섞여 들어와도 DB item이 아니라 무시된다.
+        """
+        names: list[str] = []
+        t = self.templates
+        if t is not None:
+            for df, cols in ((t.plot_rows, ("x", "y")), (t.table_rows, ("item_id",))):
+                for c in cols:
+                    if df is not None and c in df.columns:
+                        for v in df[c].drop_nulls().cast(pl.Utf8):
+                            names += v.split(",")
+        specs = [self.explore]
+        if self.report is not None:
+            specs += [s for pg in self.report.pages for s in pg.slots if s]
+        for spec in specs:
+            names += [n for pair in spec.pairs() for n in pair]
+        return list(dict.fromkeys(n.strip() for n in names if n and n.strip()))
 
     def group(self, gid: str) -> GroupStyle | None:
         return next((g for g in self.groups if g.gid == gid), None)

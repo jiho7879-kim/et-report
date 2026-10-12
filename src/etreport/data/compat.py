@@ -281,7 +281,8 @@ def lot_index_sql(p: TableProfile) -> str:
 
 
 def select_sql(p: TableProfile, dedup_latest: bool = True,
-               lots: list[str] | None = None) -> str:
+               lots: list[str] | None = None,
+               items: list[str] | None = None) -> str:
     """분석용 wide SELECT — key/lot/wafer/gid + step/temp/site + item 컬럼들.
 
     long이면 PIVOT으로 wide화한다. time 컬럼이 있으면 재측정(retest)의
@@ -297,7 +298,13 @@ def select_sql(p: TableProfile, dedup_latest: bool = True,
     `lots`를 주면 그 lot만 읽는다. **WHERE는 QUALIFY보다 앞**이라 retest 판정도
     좁힌 범위 안에서 돈다 — 고르지 않은 lot의 재측정 행이 남은 lot의 순위를
     흔들지 않는다.
+
+    `items`를 주면 그 item 열만 읽는다(None = 전부). 읽기 메모리는 **고른 item
+    수 × 포인트 수**에 비례하고, 병합의 `arg_max`도 item마다 하나씩 붙으므로
+    item 5,000개를 통째로 읽으면 한 달치에서도 OOM이 났다(2026-10).
     """
+    want = None if items is None else set(items)
+    picked = p.items if want is None else [c for c in p.items if c in want]
     lot = p.roles.get("lot")
     waf = p.roles.get("wafer")
     lot_sel = f'"{lot}" AS lot' if lot else "'(lot?)' AS lot"
@@ -321,12 +328,15 @@ def select_sql(p: TableProfile, dedup_latest: bool = True,
         # value가 VARCHAR인 예전 DB면 여기서 숫자로 꺼낸다(numeric_expr).
         val_sel = p.numeric_expr(val).replace(f'AS "{val}"', "AS value") \
             if val in p.text_numeric else f'"{val}" AS value'
+        if items is not None:
+            only = ", ".join(_quote_lot(v) for v in dict.fromkeys(items)) or "NULL"
+            where += (" AND" if where else " WHERE") + f' "{item}" IN ({only})'
         base = (f'SELECT {sel}, "{item}" AS item_id, {val_sel} '
                 f'FROM "{p.table}"{where}')
         return (f"WITH src AS ({base}) "
                 f"PIVOT src ON item_id USING any_value(value) GROUP BY {gcols}")
 
-    items = [p.numeric_expr(c) for c in p.items]
+    cols = [p.numeric_expr(c) for c in picked]
     has_time = dedup_latest and "time" in p.roles and lot and waf
     rank = ""
     if has_time:
@@ -338,7 +348,7 @@ def select_sql(p: TableProfile, dedup_latest: bool = True,
 
     if not merge:
         sel = ", ".join([f"{key} AS key", lot_sel, waf_sel, "'' AS gid",
-                         *ctx_select(p), *items])
+                         *ctx_select(p), *cols])
         dedup = f" QUALIFY {rank} = 1" if rank else ""
         return f'SELECT {sel} FROM "{p.table}"{where}{dedup}'
 
@@ -354,7 +364,7 @@ def select_sql(p: TableProfile, dedup_latest: bool = True,
     # `arg_max(item, 시각)`으로 뽑는다: item마다 **NULL이 아닌 값 중 가장 늦은
     # 것**을 고르므로 retest(같은 item 재측정 → 최신 값)와 seq 분산(서로 다른
     # item → 한 행에 모임)이 같은 식 하나로 풀린다.
-    inner_sel = [f"{key} AS key", lot_sel, waf_sel, *mc_sel, *items]
+    inner_sel = [f"{key} AS key", lot_sel, waf_sel, *mc_sel, *cols]
     if has_time:
         inner_sel.append(f"{rank} AS __rn")
         inner_sel.append(f'"{p.roles["time"]}" AS __t')
@@ -363,7 +373,7 @@ def select_sql(p: TableProfile, dedup_latest: bool = True,
     ctx = [f'"{p.roles[r]}" AS {r}' if r in p.roles else f"NULL AS {r}"
            for r in CTX_ROLES]
     # 바깥에서는 **이름만** 쓴다 — 안쪽에서 이미 TRY_CAST가 걸려 별칭이 붙었다.
-    names = [f'"{c}"' for c in p.items]
+    names = [f'"{c}"' for c in picked]
     # key는 예전과 같은 집합(= seq마다 최신 행)의 최솟값이어야 한다 — 제외
     # 포인트 사이드카가 이 값으로 저장돼 있어서, 바뀌면 제외 이력이 사라진다.
     key_agg = "min(key) FILTER (WHERE __rn = 1) AS key" if has_time \

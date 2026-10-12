@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from etreport.data.loader import RESERVED, item_columns
+from etreport.data.loader import item_columns
 from etreport.model.specs import (
     GEOM_COLUMNS,
     PLOT_TYPE_LABELS,
@@ -425,8 +425,8 @@ class ExploreTab(StaleMixin, QWidget):
             self.canvas.draw_idle()
             return
         self.body.setCurrentWidget(self.canvas)
-        if not st.explore.x and st.data.width > len(RESERVED):
-            items = item_columns(st.data)
+        items = item_columns(st.data) or st.db_items
+        if not st.explore.x and items:
             st.explore.x, st.explore.y = items[0], items[min(1, len(items) - 1)]
         for ed, val in ((self.ed_x, st.explore.x), (self.ed_y, st.explore.y)):
             if not ed.hasFocus() and ed.text() != val:

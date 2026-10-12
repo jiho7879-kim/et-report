@@ -97,6 +97,7 @@ myenv/bin/ruff check --fix .                        # 안전한 것만 자동 �
 | `test_chunk_plan.py` | **§4.2·§10.10** 기간×item 그룹 청크 · 진행 라벨 · 미리보기 |
 | `test_dock_and_samples.py` | **§5.1·§11.4·§3.4·§14** REPORT 문구·예시 파일·붙여넣기·배정 lot |
 | `test_db_buckets.py` | 버킷 수가 저장 결과를 바꾸지 않는다는 불변식(예전 DB 호환) |
+| `test_oom_storage.py` | **OOM 회귀** — item 테이블 500열 분할·행 정렬(POSITIONAL)·1GB 상한 이어 적재·필요한 item만 읽기·`ensure_items` |
 | `test_cond_filter.py` | **측정 조건 필터** — 빈 조건=예전 그대로 · 로딩이 좁힌다 · 목록은 좁히기 전 기준 · 지연 계산 |
 | `test_analysis_core.py` | 축 범위 ×1.2 · 로그 패턴 · wafer 집계 · 자릿수 |
 | `test_review_fixes.py` | 코드 리뷰에서 고친 것들의 회귀(업데이트 가드·Figure 누수·연결·복사 값…) |
@@ -529,7 +530,31 @@ tkout_time이 null이 되면 `key_hash`가 뭉쳐 서로 다른 측정이 중복
 `ROUND`와 같은 규칙(0.5는 0에서 먼 쪽)이라 읽는 시점 보정(`compat.temp_expr`)과
 값이 같고, 반올림은 멱등이라 raw로 적재해 둔 예전 DB도 그대로 맞는다.
 
-**DuckDB** — 기준 테이블 이름은 `et_data`(손코딩 시절과 동일, `fact`는 레거시).
+**DuckDB** — 기준 이름은 `et_data`(손코딩 시절과 동일, `fact`는 레거시).
+
+**저장 형식(2026-10 OOM 개편, `data/db.py`)**: 새 DB의 `et_data`는 테이블이 아니라
+**뷰**다. 키는 `et_keys`, item은 `et_items_000…`에 **최대 `ITEMS_PER_TABLE`(500)
+열씩** 나눠 담고, 뷰가 `POSITIONAL JOIN`(행 번호로 나란히)으로 붙인다. 이유는
+DuckDB 쓰기 메모리가 **행 수가 아니라 열 수**에 비례하기 때문이다 — 이미 있는
+테이블에 이어 붙이고 checkpoint할 때 열마다 256KB 블록을 붙잡아서(실측 ≈1MB/열)
+item 5,000개짜리 한 테이블은 500행만 이어 붙여도 4GB 상한에서 죽었다. 지켜야 할 것:
+- **모든 테이블의 n번째 행은 같은 측정이다.** 새 키는 `_new`에 순번을 박아 모든
+  테이블에 같은 순서로 넣고, 새 item 테이블은 `et_keys`를 따라 채우고, 행은
+  지우지 않는다(빈 칸 채우기는 제자리 UPDATE). 적재마다 `_check_aligned`가
+  대조하고 어긋나면 그 적재를 롤백한다. 해시 조인(LEFT JOIN)은 쓰지 않는다 —
+  `SELECT *`가 item 테이블 전부를 해시 테이블에 올려 1년치에서 상한을 넘었다.
+- 예전 형식(`et_data`·`fact`가 **테이블**)도 읽고 이어 적재한다(예전 경로 그대로).
+  다만 item이 수천 개면 그 경로는 적재 OOM이 날 수 있으니 새 파일로 적재한다.
+- **[적용]은 item을 전부 읽지 않는다.** `state.needed_items()`(템플릿 모든
+  Report의 x·y·item_id + 리포트 슬롯 + 탐색 축)만 `load_state(items=…)`로 읽고,
+  DB에 있는 이름 전체는 `state.db_items`가 값 없이 든다. 다른 item을 고르면
+  **그리기 직전** `loader.ensure_items()`가 그 열만 같은 SQL로 더 읽어 `key`로
+  붙인다 — 화면(`PlotCanvas.draw_spec`)과 PPT(`deckbuild.generate`)가 같은 함수를
+  부른다. item이 `LOAD_ALL_ITEMS`(300) 이하인 DB는 예전처럼 전부 읽는다.
+- 메모리 상한은 **물리 메모리 총량의 35%, 2~6GB**(`loader.duckdb_memory_limit`).
+  가용 메모리가 아니라 총량인 이유: 같은 파일의 연결은 설정이 글자까지 같아야 함께
+  열린다. 넘는 몫은 `temp_directory`로 흘러가 느려질 뿐 죽지 않는다.
+
 분석 화면은 DB를 **읽기 전용**으로 연다. **읽는 자리는 전부
 `with loader.readonly_query(path) as con:`을 쓴다**(안에서 `open_readonly()`) — DuckDB는 같은 파일에 설정이 다른 연결을
 동시에 열지 못해서(`can't open a connection to same database file with a
@@ -542,7 +567,7 @@ different configuration`), `duckdb.connect(..., read_only=True)`를 직접 부�
 그 뒤 모든 DuckDB 접근이 OOM이 됐다. 캐시를 비우려고 `SET memory_limit`을
 잠깐 낮추는 방법은 쓰지 않는다(인스턴스 전역이라 백그라운드 조회를 떨어뜨린다).
 규칙은 `test_ux_requests3.test_duckdb_access_leaves_no_instance_behind`. 따라서:
-- 읽기 연결에는 **명시적 천장**이 있다(`loader.DUCKDB_MEMORY_LIMIT`). 없으면
+- 읽기 연결에는 **명시적 천장**이 있다(`loader.duckdb_memory_limit()`). 없으면
   DuckDB가 기본값인 물리 메모리의 80%까지 쓰는데, 현장 PC는 Excel COM과
   메모리를 나눠 쓴다. `temp_directory`(디스크 스필)는 예전부터 있었고 빠진 것은
   상한뿐이었다. 적재(쓰기) 연결도 같은 상한·스필을 쓴다(`db._limit_memory`). 다만 예전 로그의 `Arrow buffer failed to allocate`는 DuckDB

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -26,8 +27,55 @@ log = logging.getLogger(__name__)
 #: step/temp/site는 측정 조건 — 그룹 편집의 4단 필터와 배정 범위가 쓴다(§9.1).
 RESERVED = ("key", "lot", "wafer", "gid", "step", "temp", "site")
 
-# 분석 화면 외에 Excel/브라우저가 함께 도는 현장 PC를 위한 예측 가능한 상한.
-DUCKDB_MEMORY_LIMIT = "4GB"
+#: item이 이 수 이하인 DB는 [적용] 때 통째로 읽는다 — 작은 DB의 동작(커버리지·
+#: 이상치가 item 전부를 본다)을 바꾸지 않고, 수천 개짜리만 템플릿 item으로 좁힌다.
+#: 300개 × 1년(16만 포인트)이 실측 0.4GB 프레임이다.
+LOAD_ALL_ITEMS = 300
+
+
+def total_memory_bytes() -> int | None:
+    """물리 메모리 총량(알 수 없으면 None). Windows는 `os.sysconf`가 없어 Win32 API로."""
+    try:
+        return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+    except (AttributeError, OSError, ValueError):
+        pass
+    try:
+        import ctypes
+
+        class _MemStatus(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong),
+                        ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong),
+                        ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong),
+                        ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+        st = _MemStatus()
+        st.dwLength = ctypes.sizeof(st)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+            return int(st.ullTotalPhys)
+    except Exception:                          # noqa: BLE001 — 못 읽으면 기본값
+        pass
+    return None
+
+
+def duckdb_memory_limit(total: int | None = None) -> str:
+    """DuckDB 메모리 상한 — 물리 메모리의 35%, 2~6GB 사이.
+
+    예전에는 4GB 고정이었다. 8GB PC에서는 Excel과 함께 돌기에 너무 크고, 16GB
+    PC에서는 쓸 수 있는 몫을 버렸다. 상한을 넘는 몫은 `temp_directory`로 흘러
+    가므로 낮게 잡아도 죽지 않고 느려질 뿐이다 — 적재가 열 500개 테이블로
+    나뉜 뒤(db.ITEMS_PER_TABLE)로는 쓰기에 1GB면 충분하다.
+
+    **총량**을 쓰는 이유: 같은 파일의 연결은 설정이 글자까지 같아야 함께 열린다
+    (readonly_config). 가용 메모리처럼 순간마다 바뀌는 값을 쓰면 두 번째 연결이
+    `different configuration`으로 떨어진다.
+    """
+    total = total_memory_bytes() if total is None else total
+    gb = 4 if not total else min(6, max(2, int(total * 0.35 / (1 << 30))))
+    return f"{gb}GB"
 
 
 def readonly_config() -> dict:
@@ -49,8 +97,8 @@ def readonly_config() -> dict:
         tmp.mkdir(parents=True, exist_ok=True)
     except OSError as e:                       # 권한이 없으면 기본값으로
         log.debug("DuckDB 임시 폴더를 만들지 못했습니다(%s) — 기본값 사용", e)
-        return {"threads": 4, "memory_limit": DUCKDB_MEMORY_LIMIT}
-    return {"threads": 4, "memory_limit": DUCKDB_MEMORY_LIMIT,
+        return {"threads": 4, "memory_limit": duckdb_memory_limit()}
+    return {"threads": 4, "memory_limit": duckdb_memory_limit(),
             "temp_directory": str(tmp)}
 
 
@@ -72,7 +120,7 @@ def readonly_query(db_path: str) -> Iterator[duckdb.DuckDBPyConnection]:
     """한 번 쓰고 닫는 읽기 전용 연결. **DB를 읽는 자리는 전부 이것을 쓴다.**
 
     DuckDB는 같은 파일·같은 설정의 연결을 **인스턴스 하나로 묶고**, 그 인스턴스의
-    버퍼 캐시(최대 `DUCKDB_MEMORY_LIMIT`)는 마지막 연결이 닫힐 때에야 풀린다.
+    버퍼 캐시(최대 `duckdb_memory_limit()`)는 마지막 연결이 닫힐 때에야 풀린다.
     예전에는 분석 화면이 연결(`state.store`)을 계속 열어 두어서, SQL 창에서 한 번
     무거운 조회를 돌리면 그 캐시가 분석 데이터·Excel 위에 그대로 남았고 그 뒤의
     모든 조회가 `Out of Memory Error`로 떨어졌다. 그래서 연결을 오래 쥐고 있는
@@ -252,12 +300,28 @@ def close_store(state: AppState) -> None:
     state.store = None
 
 
+def db_items(con: duckdb.DuckDBPyConnection,
+             prof: compat.TableProfile) -> list[str]:
+    """DB에 들어 있는 item 이름 전부 — 값은 읽지 않는다."""
+    if not prof.is_long:
+        return list(prof.items)
+    col = prof.roles["item"]
+    return [r[0] for r in con.execute(
+        f'SELECT DISTINCT "{col}" FROM "{prof.table}" ORDER BY 1').fetchall()]
+
+
 def load_state(state: AppState, db_path: str, table: str | None = None,
-               lots: list[str] | None = None) -> str:
+               lots: list[str] | None = None,
+               items: list[str] | None = None) -> str:
     """DB를 열어 state.data를 채우고 상태 요약을 반환.
 
     `lots`가 있으면 그 lot만 읽는다(§9.2). 읽는 양 자체가 줄어드는 것이 요점이라
     프레임을 다 만든 뒤 거르지 않고 **SQL에서** 좁힌다. 빈 리스트·None은 '전부'다.
+
+    `items`를 주면 그 item 열만 읽는다(None = 전부, 빈 리스트 = 하나도 없이 키만).
+    item이 수천 개인 DB를 통째로 올리면 그것만으로 OOM이다 — [적용]은 템플릿이
+    쓰는 item만 주고, 나머지는 화면이 고를 때 `ensure_items`가 열 단위로 더 읽는다.
+    무엇이 DB에 있는지는 `state.db_items`가 값 없이 들고 있다.
     """
     if not Path(db_path).exists():
         raise FileNotFoundError(f"파일이 없습니다: {db_path}")
@@ -279,7 +343,10 @@ def load_state(state: AppState, db_path: str, table: str | None = None,
             return "테이블이 없습니다 — [데이터]에서 먼저 추출·적재하세요"
         prof = compat.profile(con, tbl)
         log.info("조회 테이블 %s", prof.describe())
-        df = con.execute(compat.select_sql(prof, lots=lots)).pl()
+        state.db_items = db_items(con, prof)
+        if items is not None and len(state.db_items) <= LOAD_ALL_ITEMS:
+            items = None
+        df = con.execute(compat.select_sql(prof, lots=lots, items=items)).pl()
     if prof.is_long:
         df = _normalize_pivoted(df, prof)
     df, n_abs = apply_absolute(df, state.rf)     # 음수로 적재된 기존 DB도 교정
@@ -316,10 +383,50 @@ def load_state(state: AppState, db_path: str, table: str | None = None,
     total = len(state.lots_all)
     lot_txt = f"{n_lot}/{total}" if lots and total > n_lot else str(n_lot)
     cond_txt = conditions.label(state.cond_filter)
+    n_db = len(state.db_items)
+    item_txt = (f"{len(items)}/{n_db}" if n_db > len(items) else str(len(items)))
     return (f"{tbl} · {state.data.height:,} 포인트 · lot {lot_txt} "
-            f"· item {len(items)} · 제외 {len(state.excluded)}"
+            f"· item {item_txt} · 제외 {len(state.excluded)}"
             + (f" · 절대값 {n_abs}" if n_abs else "")
             + (f" · 조건 {cond_txt} ({n_cond:,}행 제외)" if cond_txt else ""))
+
+
+def ensure_items(state: AppState, names) -> list[str]:
+    """`names` 중 DB에는 있는데 `state.data`에 아직 없는 item을 **그 열만** 더 읽는다.
+
+    [적용]은 템플릿이 쓰는 item만 읽는다(`load_state(items=…)`). 탐색 탭이나
+    리포트 슬롯에서 다른 item을 고르면 그리기 직전에 여기서 채운다 — 화면
+    (`PlotCanvas.draw_spec`)과 PPT(`deckbuild`)가 같은 함수를 부르므로 둘이
+    갈리지 않는다. 같은 SQL(lot 선택·병합·retest)로 읽어 `key`로 붙이므로 값은
+    처음부터 함께 읽은 것과 같다. 새로 읽은 이름을 돌려준다.
+    """
+    df = state.data
+    path = getattr(state, "db_path", "")
+    if df is None or not path or not Path(path).exists():
+        return []
+    have = set(getattr(state, "db_items", ()) or ())
+    want = [n for n in dict.fromkeys(names or ())
+            if n and n not in df.columns and n in have]
+    if not want:
+        return []
+    with readonly_query(path) as con:
+        prof = compat.profile(con, state.table)
+        extra = con.execute(compat.select_sql(
+            prof, lots=state.lots_selected or None, items=want)).pl()
+    if prof.is_long:
+        extra = _normalize_pivoted(extra, prof)
+    extra, _ = apply_absolute(extra, state.rf)
+    got = [c for c in want if c in extra.columns]
+    if not got:
+        return []
+    state.data = df.join(extra.select(["key", *got]), on="key", how="left",
+                         maintain_order="left")
+    log.info("item %d개 추가로 읽음: %s", len(got), ", ".join(got[:5]))
+    if getattr(state, "tukey", None) is not None and state.tukey.enabled:
+        # 이상치 판정은 읽어 둔 item 전부로 한다 — 새 item도 넣어 다시 건다
+        from etreport.model.outliers import apply as tukey_apply
+        tukey_apply(state)
+    return got
 
 
 def reattach_sources(df: pl.DataFrame, state: AppState) -> pl.DataFrame:

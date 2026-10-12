@@ -154,7 +154,9 @@ def generate(state: AppState, out_path: str, on_progress=None) -> str:
     분모를 흔들지 않으면서 "무엇을 하는 중인지"는 보이게 하기 위해서다.
     """
     experiments = state.factors if len(state.factors) > 1 else [""]
-    from etreport.data.loader import exclusion_frame
+    from etreport.data.loader import ensure_items, exclusion_frame
+    # 슬롯을 고쳐 [적용] 때 안 읽은 item을 가리키면 여기서 그 열만 더 읽는다
+    ensure_items(state, state.needed_items())
     # 이상치 필터가 걸러 낸 점도 이력에 싣는다 — 덱을 받은 사람이 "무엇이 빠졌나"를
     # 알 수 있어야 한다(이유 문자열에 배수와 item이 적혀 있다).
     exlog = exclusion_frame(state, include_filtered=True)

@@ -102,6 +102,9 @@ class PlotCanvas(FigureCanvasQTAgg):
 
     def draw_spec(self, spec: PlotSpec) -> None:
         self.spec = spec
+        # [적용] 때 안 읽은 item이면 그 열만 더 읽는다(화면과 PPT가 같은 함수)
+        from etreport.data.loader import ensure_items
+        ensure_items(self.state, [n for pair in spec.pairs() for n in pair])
         self._sync_size()
         self.figure.clear()
         args = self.render_args(spec)
