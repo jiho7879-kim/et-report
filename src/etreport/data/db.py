@@ -339,13 +339,18 @@ class Store:
     def _rebuild_data_view(self, tables: list[str]) -> None:
         """et_data = 키 + 모든 item 테이블을 **행 번호로** 나란히(POSITIONAL JOIN).
 
-        스키마가 바뀔 때마다 다시 만든다 — DuckDB는 뷰의 `*`를 만들 때 펼쳐 두어서
-        컬럼 목록이 낡는다.
+        **테이블을 그대로** 붙이고 중복 key_hash는 바깥 SELECT에서 뺀다. 서브쿼리
+        (`SELECT * EXCLUDE … FROM t`)를 붙이면 DuckDB가 스트리밍 `POSITIONAL_SCAN`
+        대신 오른쪽을 버퍼에 쌓는 조인으로 떨어져, 1년치 item 1,000열 내보내기가
+        18초 → 113초가 됐다. 스키마가 바뀔 때마다 다시 만든다 — DuckDB는 뷰의
+        `*`를 만들 때 펼쳐 두어서 컬럼 목록이 낡는다.
         """
-        joins = "".join(f' POSITIONAL JOIN (SELECT * EXCLUDE (key_hash) '
-                        f'FROM "{t}")' for t in tables)
+        alias = [f"t{i}" for i in range(len(tables))]
+        cols = ", ".join(["k.*", *(f"{a}.* EXCLUDE (key_hash)" for a in alias)])
+        joins = "".join(f' POSITIONAL JOIN "{t}" {a}'
+                        for t, a in zip(tables, alias))
         self.con.execute(f'CREATE OR REPLACE VIEW "{TABLE}" AS '
-                         f'SELECT * FROM "{KEYS_TABLE}"{joins}')
+                         f'SELECT {cols} FROM "{KEYS_TABLE}" k{joins}')
 
     def _load_legacy(self, tbl: str, wide: pl.DataFrame) -> tuple[int, int]:
         """예전 형식(한 테이블) DB에 이어 적재 — 예전 동작 그대로."""
