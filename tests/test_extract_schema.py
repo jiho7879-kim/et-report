@@ -94,9 +94,9 @@ def test_getdata_uppercase_decimal_step_seq_survives_to_duckdb_and_analysis(
         tmp_path, monkeypatch, appdata):
     """실제 getData 표기(`STEP_SEQ='1.0'`)는 NULL seq로 바뀌면 안 된다.
 
-    DuckDB에는 seq별 두 물리 행이 남아야 하고, 분석용 프레임에서만 seq를
-    무시해 서로 다른 item을 한 측정점으로 조합해야 한다. 이 조합이 깨지면
-    summary와 scatter 모두 빈 값/점이 된다.
+    seq는 적재의 retest 판정(같은 seq 안에서만 최신)에 쓰이고, 적재가 seq가 다른
+    item을 한 측정점으로 합친다(2026-10-13). 이 조합이 깨지면 summary와 scatter
+    모두 빈 값/점이 된다.
     """
     raw = pl.DataFrame({
         "LINE_ID": ["L1", "L1"],
@@ -127,22 +127,22 @@ def test_getdata_uppercase_decimal_step_seq_survives_to_duckdb_and_analysis(
     db_path = tmp_path / "et.duckdb"
     store = db.Store(db_path)
     try:
-        assert db.pivot_and_load(store, files) == 2
+        assert db.pivot_and_load(store, files) == 1     # die 하나 = 측정점 하나
     finally:
         store.close()
 
     con = __import__("duckdb").connect(str(db_path), read_only=True)
     try:
-        stored = con.execute(
-            'SELECT step_seq, "Vt", "Ioff" FROM et_data ORDER BY step_seq').fetchall()
+        stored = con.execute('SELECT "Vt", "Ioff" FROM et_data').fetchall()
     finally:
         con.close()
-    assert stored == [("1", 0.42, None), ("2", None, 1.5e-9)]
+    assert stored == [(0.42, 1.5e-9)]
 
     state = AppState()
     loader.load_state(state, str(db_path))
-    assert state.data.height == 1                 # 분석에서만 step_seq를 무시
-    point = state.data.row(0, named=True)
+    df = loader.frame(state, ["Vt", "Ioff"])
+    assert df.height == 1
+    point = df.row(0, named=True)
     assert point["Vt"] == pytest.approx(0.42)
     assert point["Ioff"] == pytest.approx(1.5e-9)
 
@@ -212,25 +212,18 @@ def test_categorical_code_step_seq_is_kept():
                                          "2", None]
 
 
-def test_text_step_seq_loads_into_old_integer_db(tmp_path):
-    """예전 DB(step_seq INTEGER)에 코드 문자열 seq를 이어 적재해도 실패하지 않는다."""
-    import duckdb
-    path = tmp_path / "old.duckdb"
-    con = duckdb.connect(str(path))
-    con.execute("CREATE TABLE et_data(key_hash VARCHAR, step_seq INTEGER, "
-                "Vt DOUBLE)")
-    con.execute("INSERT INTO et_data VALUES ('a', 1, 0.4)")
-    con.close()
-    store = db.Store(path)
-    try:
-        store.load_wide(pl.DataFrame({"key_hash": ["b"],
-                                      "step_seq": ["LN08LPRF_MPW"],
-                                      "Vt": [0.5]}), "x")
-        got = store.con.execute(
-            "SELECT step_seq FROM et_data ORDER BY key_hash").fetchall()
-    finally:
-        store.close()
-    assert got == [("1",), ("LN08LPRF_MPW",)]
+def test_text_step_seq_codes_merge_like_numbers(tmp_path, appdata):
+    """코드 문자열 seq(`LN08LPRF_MPW`)도 숫자 seq와 똑같이 적재 때 합쳐진다."""
+    base = {"line_id": "L1", "root_lot_id": "PA1", "wafer_id": "01",
+            "chip_x_pos": 1, "chip_y_pos": 1, "temperature": 25.0,
+            "step_id": "M2", "total_site_cnt": 9,
+            "tkout_time": datetime(2026, 8, 4, 9, 0)}
+    p = tmp_path / "codes.parquet"
+    pl.DataFrame([{**base, "step_seq": "LN08LPRF_MPW", "item_id": "Vt", "value": 0.4},
+                  {**base, "step_seq": "LN08LPRF_MPW_D", "item_id": "Ioff",
+                   "value": 1e-9}]).write_parquet(p)
+    with db.Store(tmp_path / "et.duckdb") as store:
+        assert db.pivot_and_load(store, [p]) == 1
 
 
 def test_empty_key_column_is_logged(caplog):

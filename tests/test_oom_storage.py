@@ -127,16 +127,17 @@ def test_wide_append_survives_a_tight_memory_cap(tmp_path, appdata, monkeypatch)
     monkeypatch.setattr(loader, "duckdb_memory_limit", lambda total=None: "1GB")
     dbp = tmp_path / "big.duckdb"
     total = 0
-    for d in range(1, 4):                    # 날짜마다 다른 키로 이어 붙인다
-        n, _ = _load(dbp, _long(3000, n_keys=8, day=d), tmp_path, f"d{d}.parquet")
+    for d in range(1, 4):                    # 날짜마다 다른 die로 이어 붙인다
+        n, _ = _load(dbp, _long(3000, n_keys=8, day=d, first_key=8 * (d - 1)),
+                     tmp_path, f"d{d}.parquet")
         total += n
     with db.Store(dbp) as s:
         s.con.execute("CHECKPOINT")
     assert total == 24
 
 
-def test_legacy_single_table_db_still_appends(tmp_path, appdata):
-    """예전 형식(et_data가 테이블) DB는 예전 경로 그대로 이어 적재된다."""
+def test_legacy_single_table_db_is_not_appended(tmp_path, appdata):
+    """예전 형식(et_data가 테이블) DB에는 이어 적재하지 않는다 — 새 파일로 안내."""
     dbp = tmp_path / "old.duckdb"
     wide = (_long(5).with_columns(key_hash=db.key_hash_expr())
             .pivot(on="item_id", index=[*db.KEY9, "line_id", "key_hash"],
@@ -145,8 +146,9 @@ def test_legacy_single_table_db_still_appends(tmp_path, appdata):
     con.register("w", wide.to_arrow())
     con.execute("CREATE TABLE et_data AS SELECT * FROM w")
     con.close()
-    assert _load(dbp, _long(5, n_keys=6), tmp_path) == (2, 0)
-    assert _tables(dbp)["et_data"] == "BASE TABLE"
+    with pytest.raises(RuntimeError, match="새 DB 파일"):
+        _load(dbp, _long(5, n_keys=6), tmp_path)
+    assert _tables(dbp)["et_data"] == "BASE TABLE"           # 손대지 않았다
 
 
 # ── 읽기: 필요한 item만 ──────────────────────────────────────────

@@ -429,6 +429,14 @@ def ensure_items(state: AppState, names) -> list[str]:
     return got
 
 
+def frame(state: AppState, names=()) -> pl.DataFrame:
+    """분석 프레임 + `names` item 열. **값이 필요한 곳은 전부 이걸로 읽는다.**"""
+    if state.data is None:
+        return pl.DataFrame()
+    ensure_items(state, names)
+    return state.data
+
+
 def reattach_sources(df: pl.DataFrame, state: AppState) -> pl.DataFrame:
     """붙여 둔 fab tracking·inline 계측 열을 다시 붙인다(§1·§2).
 

@@ -236,12 +236,16 @@ def test_refill_does_not_overwrite_or_double_count(tmp_path):
     con.close()
 
 
-def test_other_step_seq_stays_a_separate_row(tmp_path):
-    """seq가 다르면 다른 포인트다 — 채우는 게 아니라 행이 늘어야 한다. (§6)"""
+def test_other_step_seq_fills_the_same_point(tmp_path):
+    """seq가 달라도 같은 die면 같은 측정점이다 — 행이 늘지 않고 칸이 찬다.
+
+    2026-10-13부터 적재가 seq를 합친다(`db.merge_seq`). 예전에는 행이 늘고
+    읽을 때 합쳤는데, 그 병합이 OOM의 주범이었다.
+    """
     dbp = tmp_path / "et.duckdb"
     _reload(dbp, _long({"Vt": 0.5}, seq=1), tmp_path, "a.parquet")
     assert _reload(dbp, _long({"Ileak": 1e-9}, seq=2),
-                   tmp_path, "b.parquet") == (1, 0)
+                   tmp_path, "b.parquet") == (0, 1)
 
 
 # ── §14 summary 표의 규격 열 ───────────────────────────────────────

@@ -1,11 +1,19 @@
 """DuckDB 저장소.
 
-et_keys         : 키 9종 + line_id + key_hash — 측정 행 하나에 한 줄
+et_keys         : 측정점 키 7종 + tkout_time(마지막 측정) + line_id + key_hash
 et_items_NNN    : key_hash + item 컬럼 **최대 ITEMS_PER_TABLE개**. 넘치면 다음 번호
-et_data (뷰)    : et_keys LEFT JOIN et_items_* — `select * from et_data`가 예전처럼
-                  키 + item 전부를 돌려준다. 읽는 코드는 이 뷰만 본다.
+et_data (뷰)    : et_keys POSITIONAL JOIN et_items_* — `select * from et_data`가
+                  예전처럼 키 + item 전부를 돌려준다. 읽는 코드는 이 뷰만 본다.
+et_format       : "적재 때 step_seq를 합친 형식"이라는 표시
 load_log        : 파일 단위 적재 이력(1단 중복 차단)
-뷰             : et_data → v_latest(retest 최신)
+v_latest        : et_data의 별칭(키가 이미 측정점마다 유일하다)
+
+**step_seq는 적재할 때 합친다**(2026-10-13). 키는 lot·wafer·die 좌표·온도·
+step_id·site_cnt이고 die 하나가 한 행이다 — 같은 seq 안의 재측정(retest)은 가장
+늦은 값, seq가 다른데 같은 item이면 평균(`merge_seq`). 예전에는 seq·시각까지 키에
+두고 **읽을 때** window + item마다 `arg_max`로 합쳤는데, 그 조회가 데이터의 10배
+메모리를 써서 lot 두 개만 골라도 OOM이 났다. 예전 형식 DB에는 이어 적재하지 않는다
+— 섞이면 같은 측정이 두 형식으로 두 번 들어간다(`format_problem`이 안내한다).
 
 **왜 테이블을 쪼개나**(2026-10 OOM). DuckDB는 열 단위로 저장해서, 이미 있는
 테이블에 행을 이어 붙이고 디스크에 쓸 때(checkpoint) **열마다** 256KB 블록을
@@ -14,10 +22,6 @@ item 5,000개짜리 한 테이블은 500행만 이어 붙여도 4GB 상한에서
 테이블은 1GB 상한에서도 버틴다. 그래서 한 테이블의 열 수에 천장을 둔다 — 1년치
 든 item이 몇 개든 적재 메모리가 일정하다. 읽기는 뷰의 projection pushdown으로
 고른 item이 든 테이블의 열만 읽는다.
-
-예전 형식(et_data·fact가 **테이블**인 DB)은 읽기와 이어 적재 모두 예전 경로를
-그대로 탄다 — 다만 item이 수천 개면 그 경로는 적재 OOM이 날 수 있으니 새 파일로
-적재하는 것이 맞다(로그에 남긴다).
 
 제외 포인트는 이 DB에 쓰지 않는다. 분석 화면이 DB를 **읽기 전용**으로 열기
 때문에, 제외는 data/exclusions.py 의 사이드카 JSON에 DB 경로별로 저장한다.
@@ -33,20 +37,52 @@ from pathlib import Path
 import duckdb
 import polars as pl
 
+from etreport.data.compat import FORMAT_TABLE
+
 log = logging.getLogger(__name__)
 
+#: 추출(long)이 주는 키 — seq와 측정 시각까지 들어 있다.
 KEY9 = ["root_lot_id", "wafer_id", "chip_x_pos", "chip_y_pos",
         "temperature", "step_id", "step_seq", "total_site_cnt", "tkout_time"]
-KEY8 = KEY9[:-1]                     # retest 구분 제외한 논리 키
+#: 저장 키 = 측정점. step_seq·tkout_time은 키가 아니다(적재 때 합친다).
+KEY7 = [c for c in KEY9 if c not in ("step_seq", "tkout_time")]
 N_BUCKETS = 512                      # 피벗 메모리 다이얼 상한 (계획서 §4)
 TARGET_CELLS = 4_000_000             # 버킷 하나가 만드는 wide 셀 수 목표(≈32MB)
 TABLE = "et_data"                    # 손코딩 시절과 동일한 이름(새 DB는 뷰)
-LEGACY_TABLES = ("fact",)            # 예전 버전이 만든 DB도 읽는다
+LEGACY_TABLES = ("fact",)            # 예전 버전이 만든 DB의 테이블 이름
 KEYS_TABLE = "et_keys"
 ITEMS_PREFIX = "et_items_"
 #: 테이블 하나의 item 열 상한 — 적재 메모리를 정하는 다이얼(위 docstring).
 ITEMS_PER_TABLE = 500
-KEY_COLS = (*KEY9, "line_id", "key_hash")
+KEY_COLS = (*KEY7, "tkout_time", "line_id", "key_hash")
+
+
+def layout(con: duckdb.DuckDBPyConnection) -> str:
+    """`merged`(적재 때 seq를 합친 형식) · `old`(예전 형식) · `empty`(빈 DB)."""
+    names = {str(r[0]).lower() for r in con.execute(
+        "SELECT table_name FROM information_schema.tables").fetchall()}
+    if FORMAT_TABLE in names:
+        return "merged"
+    return "old" if names & {TABLE, KEYS_TABLE, *LEGACY_TABLES} else "empty"
+
+
+def old_layout_message(path: str | Path) -> str:
+    return (f"{Path(path).name}은(는) 예전 형식 DB입니다 — step_seq를 나눠 저장하던 "
+            f"형식이라 이어서 적재할 수 없습니다. 새 DB 파일 이름을 지정해 다시 "
+            f"적재하세요.")
+
+
+def format_problem(path: str | Path) -> str:
+    """이 DB에 이어 적재할 수 없으면 그 이유(안내 문구), 괜찮으면 빈 문자열.
+
+    추출은 몇 분씩 걸리므로 파이프라인이 **시작하기 전에** 묻는다 — 다 받아 놓고
+    적재에서 떨어지면 그 시간이 통째로 버려진다.
+    """
+    if not Path(path).exists():
+        return ""
+    from etreport.data.loader import readonly_query
+    with readonly_query(str(path)) as con:
+        return old_layout_message(path) if layout(con) == "old" else ""
 
 
 def plan_buckets(n_keys: int, n_items: int) -> int:
@@ -115,10 +151,11 @@ def _duck_type(dt: pl.DataType) -> str:
 
 
 def key_hash_expr() -> pl.Expr:
-    """포인트 식별자. **절대 바꾸지 말 것** — 기존 DB에 이어 적재할 때 이 값으로
-    중복을 걸러내므로, 계산식이 바뀌면 같은 포인트가 두 번 들어간다.
+    """측정점 식별자(KEY7). **절대 바꾸지 말 것** — 이어 적재할 때 이 값으로 같은
+    측정점을 찾으므로, 계산식이 바뀌면 같은 측정점이 두 번 들어간다. 제외 사이드카도
+    이 값으로 저장된다.
     """
-    joined = pl.concat_str([pl.col(c).cast(pl.Utf8).fill_null("␀") for c in KEY9],
+    joined = pl.concat_str([pl.col(c).cast(pl.Utf8).fill_null("␀") for c in KEY7],
                            separator="|")
     return joined.map_elements(
         lambda s: hashlib.blake2b(s.encode(), digest_size=8).hexdigest(),
@@ -130,7 +167,12 @@ class Store:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.con = _connect_write(self.path)
-        self.filled = 0                  # 겹친 행의 빈 칸을 채운 수(§6)
+        if layout(self.con) == "old":      # 섞으면 같은 측정이 두 형식으로 들어간다
+            self.close()
+            raise RuntimeError(old_layout_message(self.path))
+        self.filled = 0                  # 이미 있던 측정점을 갱신한 수(§6)
+        #: step_seq가 달라 평균을 낸 칸 — item → 개수. 적재 로그가 읽는다.
+        self.averaged: dict[str, int] = {}
         self.con.execute("PRAGMA threads=4")
         _limit_memory(self.con)
         self._ensure_meta()
@@ -141,6 +183,8 @@ class Store:
             CREATE TABLE IF NOT EXISTS load_log(
                 file_name VARCHAR PRIMARY KEY,
                 loaded_at TIMESTAMP, rows BIGINT, note VARCHAR)""")
+        self.con.execute(f"CREATE TABLE IF NOT EXISTS {FORMAT_TABLE} AS "
+                         f"SELECT 'seq_merged' AS layout")
 
     def close(self) -> None:
         """쓰기 연결을 닫는다 — DuckDB는 파일을 배타적으로 잠그므로, 적재 후
@@ -157,22 +201,11 @@ class Store:
         self.close()
 
     def table_name(self) -> str | None:
-        """존재하는 데이터 테이블(또는 뷰) 이름 (et_data 우선, 없으면 예전 이름)."""
-        for t in (TABLE, *LEGACY_TABLES):
-            if self.con.execute(
-                "SELECT 1 FROM information_schema.tables WHERE table_name=?",
-                    [t]).fetchone():
-                return t
-        return None
-
-    def _legacy_table(self) -> str | None:
-        """예전 형식(한 테이블에 item 전부)이면 그 이름. 새 형식·빈 DB면 None."""
-        for t in (TABLE, *LEGACY_TABLES):
-            if self.con.execute(
-                "SELECT 1 FROM information_schema.tables "
-                "WHERE table_name=? AND table_type='BASE TABLE'", [t]).fetchone():
-                return t
-        return None
+        """데이터 뷰 이름(et_data). 아직 적재 전이면 None."""
+        got = self.con.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_name=?",
+            [TABLE]).fetchone()
+        return TABLE if got else None
 
     def _columns(self, tbl: str) -> dict[str, str]:
         return dict(self.con.execute(
@@ -216,20 +249,15 @@ class Store:
         적재하면 `ALTER TABLE`로 컬럼은 생기는데 값을 넣을 행이 하나도 남지 않아
         **새 item이 전부 NULL인 채로** DB에 박혔다 — 화면에서는 "적재는 됐다는데
         표도 산점도도 비어 있다"로 보였고, step_seq가 갈려 기록되는 항목에서
-        특히 티가 났다(합쳐지지 않는 seq 쪽이 통째로 빈다). 이제는 겹치는 행의
-        **빈 칸만** 채운다. 이미 값이 있는 칸은 건드리지 않으므로 멱등이고,
-        예전처럼 재적재로 값이 뒤집히는 일도 없다.
+        특히 티가 났다(합쳐지지 않는 seq 쪽이 통째로 빈다). 이제는 겹치는 측정점을
+        `_fill_gaps` 규칙으로 갱신한다 — 빈 칸은 채우고, 더 늦게 잰 값이면 갈아
+        끼운다. 같은 파일을 다시 적재하면 아무것도 바뀌지 않는다(멱등).
         """
         if wide.is_empty():
             return 0, 0
-        legacy = self._legacy_table()
         self.con.begin()                 # 정렬 검사가 실패하면 통째로 되돌린다
         try:
-            if legacy is not None:
-                self.con.register("incoming", wide.to_arrow())
-                inserted, filled = self._load_legacy(legacy, wide)
-            else:
-                inserted, filled = self._load_split(wide)
+            inserted, filled = self._load_split(wide)
             self.con.execute(
                 "INSERT OR REPLACE INTO load_log VALUES (?, ?, ?, '')",
                 [src_file, datetime.now(), inserted])
@@ -303,11 +331,17 @@ class Store:
             'row_number() OVER () AS ord FROM (SELECT i.key_hash FROM incoming i '
             f'ANTI JOIN "{KEYS_TABLE}" f USING(key_hash))')
         filled: set[str] = set()
+        overlap = len(wide) > self._count("_new")   # 이미 있던 측정점이 들어왔다
         for tbl, cols in by_table.items():
             self._evolve(tbl, schema, cols)
-            if len(wide) > self._count("_new"):   # 겹친 행이 있다 = 채울 것이 있다
+            if overlap:
                 filled |= self._fill_gaps(tbl, cols)
             self._append_new(tbl, cols)
+        if overlap:     # 시각은 item 테이블을 다 고친 **뒤에** 올린다(비교 기준이다)
+            self.con.execute(
+                f'UPDATE "{KEYS_TABLE}" AS k SET tkout_time = i.tkout_time '
+                f"FROM incoming i WHERE k.key_hash = i.key_hash "
+                f"AND i.tkout_time > k.tkout_time")
         self._append_new(KEYS_TABLE, [c for c in keys if c != "key_hash"])
         inserted = self._count("_new")
         self._rebuild_data_view(tables)     # 컬럼이 늘거나 타입이 바뀌었을 수 있다
@@ -352,54 +386,40 @@ class Store:
         self.con.execute(f'CREATE OR REPLACE VIEW "{TABLE}" AS '
                          f'SELECT {cols} FROM "{KEYS_TABLE}" k{joins}')
 
-    def _load_legacy(self, tbl: str, wide: pl.DataFrame) -> tuple[int, int]:
-        """예전 형식(한 테이블) DB에 이어 적재 — 예전 동작 그대로."""
-        if len(wide.columns) > ITEMS_PER_TABLE:
-            log.warning("예전 형식 DB(%s)에 item %d개를 이어 적재합니다 — 메모리가 "
-                        "부족하면 새 DB 파일로 적재하세요", tbl, len(wide.columns))
-        self._evolve(tbl, dict(wide.schema), wide.columns)
-        # 2단: 행 단위 중복 차단. DuckDB는 INSERT 결과로 넣은 행 수를 준다.
-        got = self.con.execute(
-            f'INSERT INTO "{tbl}" BY NAME SELECT i.* FROM incoming i '
-            f'ANTI JOIN "{tbl}" f USING(key_hash)').fetchone()
-        inserted = int(got[0]) if got else 0
-        filled: set[str] = set()
-        if inserted < len(wide):          # 겹친 행이 있다 = 채울 것이 있다
-            skip = {*KEY9, "line_id", "key_hash"}
-            filled = self._fill_gaps(tbl, [c for c in wide.columns
-                                           if c not in skip])
-        return inserted, len(filled)
-
     def _fill_gaps(self, tbl: str, cols: list[str]) -> set[str]:
-        """이미 있는 key_hash 행의 **빈 item 칸만** 채운다(§6). 채운 key들을 돌려준다.
+        """이미 있는 측정점(key_hash)의 칸을 갱신한다(§6). 바뀐 key들을 돌려준다.
 
-        `COALESCE(f.x, i.x)`라 이미 값이 있는 칸은 그대로다 — 재적재로 숫자가
-        바뀌지 않는다. WHERE에 '채울 것이 하나라도 있는 행'만 남기는 이유는 두
-        가지다: 같은 파일을 다시 적재했을 때 0을 돌려줘야 화면이 거짓말을 하지
-        않고, 안 바뀔 행을 전부 다시 쓰지 않는다. key 집합으로 돌려주는 것은
-        item 테이블이 여럿일 때 한 행을 여러 번 세지 않기 위해서다.
+        들어온 행이 **더 늦게** 잰 것이면(tkout_time이 크면) 들어온 값으로 갈아
+        끼우고 — 들어온 쪽이 비어 있는 칸은 그대로 둔다 — 아니면 **빈 칸만**
+        채운다. 며칠씩 겹쳐 도는 예약 추출에서 다음 날 들어온 retest가 이 규칙으로
+        반영되고, 예전 기간을 다시 받아도 새 값이 뒤집히지 않는다. 시각이 같으면
+        (같은 파일을 다시 적재) 아무것도 바뀌지 않는다.
+
+        WHERE에 '바뀔 칸이 하나라도 있는 행'만 남기는 이유는 두 가지다: 같은 파일을
+        다시 적재했을 때 0을 돌려줘야 화면이 거짓말을 하지 않고, 안 바뀔 행을 전부
+        다시 쓰지 않는다. key 집합으로 돌려주는 것은 item 테이블이 여럿일 때 한
+        행을 여러 번 세지 않기 위해서다.
         """
         if not cols:
             return set()
-        sets = ", ".join(f'"{c}" = COALESCE(f."{c}", i."{c}")' for c in cols)
-        gap = " OR ".join(f'(f."{c}" IS NULL AND i."{c}" IS NOT NULL)'
-                          for c in cols)
+        newer = "i.tkout_time > k.tkout_time"          # NULL이면 거짓 → 빈 칸만
+        sets = ", ".join(
+            f'"{c}" = CASE WHEN {newer} THEN COALESCE(i."{c}", f."{c}") '
+            f'ELSE COALESCE(f."{c}", i."{c}") END' for c in cols)
+        change = " OR ".join(
+            f'(i."{c}" IS NOT NULL AND (f."{c}" IS NULL '
+            f'OR ({newer} AND i."{c}" IS DISTINCT FROM f."{c}")))' for c in cols)
         return {r[0] for r in self.con.execute(
-            f'UPDATE "{tbl}" AS f SET {sets} FROM incoming i '
-            f'WHERE f.key_hash = i.key_hash AND ({gap}) '
-            f'RETURNING f.key_hash').fetchall()}
+            f'UPDATE "{tbl}" AS f SET {sets} FROM incoming i, "{KEYS_TABLE}" k '
+            f"WHERE f.key_hash = i.key_hash AND k.key_hash = i.key_hash "
+            f"AND ({change}) RETURNING f.key_hash").fetchall()}
 
     # ── 뷰 체인 ───────────────────────────────────────────────
     def rebuild_views(self) -> None:
-        """retest 최신만 남기는 뷰. 제외는 여기서 다루지 않는다(사이드카)."""
-        tbl = self.table_name()
-        if tbl is None:
-            return
-        k8 = ", ".join(KEY8)
-        self.con.execute(
-            f'CREATE OR REPLACE VIEW v_latest AS SELECT * FROM "{tbl}" '
-            f'QUALIFY row_number() OVER (PARTITION BY {k8} '
-            f'ORDER BY tkout_time DESC) = 1')
+        """v_latest — 예전 SQL 습관을 위한 별칭. 키가 이미 측정점마다 유일하다."""
+        if self.table_name() is not None:
+            self.con.execute(
+                f'CREATE OR REPLACE VIEW v_latest AS SELECT * FROM "{TABLE}"')
 
     # ── 조회 도우미 ───────────────────────────────────────────
     def lots(self) -> list[str]:
@@ -419,22 +439,45 @@ class Store:
             f'ORDER BY 1', [lot]).fetchall()]
 
 
+def merge_seq(part: pl.DataFrame) -> tuple[pl.DataFrame, dict[str, int]]:
+    """long → 측정점(key_hash)·item마다 값 하나. 적재 형식의 규칙(2026-10-13).
+
+    - 같은 step_seq 안의 재측정(retest)은 tkout_time이 **가장 늦은** 값 하나.
+    - step_seq가 다른데 같은 item이면 **평균**. 드문 일이라 item별 칸 수를 함께
+      돌려준다 — 적재 로그에 남아, 겹치지 않는다던 item이 겹치면 눈에 띈다.
+    - tkout_time은 그 측정점의 **마지막** 측정 시각, line_id는 첫 값.
+
+    값이 NULL인 행은 retest 판정에서 빠진다(늦게 찍힌 NULL이 값을 지우지 않게).
+    """
+    latest = (part.sort("tkout_time", nulls_last=False, maintain_order=True)
+              .group_by(["key_hash", "step_seq", "item_id"], maintain_order=True)
+              .agg(pl.col("value").drop_nulls().last()))
+    v = pl.col("value")
+    vals = (latest.group_by(["key_hash", "item_id"], maintain_order=True)
+            .agg(v.mean() if latest.schema["value"].is_numeric() else v.first(),
+                 v.is_not_null().sum().alias("_n")))
+    averaged = dict(vals.filter(pl.col("_n") > 1).group_by("item_id").len()
+                    .iter_rows())
+    keys = part.group_by("key_hash", maintain_order=True).agg(
+        *[pl.col(c).first() for c in KEY7],
+        pl.col("tkout_time").max(), pl.col("line_id").first())
+    return (vals.drop("_n").join(keys, on="key_hash", how="left",
+                                 maintain_order="left"), averaged)
+
+
 def pivot_wide(part: pl.DataFrame) -> pl.DataFrame:
-    """long → wide. `part.pivot(..., aggregate_function="first")`와 같은 결과.
+    """측정점 × item long → wide. **(key_hash, item)마다 한 행**이어야 한다(merge_seq).
 
     polars pivot은 **만드는 열 수**에 비례해 느려서 item 5,000개 하루치에 12초가
-    걸렸다(적재 시간의 절반). 값이 실수면 (키 × item) 배열에 한 번에 흩뿌린다 —
-    (키, item)마다 첫 값만 남긴 뒤라 덮어쓰기 순서와 무관하다. 문자열 값은
-    예전 pivot 그대로 간다.
+    걸렸다(적재 시간의 절반). 값이 실수면 (키 × item) 배열에 한 번에 흩뿌린다.
+    문자열 값은 예전 pivot 그대로 간다.
     """
-    idx = [*KEY9, "line_id", "key_hash"]
+    idx = list(KEY_COLS)
     if not part.schema["value"].is_float():
         return part.pivot(on="item_id", index=idx, values="value",
                           aggregate_function="first")
     import numpy as np
 
-    part = part.unique(subset=["key_hash", "item_id"], keep="first",
-                       maintain_order=True)
     keys = part.select(idx).unique(subset="key_hash", keep="first",
                                    maintain_order=True)
     items = part["item_id"].unique(maintain_order=True)
@@ -453,11 +496,15 @@ def pivot_wide(part: pl.DataFrame) -> pl.DataFrame:
 
 def pivot_and_load(store: Store, parquet_files: list[Path],
                    on_progress=None) -> int:
-    """long parquet들 → key_hash 버킷 재파티션 → 버킷별 피벗 → 적재.
+    """long parquet들 → key_hash 버킷 재파티션 → 버킷별 seq 병합·피벗 → 적재.
 
-    반환은 **새로 들어간 행 수**다. 겹친 행의 빈 칸을 채운 수는
-    `store.filled`에 쌓인다(§6) — 같은 기간을 item만 더해 다시 적재하면
-    반환값이 0인데 실제로는 값이 들어가므로, 화면이 그 둘을 함께 적어야 한다.
+    반환은 **새로 들어간 측정점 수**다. 이미 있던 측정점을 갱신한 수는
+    `store.filled`에, step_seq가 달라 평균 낸 칸은 `store.averaged`에 쌓인다(§6)
+    — 같은 기간을 item만 더해 다시 적재하면 반환값이 0인데 실제로는 값이
+    들어가므로, 화면이 그 둘을 함께 적어야 한다.
+
+    key_hash는 측정점(KEY7)마다 하나라 한 die의 seq 행은 모두 같은 버킷에 든다 —
+    버킷마다 `merge_seq`를 돌려도 전체에 한 번 돌린 것과 같다.
 
     item은 step 간 거의 중복(밀집)이므로 wide가 정답 구조다 — 계획서 §4 참조.
     피벗 메모리 피크는 버킷 수로 제어하되, 그 수는 데이터 모양(키 수 × item 수)을
@@ -479,12 +526,16 @@ def pivot_and_load(store: Store, parquet_files: list[Path],
     frame = lazy.collect()
     if frame.is_empty():
         return 0
+    # 온도는 추출 직후에 이미 5단위로 맞춰 오지만, 병합 키라서 여기서도 건다 —
+    # 23.9와 25.0이 다른 측정점으로 갈라지면 seq 병합이 무의미하다(반올림은 멱등)
+    from etreport.data.extractor import correct_temperature
+    frame = correct_temperature(frame)
     # 해시는 **키마다 한 번**만 — long은 item 수만큼 같은 키가 반복된다(item
     # 5,000개면 5,000번). 행마다 부르면 하루치에 20초가 그 UDF였다. 식은 그대로라
     # 값도 그대로다(key_hash_expr 주석 참조).
-    hashed = (frame.select(KEY9).unique()
+    hashed = (frame.select(KEY7).unique()
               .with_columns(key_hash=key_hash_expr()))
-    frame = frame.join(hashed, on=KEY9, how="left", nulls_equal=True)
+    frame = frame.join(hashed, on=KEY7, how="left", nulls_equal=True)
 
     n_keys = frame["key_hash"].n_unique()
     n_items = frame["item_id"].n_unique()
@@ -504,7 +555,10 @@ def pivot_and_load(store: Store, parquet_files: list[Path],
     for b in range(n_buckets):
         part = parts.get(b)
         if part is not None and not part.is_empty():
-            wide = pivot_wide(part)
+            merged, averaged = merge_seq(part)
+            for item, n in averaged.items():
+                store.averaged[item] = store.averaged.get(item, 0) + n
+            wide = pivot_wide(merged)
             n, f = store.load_wide(wide, src_file=f"bucket_{b}")
             total, store.filled = total + n, store.filled + f
         if on_progress:

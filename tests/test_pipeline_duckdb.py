@@ -52,9 +52,9 @@ def test_alias_columns_land_in_db(loaded):
         "where table_name='et_data'").fetchall()}
     for r in loaded["rf"].rules:
         assert r.alias in cols, f"{r.alias}가 DB에 없다"
-    assert "key_hash" in cols
-    for k in db.KEY9:
+    for k in db.KEY_COLS:                 # 측정점 키 + 마지막 측정 시각 + key_hash
         assert k in cols
+    assert "step_seq" not in cols         # 적재 때 합쳤다(2026-10-13)
     con.close()
 
 

@@ -204,6 +204,13 @@ def apply_config(state: AppState, cfg: AnalysisConfig,
             rep.ok = False
             rep.error = f"DB 열기 실패: {e}"
             return rep
+        prof = state.profile
+        if prof is not None and not prof.merged and "seq" in prof.roles:
+            # 예전 형식 — 읽을 때 seq를 합치던 병합은 OOM 때문에 폐기했다(2026-10-13)
+            rep.notes.append(
+                "[DB] step_seq를 나눠 저장한 예전 형식입니다 — seq가 다른 item끼리는 "
+                "site 산점도가 비고 메모리도 많이 씁니다. [데이터]에서 새 DB 파일로 "
+                "다시 적재하세요.")
         # lot마다 item·wafer·측정 조건이 갈리면 표와 plot이 조용히 어긋난다.
         # 자세한 내역은 [커버리지] 다이얼로그가 보여 주고, 여기서는 놓치지 않게
         # 요약 몇 줄만 남긴다(§9.2). **제외가 아니므로 notes로 간다.**

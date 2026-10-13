@@ -100,7 +100,8 @@ def test_new_points_still_append(parquet, tmp_path, monkeypatch):
     dbp = tmp_path / "grow.duckdb"
     n1 = db.pivot_and_load(db.Store(dbp), [parquet])
 
-    src2 = make_long([r.itemid for r in rf.reals()], lots=1, wafers=4, chips=4,
+    # 둘째 lot이 새로 들어온다(같은 die를 다른 날 다시 받은 것은 같은 측정점이다)
+    src2 = make_long([r.itemid for r in rf.reals()], lots=2, wafers=4, chips=4,
                      seed=3, null_rate=0.05, start=__import__(
                          "datetime").date(2026, 8, 2))
     p2 = tmp_path / "raw_20260802_20260802_b.parquet"
@@ -125,13 +126,15 @@ def test_views_and_log_survive_reload(parquet, tmp_path):
 
 
 # ── 예전 DB 호환 (조회 전용) ─────────────────────────────────
-def test_legacy_fact_table_is_read_and_appended(tmp_path, parquet, appdata):
-    """`fact` 테이블만 있는 예전 DB — 읽기도 되고 이어 적재도 된다."""
+def test_legacy_fact_table_is_read_but_not_appended(tmp_path, parquet, appdata):
+    """`fact` 테이블만 있는 예전 DB — 읽기는 되고, 이어 적재는 안내와 함께 막는다."""
     from etreport.model.state import AppState
 
     dbp = tmp_path / "old.duckdb"
     src = pl.read_parquet(parquet)
-    wide = (src.with_columns(key_hash=db.key_hash_expr())
+    old_key = pl.concat_str([pl.col(c).cast(pl.Utf8) for c in db.KEY9],
+                            separator="|", ignore_nulls=True)   # 예전 키(KEY9)
+    wide = (src.with_columns(key_hash=old_key)
             .pivot(on="item_id", index=[*db.KEY9, "line_id", "key_hash"],
                    values="value", aggregate_function="first"))
     con = duckdb.connect(str(dbp))
@@ -139,10 +142,8 @@ def test_legacy_fact_table_is_read_and_appended(tmp_path, parquet, appdata):
     con.execute("create table fact as select * from w")     # 예전 이름
     con.close()
 
-    store = db.Store(dbp)
-    assert store.table_name() == "fact"
-    assert db.pivot_and_load(store, [parquet]) == 0          # 이미 있는 포인트
-    store.con.close()
+    with pytest.raises(RuntimeError, match="새 DB 파일"):
+        db.Store(dbp)
 
     st = AppState()
     summary = loader.load_state(st, str(dbp))

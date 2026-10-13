@@ -733,14 +733,14 @@ def apply(rf: Reformatter, df: pl.DataFrame,
     return out.drop_nulls("value")
 
 
-#: ADDP를 seq 병합 프레임에서 계산할 때 무시하는 키 — 분석 로딩의 §10.1 병합
-#: (`compat.select_sql`)과 같은 규칙이다. 나머지 키(die 좌표·온도·step_id·
+#: ADDP를 seq 병합 프레임에서 계산할 때 무시하는 키 — 적재 병합
+#: (`db.merge_seq`)과 같은 규칙이다. 나머지 키(die 좌표·온도·step_id·
 #: site_cnt·lot·wafer)가 다르면 여전히 다른 측정점이다.
 SEQ_KEYS = ("step_seq", "tkout_time")
 
 
 def _latest_expr(key_cols: list[str]) -> pl.Expr:
-    """(나머지 키 + step_seq)마다 tkout_time이 가장 늦은 행 — 읽기의 retest QUALIFY와 같다."""
+    """(나머지 키 + step_seq)마다 tkout_time이 가장 늦은 행 — 적재의 retest 규칙과 같다."""
     if "tkout_time" not in key_cols:
         return pl.lit(True)
     part = [c for c in key_cols if c != "tkout_time"]
@@ -786,11 +786,11 @@ def _fill_cross_seq(wide: pl.DataFrame, df: pl.DataFrame, key_cols: list[str],
     비고 그 item을 축으로 쓴 산점도가 비던 원인), `Std()`는 seq마다 일부 값만으로
     계산돼 조용히 틀린 값이 남았다.
 
-    그런 ADDP(`_cross_seq_aliases`)만 분석 로딩과 같은 규칙 — seq마다 최신
-    retest → seq·시각만 다른 행을 한 측정점으로, 항목마다 NULL이 아닌 첫 값 —
-    으로 합친 프레임에서 계산해 **die의 최신 행마다** 같은 값으로 붙인다. REAL은
-    원래 seq에 그대로 남고, 이 ADDP는 그 die의 모든 seq 행에 있어 어느 seq로
-    조회해도 보인다. seq 안에서 풀리는 ADDP는 예전과 한 글자도 다르지 않다.
+    그런 ADDP(`_cross_seq_aliases`)만 적재와 같은 규칙 — seq마다 최신 retest →
+    seq·시각만 다른 행을 한 측정점으로, 같은 항목이 여러 seq에 있으면 평균
+    (`db.merge_seq`) — 으로 합친 프레임에서 계산해 **die의 최신 행마다** 같은
+    값으로 붙인다. 적재가 그 행들을 다시 합치므로 저장되는 REAL과 수식의 입력이
+    같은 값이다. seq 안에서 풀리는 ADDP는 예전과 한 글자도 다르지 않다.
     """
     if "step_seq" not in key_cols or wide["step_seq"].n_unique() <= 1:
         return wide                     # 합칠 것이 없다 — 행 단위 결과가 곧 답
@@ -801,9 +801,8 @@ def _fill_cross_seq(wide: pl.DataFrame, df: pl.DataFrame, key_cols: list[str],
     by = [c for c in key_cols if c not in SEQ_KEYS]
     latest = _latest_expr(key_cols)
     merged = (wide.filter(latest)
-              .sort("step_seq", nulls_last=True, maintain_order=True)
               .group_by(by, maintain_order=True)
-              .agg(pl.col(reals).first(ignore_nulls=True)))
+              .agg(pl.col(reals).mean()))
     merged, _ = _compute_addps(merged, addps,
                                tuple(k for k in STD_KEYS if k not in SEQ_KEYS))
     log.info("ADDP %d개는 step_seq를 합쳐 계산했습니다(seq를 넘나드는 수식): %s",

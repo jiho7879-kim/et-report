@@ -290,10 +290,10 @@ def test_varchar_values_are_read_as_numbers(tmp_path):
     finally:
         con.close()
     assert got.schema["VT_N"].is_numeric()
-    # W01의 두 행은 seq만 다른 한 측정점(23.9·25.0 → 둘 다 25)이라 합쳐지고,
-    # 같은 item이 양쪽에 있으면 **늦게 찍힌 값**이 남는다(arg_max, §10.1).
-    # W02는 늦은 행의 'bad'가 NULL이라 이른 행의 1.7이 살아남는다.
-    assert sorted(got["VT_N"].to_list()) == [1.6, 1.7]
+    # 예전 형식 DB는 seq를 합치지 않는다(2026-10-13) — 행은 넷 그대로이고,
+    # 숫자로 못 읽는 'bad'만 NULL이 된다.
+    assert got["VT_N"].null_count() == 1
+    assert sorted(got["VT_N"].drop_nulls().to_list()) == [1.5, 1.6, 1.7]
 
 
 def test_numeric_db_sql_is_unchanged():

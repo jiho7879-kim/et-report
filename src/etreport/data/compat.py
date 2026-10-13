@@ -46,11 +46,11 @@ NUMERIC_TYPES = {"DOUBLE", "FLOAT", "REAL", "DECIMAL", "HUGEINT",
 #: 숫자를 꺼낸다(적재는 여전히 숫자만 받는다).
 TEXT_TYPES = {"VARCHAR", "TEXT", "STRING", "CHAR", "BPCHAR"}
 
-# step_seq만 다른 행을 **한 측정점으로 합칠 때**의 그룹 키(계획서 §10.1).
-# x는 step_seq=1, y는 step_seq=2에 기록되는 경우가 흔하다. seq를 키에 두면
-# 두 행으로 갈려 x·y가 함께 있는 행이 0개가 되고 산점도가 통째로 빈다.
-# 단 step_id·온도·site_cnt가 다르면 **다른 측정점**이므로 절대 합치지 않는다.
-MERGE_ROLES = ("x", "y", "temp", "step", "site")
+#: "적재할 때 step_seq를 합친 형식"(2026-10-13, `db.merge_seq`)이라는 표시 테이블.
+#: 이 DB는 측정점마다 한 행이라 retest 중복 제거도 병합도 없이 평평하게 읽는다.
+#: 없으면(예전 형식·손으로 만든 DB) step_seq는 합치지 않는다 — 읽을 때 합치던
+#: window + `arg_max` SQL은 데이터의 10배 메모리를 써서 폐기했다.
+FORMAT_TABLE = "et_format"
 
 # 분석 프레임에 함께 싣는 측정 조건 — 그룹 편집 4단 필터(§9.1)가 쓴다.
 CTX_ROLES = ("step", "temp", "site")
@@ -115,6 +115,8 @@ class TableProfile:
     #: 숫자로 읽어야 하지만 DB에는 문자열로 들어 있는 컬럼(예전 DB). 읽을 때
     #: TRY_CAST를 씌운다 — `numeric_expr()` 참조.
     text_numeric: set[str] = field(default_factory=set)
+    #: 적재 때 step_seq를 합친 DB(`FORMAT_TABLE`) — 측정점마다 한 행이다.
+    merged: bool = False
 
     def numeric_expr(self, col: str) -> str:
         """숫자로 다뤄야 하는 컬럼 하나의 SELECT 식.
@@ -172,6 +174,9 @@ def profile(con: duckdb.DuckDBPyConnection, table: str) -> TableProfile:
         "SELECT column_name, data_type FROM information_schema.columns "
         "WHERE table_name=? ORDER BY ordinal_position", [table]).fetchall()}
     p = TableProfile(table=table, columns=cols)
+    p.merged = bool(con.execute(
+        "SELECT 1 FROM information_schema.tables WHERE lower(table_name) = ?",
+        [FORMAT_TABLE]).fetchone())
     lower = {c.lower(): c for c in cols}
     for role, cands in ROLE_ALIASES.items():
         for cand in cands:
@@ -218,22 +223,6 @@ def key_expr(p: TableProfile) -> str:
         return "md5(CAST(rowid AS VARCHAR))"
     joined = ", ".join(f'CAST("{c}" AS VARCHAR)' for c in parts)
     return f"md5(concat_ws('|', {joined}))"
-
-
-def merge_cols(p: TableProfile) -> list[str]:
-    """step_seq 병합의 그룹 키가 될 실제 컬럼명 (lot·wafer 제외)."""
-    return [p.roles[r] for r in MERGE_ROLES if r in p.roles]
-
-
-def merges_seq(p: TableProfile) -> bool:
-    """step_seq 병합을 적용할지.
-
-    seq 컬럼이 있고 lot·wafer와 병합 키가 최소 하나는 인식됐을 때만 합친다.
-    키가 없는데 그룹핑을 하면 합칠 이유도 없이 행이 뭉쳐(예: wafer 하나가
-    한 점이 되어) 조용히 데이터를 잃는다 — 못 합치는 것보다 나쁘다.
-    """
-    return bool("seq" in p.roles and p.roles.get("lot") and p.roles.get("wafer")
-                and merge_cols(p))
 
 
 def ctx_select(p: TableProfile) -> list[str]:
@@ -285,23 +274,24 @@ def select_sql(p: TableProfile, dedup_latest: bool = True,
                items: list[str] | None = None) -> str:
     """분석용 wide SELECT — key/lot/wafer/gid + step/temp/site + item 컬럼들.
 
-    long이면 PIVOT으로 wide화한다. time 컬럼이 있으면 재측정(retest)의
-    최신 행만 남기되, **파티션에 step_seq를 포함**한다 — 빼면 seq가 다른
-    정상 행까지 하나만 남고 나머지가 사라진다(§10.1).
+    적재 때 step_seq를 합친 DB(`p.merged`)는 측정점마다 한 행이라 **평평한
+    SELECT** 그대로다 — window도 GROUP BY도 없어 DuckDB가 흘려 읽는다(`COPY …
+    TO`로 작업 세트를 쓸 때 메모리가 상한 안에 머무는 이유).
 
-    그다음 step_seq(과 측정 시각)만 다른 행을 한 측정점으로 합친다. 각 item은
-    NULL이 아닌 첫 값(any_value)을 취하므로, x가 seq 1·y가 seq 2에 기록돼
-    있어도 한 행에 함께 실린다. key는 합친 행들의 최솟값을 쓴다 — seq가 하나뿐인
-    (=지금까지 정상 동작하던) DB에서는 예전 key와 값이 같아서 제외 사이드카가
-    그대로 살아 있다.
+    그 밖의 DB(예전 형식·손으로 만든 DB)는 time 컬럼이 있으면 재측정(retest)의
+    최신 행만 남기되, **파티션에 step_seq를 포함**한다 — 빼면 seq가 다른 정상
+    행까지 하나만 남고 나머지가 사라진다. **step_seq는 합치지 않는다**: 읽을 때
+    합치던 window + item마다 `arg_max`가 데이터의 10배 메모리를 써서 폐기했다
+    (2026-10-13). 그런 DB는 새 파일로 다시 적재하라고 [적용]이 안내한다.
+
+    long이면 PIVOT으로 wide화한다(손으로 만든 DB).
 
     `lots`를 주면 그 lot만 읽는다. **WHERE는 QUALIFY보다 앞**이라 retest 판정도
     좁힌 범위 안에서 돈다 — 고르지 않은 lot의 재측정 행이 남은 lot의 순위를
     흔들지 않는다.
 
     `items`를 주면 그 item 열만 읽는다(None = 전부). 읽기 메모리는 **고른 item
-    수 × 포인트 수**에 비례하고, 병합의 `arg_max`도 item마다 하나씩 붙으므로
-    item 5,000개를 통째로 읽으면 한 달치에서도 OOM이 났다(2026-10).
+    수 × 포인트 수**에 비례한다.
     """
     want = None if items is None else set(items)
     picked = p.items if want is None else [c for c in p.items if c in want]
@@ -310,18 +300,16 @@ def select_sql(p: TableProfile, dedup_latest: bool = True,
     lot_sel = f'"{lot}" AS lot' if lot else "'(lot?)' AS lot"
     waf_sel = f'"{waf}" AS wafer' if waf else "'(wafer?)' AS wafer"
     key = key_expr(p)
-    merge = merges_seq(p)
     where = lot_filter(p, lots)
 
     if p.is_long:
         item, val = p.roles["item"], p.roles["value"]
-        roles = MERGE_ROLES if merge else ("x", "y", "temp", "step",
-                                           "seq", "site", "time")
+        roles = ("x", "y", "temp", "step", "seq", "site", "time")
         group = [c for c in (lot, waf) if c] + [
             p.roles[r] for r in roles if r in p.roles]
         temp_col = p.roles.get("temp")
         # 온도는 보정한 값으로 묶는다 — raw 23.9와 25.0이 다른 측정점으로
-        # 갈라지면 §10.1 병합이 무의미해진다
+        # 갈라지면 안 된다
         sel = ", ".join(f'{temp_expr(c)} AS "{c}"' if c == temp_col else f'"{c}"'
                         for c in group) or "1"
         gcols = ", ".join(f'"{c}"' for c in group) or "1"
@@ -336,50 +324,12 @@ def select_sql(p: TableProfile, dedup_latest: bool = True,
         return (f"WITH src AS ({base}) "
                 f"PIVOT src ON item_id USING any_value(value) GROUP BY {gcols}")
 
-    cols = [p.numeric_expr(c) for c in picked]
-    has_time = dedup_latest and "time" in p.roles and lot and waf
-    rank = ""
-    if has_time:
-        keys = [p.roles[r] for r in ("x", "y", "temp", "step", "site", "seq")
-                if r in p.roles]
-        part = ", ".join(f'"{c}"' for c in [lot, waf, *keys])
-        rank = (f'row_number() OVER (PARTITION BY {part} '
-                f'ORDER BY "{p.roles["time"]}" DESC)')
-
-    if not merge:
-        sel = ", ".join([f"{key} AS key", lot_sel, waf_sel, "'' AS gid",
-                         *ctx_select(p), *cols])
-        dedup = f" QUALIFY {rank} = 1" if rank else ""
-        return f'SELECT {sel} FROM "{p.table}"{where}{dedup}'
-
-    temp_col = p.roles.get("temp")
-    # 병합 키에 들어가기 **전에** 온도를 보정한다(23.9와 25.0을 한 점으로)
-    mc_sel = [f'{temp_expr(c)} AS "{c}"' if c == temp_col else f'"{c}"'
-              for c in merge_cols(p)]
-    mc = [f'"{c}"' for c in merge_cols(p)]
-    # **병합 경로에서는 retest를 QUALIFY로 지우지 않는다.** 파티션에 step_seq가
-    # 들어 있어도 그 값이 NULL이면(= 적재 당시 seq를 못 받아 온 DB) seq가 다른
-    # 두 행이 한 파티션에 들어가 늦은 쪽만 남고 **이른 쪽 item이 통째로
-    # 사라진다** — x는 있는데 y가 없어 산점도도 요약 표도 빈다. 대신 값은
-    # `arg_max(item, 시각)`으로 뽑는다: item마다 **NULL이 아닌 값 중 가장 늦은
-    # 것**을 고르므로 retest(같은 item 재측정 → 최신 값)와 seq 분산(서로 다른
-    # item → 한 행에 모임)이 같은 식 하나로 풀린다.
-    inner_sel = [f"{key} AS key", lot_sel, waf_sel, *mc_sel, *cols]
-    if has_time:
-        inner_sel.append(f"{rank} AS __rn")
-        inner_sel.append(f'"{p.roles["time"]}" AS __t')
-    inner = f'SELECT {", ".join(inner_sel)} FROM "{p.table}"{where}'
-    # step·temp·site는 병합 그룹 키이므로 집계 없이 그대로 뽑을 수 있다
-    ctx = [f'"{p.roles[r]}" AS {r}' if r in p.roles else f"NULL AS {r}"
-           for r in CTX_ROLES]
-    # 바깥에서는 **이름만** 쓴다 — 안쪽에서 이미 TRY_CAST가 걸려 별칭이 붙었다.
-    names = [f'"{c}"' for c in picked]
-    # key는 예전과 같은 집합(= seq마다 최신 행)의 최솟값이어야 한다 — 제외
-    # 포인트 사이드카가 이 값으로 저장돼 있어서, 바뀌면 제외 이력이 사라진다.
-    key_agg = "min(key) FILTER (WHERE __rn = 1) AS key" if has_time \
-        else "min(key) AS key"
-    val_agg = [f"arg_max({c}, __t) AS {c}" for c in names] if has_time \
-        else [f"any_value({c}) AS {c}" for c in names]
-    outer = ", ".join([key_agg, "lot", "wafer", "'' AS gid", *ctx, *val_agg])
-    return (f"SELECT {outer} FROM ({inner}) "
-            f'GROUP BY {", ".join(["lot", "wafer", *mc])}')
+    sel = ", ".join([f"{key} AS key", lot_sel, waf_sel, "'' AS gid",
+                     *ctx_select(p), *[p.numeric_expr(c) for c in picked]])
+    if not (dedup_latest and not p.merged and "time" in p.roles and lot and waf):
+        return f'SELECT {sel} FROM "{p.table}"{where}'
+    keys = [p.roles[r] for r in ("x", "y", "temp", "step", "site", "seq")
+            if r in p.roles]
+    part = ", ".join(f'"{c}"' for c in [lot, waf, *keys])
+    return (f'SELECT {sel} FROM "{p.table}"{where} QUALIFY row_number() OVER '
+            f'(PARTITION BY {part} ORDER BY "{p.roles["time"]}" DESC) = 1')

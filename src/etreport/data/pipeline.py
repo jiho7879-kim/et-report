@@ -59,10 +59,15 @@ def run(preset, d_from: date, d_to: date, catalog,
     import polars as pl
 
     from etreport.data import extractor
-    from etreport.data.db import Store, pivot_and_load
+    from etreport.data.db import Store, format_problem, pivot_and_load
     from etreport.data.reformatter import apply as rf_apply
     from etreport.data.reformatter import load as rf_load
     from etreport.paths import cleanup_staging, staging_dir
+
+    # 예전 형식 DB에는 이어 적재하지 않는다 — 몇 분짜리 추출을 다 하고 나서
+    # 적재에서 떨어지지 않게 **맨 앞에서** 묻는다.
+    if problem := format_problem(preset.db_path):
+        raise RuntimeError(problem)
 
     t0 = time.monotonic()
     res = ExtractResult()
@@ -186,11 +191,18 @@ def run(preset, d_from: date, d_to: date, catalog,
     try:
         res.rows = pivot_and_load(store, reformatted, on_progress=load_prog)
         res.filled = store.filled
+        averaged = dict(store.averaged)
     finally:
         store.close()
-    on_log(f"적재 완료 — {res.rows:,}행"
-           + (f" · 기존 행 {res.filled:,}개의 빈 item 채움" if res.filled else "")
+    on_log(f"적재 완료 — 측정점 {res.rows:,}개"
+           + (f" · 기존 측정점 {res.filled:,}개 갱신" if res.filled else "")
            + f" · {time.monotonic() - t:.1f}초")
+    if averaged:
+        # 겹치지 않는 것이 보통이다 — 겹쳤다면 어느 item인지 바로 보이게 남긴다
+        top = sorted(averaged.items(), key=lambda kv: -kv[1])
+        on_log(f"  step_seq가 달라 평균 낸 값 {sum(averaged.values()):,}칸 — "
+               + ", ".join(f"{k} {v:,}" for k, v in top[:5])
+               + (f" 외 {len(top) - 5}개 item" if len(top) > 5 else ""))
 
     # 4.5) 저장 옵션 — 적재 결과를 CSV/SBDF로 내보낸다 (스케줄러도 이 훅을 탄다)
     if preset.save_csv or preset.save_sbdf:
