@@ -117,7 +117,10 @@ def build(root: str | Path | None = None, force: bool = False) -> DemoBundle:
                              {PLOT_SHEET: demo_data.plot_frame(),
                               TABLE_SHEET: demo_data.table_frame()}, force, b)
 
-    if force or not b.db.exists():
+    # 예전 형식(step_seq를 나눠 저장)으로 만들어 둔 번들은 다시 만든다 — 그대로 두면
+    # 데모의 DC(seq 1)·누설(seq 2) 산점도가 빈다
+    from etreport.data.db import format_problem
+    if force or not b.db.exists() or format_problem(b.db):
         build_db(b.db)
         b.made.append(b.db.name)
     return b

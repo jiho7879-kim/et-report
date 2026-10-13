@@ -78,7 +78,7 @@ def format_problem(path: str | Path) -> str:
     추출은 몇 분씩 걸리므로 파이프라인이 **시작하기 전에** 묻는다 — 다 받아 놓고
     적재에서 떨어지면 그 시간이 통째로 버려진다.
     """
-    if not Path(path).exists():
+    if not path or not Path(path).is_file():
         return ""
     from etreport.data.loader import readonly_query
     with readonly_query(str(path)) as con:
@@ -393,7 +393,9 @@ class Store:
         끼우고 — 들어온 쪽이 비어 있는 칸은 그대로 둔다 — 아니면 **빈 칸만**
         채운다. 며칠씩 겹쳐 도는 예약 추출에서 다음 날 들어온 retest가 이 규칙으로
         반영되고, 예전 기간을 다시 받아도 새 값이 뒤집히지 않는다. 시각이 같으면
-        (같은 파일을 다시 적재) 아무것도 바뀌지 않는다.
+        (같은 파일을 다시 적재) 아무것도 바뀌지 않는다. seq 평균(`merge_seq`)은
+        **한 번의 적재 안에서만** 걸린다 — 같은 item을 다른 seq로 따로 적재하면
+        늦게 잰 쪽이 이긴다(드문 경우라 규칙을 하나로 둔다).
 
         WHERE에 '바뀔 칸이 하나라도 있는 행'만 남기는 이유는 두 가지다: 같은 파일을
         다시 적재했을 때 0을 돌려줘야 화면이 거짓말을 하지 않고, 안 바뀔 행을 전부
@@ -454,7 +456,8 @@ def merge_seq(part: pl.DataFrame) -> tuple[pl.DataFrame, dict[str, int]]:
               .agg(pl.col("value").drop_nulls().last()))
     v = pl.col("value")
     vals = (latest.group_by(["key_hash", "item_id"], maintain_order=True)
-            .agg(v.mean() if latest.schema["value"].is_numeric() else v.first(),
+            .agg(v.mean() if latest.schema["value"].is_numeric()
+                 else v.drop_nulls().first(),
                  v.is_not_null().sum().alias("_n")))
     averaged = dict(vals.filter(pl.col("_n") > 1).group_by("item_id").len()
                     .iter_rows())

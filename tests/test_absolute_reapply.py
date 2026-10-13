@@ -60,7 +60,7 @@ def test_absolute_is_reapplied_to_already_loaded_negatives(tmp_path, appdata):
 
     st = _load(dbp, [_rule("Ioff", absolute=True)])
 
-    assert sorted(st.data["Ioff"]) == pytest.approx([1.5e-9, 2.5e-9])
+    assert sorted(loader.frame(st, ["Ioff"])["Ioff"]) == pytest.approx([1.5e-9, 2.5e-9])
     # DB 원본은 그대로 — 분석은 읽기 전용이다
     con = loader.open_readonly(dbp)
     assert min(r[0] for r in con.execute("select Ioff from et_data").fetchall()) < 0
@@ -72,8 +72,8 @@ def test_absolute_false_items_keep_their_sign(tmp_path, appdata):
     st = _load(_db_with_negatives(tmp_path),
                [_rule("Ioff", absolute=True), _rule("Vt", absolute=False, row=3)])
 
-    assert sorted(st.data["Ioff"]) == pytest.approx([1.5e-9, 2.5e-9])
-    assert sorted(st.data["Vt"]) == pytest.approx([-0.42, 0.44])
+    assert sorted(loader.frame(st, ["Ioff"])["Ioff"]) == pytest.approx([1.5e-9, 2.5e-9])
+    assert sorted(loader.frame(st, ["Vt"])["Vt"]) == pytest.approx([-0.42, 0.44])
 
 
 def test_scale_is_never_reapplied(tmp_path, appdata):
@@ -81,7 +81,7 @@ def test_scale_is_never_reapplied(tmp_path, appdata):
     st = _load(_db_with_negatives(tmp_path),
                [_rule("Ioff", absolute=True, scale=1000.0)])
 
-    assert sorted(st.data["Ioff"]) == pytest.approx([1.5e-9, 2.5e-9])
+    assert sorted(loader.frame(st, ["Ioff"])["Ioff"]) == pytest.approx([1.5e-9, 2.5e-9])
 
 
 def test_reapplying_is_idempotent(tmp_path, appdata):
@@ -89,8 +89,8 @@ def test_reapplying_is_idempotent(tmp_path, appdata):
     dbp = _db_with_negatives(tmp_path)
     rules = [_rule("Ioff", absolute=True)]
 
-    first = _load(dbp, rules).data.sort("key")["Ioff"].to_list()
-    second = _load(dbp, rules).data.sort("key")["Ioff"].to_list()
+    first = loader.frame(_load(dbp, rules), ["Ioff"]).sort("key")["Ioff"].to_list()
+    second = loader.frame(_load(dbp, rules), ["Ioff"]).sort("key")["Ioff"].to_list()
 
     assert first == pytest.approx(second)
 
@@ -99,7 +99,7 @@ def test_no_reformatter_changes_nothing(tmp_path, appdata):
     """리포메터 없이 DB만 열어 보는 흐름 — 값을 건드리지 않는다."""
     st = _load(_db_with_negatives(tmp_path), [])
 
-    assert sorted(st.data["Ioff"]) == pytest.approx([-2.5e-9, -1.5e-9])
+    assert sorted(loader.frame(st, ["Ioff"])["Ioff"]) == pytest.approx([-2.5e-9, -1.5e-9])
 
 
 def test_summary_reports_how_many_items_were_absolutised(tmp_path, appdata):

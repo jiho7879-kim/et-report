@@ -193,7 +193,7 @@ def _welch_t(a: list[float], b: list[float]) -> float | None:
 
 def top_factors(data: pl.DataFrame, met_names: list[str], et_items: list[str],
                 excluded: set[str] | None = None, k: int = 10,
-                group_col: str = "gid") -> pl.DataFrame:
+                group_col: str = "gid", stats=None) -> pl.DataFrame:
     """계측 인자 × ET item의 관계를 훑어 **유의미한 순으로 k개**.
 
     세 가지를 함께 본다(확정 요구):
@@ -208,7 +208,8 @@ def top_factors(data: pl.DataFrame, met_names: list[str], et_items: list[str],
     지금까지의 순위 그대로다.
 
     wafer 집계는 `model/aggregate.wafer_stats`를 쓴다 — 화면·표·PPT와 같은
-    숫자여야 한다.
+    숫자여야 한다. 값이 작업 세트에 있으면 `stats`(`wafer_stats_of`)로 미리
+    집계해 넘긴다 — `data`는 그때 lot·wafer·gid만 쓴다.
     """
     from etreport.model.aggregate import wafer_stats
 
@@ -217,8 +218,11 @@ def top_factors(data: pl.DataFrame, met_names: list[str], et_items: list[str],
              "t": pl.Float64, "score": pl.Float64}
     if data is None or data.is_empty() or not met_names or not et_items:
         return pl.DataFrame(schema=empty)
-    aliases = [c for c in {*met_names, *et_items} if c in data.columns]
-    st = wafer_stats(data, excluded or set(), aliases, "avg")
+    if stats is None:
+        aliases = [c for c in {*met_names, *et_items} if c in data.columns]
+        st = wafer_stats(data, excluded or set(), aliases, "avg")
+    else:
+        aliases, st = [*met_names, *et_items], stats
     keys = sorted(st.values)
     groups = {}
     if group_col in data.columns:

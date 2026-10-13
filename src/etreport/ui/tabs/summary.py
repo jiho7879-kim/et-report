@@ -170,17 +170,15 @@ class SummaryTab(StaleMixin, QWidget):
     # ── 계산 ─────────────────────────────────────────────────
     def _stats(self):
         """wafer별 통계를 한 번에 — item×wafer 반복 필터링 없음."""
-        from etreport.model.aggregate import ref_values, wafer_stats
+        from etreport.model.aggregate import ref_values_of, wafer_stats_of
         st = self.state
         aliases = [r.item_id for r in st.report.table_rows]
         agg = self.agg_mode()
-        ws = wafer_stats(st.data, st.hidden(), aliases,
-                         agg if agg in ("avg", "std") else "avg")
+        ws = wafer_stats_of(st, aliases, agg if agg in ("avg", "std") else "avg")
         ref = {}
         if self.chk_delta.isChecked():
             g = st.ref_group()
-            ref = ref_values(st.data, st.hidden(), g.gid if g else None,
-                             aliases, agg)
+            ref = ref_values_of(st, g.gid if g else None, aliases, agg)
         return ws, ref, agg
 
     def rebuild(self) -> None:

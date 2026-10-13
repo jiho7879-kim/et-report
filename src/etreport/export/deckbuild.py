@@ -54,9 +54,11 @@ def _assignment_for(state: AppState, exp: str) -> dict[tuple[str, str], str]:
 
 
 def _plot_data(state: AppState, exp: str, spec: PlotSpec) -> dict[str, pl.DataFrame]:
-    df = state.data
-    if df is None:
+    if state.data is None:
         return {}
+    # 키 프레임 + **이 plot의 item 열만**(작업 세트) — 화면과 같은 함수로 읽는다
+    from etreport.data.loader import frame
+    df = frame(state, [n for pair in spec.pairs() for n in pair])
     # 손으로 찍은 제외 + 이상치 필터 + 이 plot에서만 뺀 점(화면과 같은 규칙)
     hide = state.hidden() | spec.local_excluded
     active = df.filter(~pl.col("key").is_in(list(hide))) if hide else df

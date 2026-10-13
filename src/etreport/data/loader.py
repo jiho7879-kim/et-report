@@ -27,10 +27,14 @@ log = logging.getLogger(__name__)
 #: step/temp/site는 측정 조건 — 그룹 편집의 4단 필터와 배정 범위가 쓴다(§9.1).
 RESERVED = ("key", "lot", "wafer", "gid", "step", "temp", "site")
 
-#: item이 이 수 이하인 DB는 [적용] 때 통째로 읽는다 — 작은 DB의 동작(커버리지·
-#: 이상치가 item 전부를 본다)을 바꾸지 않고, 수천 개짜리만 템플릿 item으로 좁힌다.
-#: 300개 × 1년(16만 포인트)이 실측 0.4GB 프레임이다.
+#: item이 이 수 이하인 DB는 [적용] 때 작업 세트에 전부 담는다 — 작은 DB의 동작
+#: (커버리지·이상치가 item 전부를 본다)을 바꾸지 않고, 수천 개짜리만 템플릿 item으로
+#: 좁힌다. 나머지는 고를 때 `ensure_items`가 열 단위로 읽는다.
 LOAD_ALL_ITEMS = 300
+
+#: 값을 묶음으로 읽을 때 한 묶음의 상한(행 × item × 8바이트). 요약 표·이상치·
+#: 커버리지가 item 수백 개를 한꺼번에 올리지 않게 한다(`item_batches`).
+CHUNK_BYTES = 64 << 20
 
 
 def total_memory_bytes() -> int | None:
@@ -313,15 +317,20 @@ def db_items(con: duckdb.DuckDBPyConnection,
 def load_state(state: AppState, db_path: str, table: str | None = None,
                lots: list[str] | None = None,
                items: list[str] | None = None) -> str:
-    """DB를 열어 state.data를 채우고 상태 요약을 반환.
+    """DB를 열어 state.data(키 프레임)와 작업 세트를 채우고 상태 요약을 반환.
 
     `lots`가 있으면 그 lot만 읽는다(§9.2). 읽는 양 자체가 줄어드는 것이 요점이라
     프레임을 다 만든 뒤 거르지 않고 **SQL에서** 좁힌다. 빈 리스트·None은 '전부'다.
 
-    `items`를 주면 그 item 열만 읽는다(None = 전부, 빈 리스트 = 하나도 없이 키만).
-    item이 수천 개인 DB를 통째로 올리면 그것만으로 OOM이다 — [적용]은 템플릿이
-    쓰는 item만 주고, 나머지는 화면이 고를 때 `ensure_items`가 열 단위로 더 읽는다.
-    무엇이 DB에 있는지는 `state.db_items`가 값 없이 들고 있다.
+    **값은 메모리에 올리지 않는다**(2026-10-13). 고른 lot·item은 DuckDB가 작업 세트
+    parquet으로 흘려 쓰고(`data/workset.py`), `state.data`에는 키 열만 남는다 —
+    값은 쓰는 곳이 `frame()`으로 그 열만 읽는다. 손으로 만든 long DB만 예전처럼
+    통째로 읽는다(PIVOT 결과의 키를 파이썬에서 만든다).
+
+    `items`를 주면 그 item 열만 작업 세트에 담는다(None = 전부, 빈 리스트 = 키만).
+    item이 수천 개인 DB는 [적용]이 템플릿 item만 주고, 나머지는 화면이 고를 때
+    `ensure_items`가 열 단위로 더 읽는다. 무엇이 DB에 있는지는 `state.db_items`가
+    값 없이 들고 있다.
     """
     if not Path(db_path).exists():
         raise FileNotFoundError(f"파일이 없습니다: {db_path}")
@@ -331,7 +340,7 @@ def load_state(state: AppState, db_path: str, table: str | None = None,
     # 파생 캐시(active·hidden)가 함께 살아 있으면 피크가 두 배가 된다 — lot을
     # 바꿔 [적용]할 때만 간헐적으로 OOM이 나던 이유다. 조회가 실패하면 예전
     # lot의 데이터가 새 설정 이름표를 달고 남는 것보다 비어 있는 편이 낫다.
-    state.data = None
+    state.data = state.workset = None
     state._active_cache = state._hidden_cache = None
     # 연결은 읽는 동안만 연다(readonly_query 참조). 열어 두면 조회 캐시가
     # 화면 수명만큼 남아 이후 모든 DuckDB 접근이 OOM이 된다.
@@ -346,10 +355,17 @@ def load_state(state: AppState, db_path: str, table: str | None = None,
         state.db_items = db_items(con, prof)
         if items is not None and len(state.db_items) <= LOAD_ALL_ITEMS:
             items = None
-        df = con.execute(compat.select_sql(prof, lots=lots, items=items)).pl()
-    if prof.is_long:
-        df = _normalize_pivoted(df, prof)
+        sql = compat.select_sql(prof, lots=lots, items=items)
+        if prof.is_long:
+            df = _normalize_pivoted(con.execute(sql).pl(), prof)
+        else:
+            from etreport.data import workset
+            state.workset = workset.open_set(con, db_path, sql, RESERVED)
+            df = state.workset.keys(list(RESERVED))
     df, n_abs = apply_absolute(df, state.rf)     # 음수로 적재된 기존 DB도 교정
+    if state.workset is not None:                # 작업 세트 값은 읽을 때 건다(frame)
+        n_abs = len({r.alias for r in state.rf.rules if r.absolute}
+                    & set(state.workset.items))
 
     # 측정 조건 필터(step·site·temp) — **여기 한 곳에서만** 좁힌다. 좁힌 결과가
     # 곧 `state.data`라, 표·plot·PPT·복사가 저마다 필터를 기억할 필요가 없다.
@@ -376,7 +392,7 @@ def load_state(state: AppState, db_path: str, table: str | None = None,
     state.data = apply_manual_groups(state.data, state.manual_groups)
     state.data = reattach_sources(state.data, state)
 
-    items = item_columns(state.data)
+    items = value_items(state)
     n_lot = state.data["lot"].n_unique() if "lot" in state.data.columns else 0
     # lot을 골라 읽었으면 '3/12'로 적는다 — 화면에 없는 lot이 DB에는 있다는 사실을
     # 요약 한 줄이 말해 주지 않으면, 빠진 lot을 데이터가 없는 것으로 오해한다.
@@ -404,7 +420,7 @@ def ensure_items(state: AppState, names) -> list[str]:
     path = getattr(state, "db_path", "")
     if df is None or not path or not Path(path).exists():
         return []
-    have = set(getattr(state, "db_items", ()) or ())
+    have = set(getattr(state, "db_items", ()) or ()) - set(_ws_items(state))
     want = [n for n in dict.fromkeys(names or ())
             if n and n not in df.columns and n in have]
     if not want:
@@ -429,12 +445,56 @@ def ensure_items(state: AppState, names) -> list[str]:
     return got
 
 
+def _ws_items(state: AppState) -> list[str]:
+    ws = getattr(state, "workset", None)
+    return ws.items if ws is not None else []
+
+
+def value_items(state: AppState) -> list[str]:
+    """지금 값을 읽을 수 있는 item — 메모리(`state.data`) + 작업 세트."""
+    mem = item_columns(state.data) if state.data is not None else []
+    return list(dict.fromkeys([*mem, *_ws_items(state)]))
+
+
+def with_values(state: AppState, df: pl.DataFrame | None, names) -> pl.DataFrame | None:
+    """`df`(키 프레임에서 나온 행들)에 작업 세트의 `names` 열을 key로 붙인다.
+
+    파일에서 **그 열만** 읽으므로 plot 하나는 x·y 두 열, 묶음 집계는 묶음만큼만
+    메모리를 쓴다. 이미 `df`에 있는 열과 작업 세트에 없는 이름은 건드리지 않는다
+    (DB에서 더 읽어야 하는 item은 `ensure_items`의 몫). ABSOLUTE는 여기서 건다.
+    """
+    if df is None:
+        return None
+    cols = [n for n in dict.fromkeys(names or ())
+            if n and n not in df.columns and n in _ws_items(state)]
+    if not cols:
+        return df
+    vals, _ = apply_absolute(state.workset.read(cols), state.rf)
+    return df.join(vals, on="key", how="left", maintain_order="left")
+
+
 def frame(state: AppState, names=()) -> pl.DataFrame:
-    """분석 프레임 + `names` item 열. **값이 필요한 곳은 전부 이걸로 읽는다.**"""
+    """분석 프레임 + `names` item 열. **값이 필요한 곳은 전부 이걸로 읽는다.**
+
+    작업 세트에 있으면 그 열만 읽어 붙이고, DB에만 있으면 `ensure_items`가 더
+    읽는다. 메모리에 있는 것(long DB·데모·이미 읽은 item)은 그대로다.
+    """
     if state.data is None:
         return pl.DataFrame()
     ensure_items(state, names)
-    return state.data
+    return with_values(state, state.data, names)
+
+
+def item_batches(state: AppState, items: list[str]):
+    """`items`를 묶음으로 — 한 묶음(행 × item × 8바이트)이 `CHUNK_BYTES`를 넘지 않게.
+
+    항목이 없어도 빈 묶음 하나는 돌려준다(키만으로 셀 것이 있는 곳 — 제외 수 등).
+    """
+    rows = state.data.height if state.data is not None else 0
+    n = max(1, CHUNK_BYTES // (8 * max(1, rows)))
+    items = list(dict.fromkeys(items))
+    for i in range(0, max(1, len(items)), n):
+        yield items[i:i + n]
 
 
 def reattach_sources(df: pl.DataFrame, state: AppState) -> pl.DataFrame:

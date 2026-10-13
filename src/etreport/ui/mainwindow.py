@@ -199,11 +199,10 @@ class MainWindow(QMainWindow):
 
     def _refresh_rail(self) -> None:
         st = self.state
+        from etreport.data.loader import value_items
         n = 0 if st.data is None else st.data.height
-        n_item = len(st.aliases()) or (
-            0 if st.data is None else
-            len([c for c in st.data.columns
-                 if c not in ("key", "lot", "wafer", "gid")]))
+        # 값은 작업 세트에 있다 — 키 프레임의 열을 세면 item이 0으로 보인다
+        n_item = len(st.aliases()) or len(value_items(st))
         parts = [st.db_label, f"item {n_item}", f"포인트 {n:,}"]
         if st.excluded:
             parts.append(f"제외 {len(st.excluded)}")

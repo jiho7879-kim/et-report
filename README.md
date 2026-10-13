@@ -157,9 +157,10 @@ src/etreport/
 │  ├─ extractor.py        청크 플래너 → 메모리 예산 병렬 → long parquet(고정 스키마)
 │  ├─ reformatter.py      실컬럼 스키마 · ADDP ast 화이트리스트 · Std(6키 그룹 n-1)
 │  ├─ xlio.py             xlwings 단일 창구 + parquet 캐시, csv·tsv 정식 입력
-│  ├─ db.py               DuckDB 적재: et_data·load_log·key_hash ANTI JOIN·버킷 피벗
-│  ├─ loader.py           읽기 전용 열기(open_readonly)·wide 로딩·절대값 재적용
-│  ├─ compat.py           역할 별칭·step_seq 병합·retest QUALIFY·타입 관대한 읽기
+│  ├─ db.py               DuckDB 적재: 적재 때 step_seq 병합·et_data 뷰·key_hash·버킷 피벗
+│  ├─ loader.py           읽기 전용 열기·키 프레임 로딩·frame()으로 값 열 읽기·절대값 재적용
+│  ├─ workset.py          [적용]의 작업 세트 parquet(COPY 흘려 쓰기·재사용·최근 2벌)
+│  ├─ compat.py           역할 별칭·형식 판정(et_format)·retest QUALIFY·타입 관대한 읽기
 │  ├─ exclusions.py       제외/필터 사이드카(DB 경로별 JSON)
 │  ├─ exporting.py        적재 후 CSV/SBDF 내보내기 · COPY TO 스트리밍(Qt 없음)
 │  ├─ lotcontext.py       조회 조건 기본값을 분석 DB에서 채운다(line·process·기간)

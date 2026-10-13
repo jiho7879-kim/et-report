@@ -90,6 +90,40 @@ def ref_values(data: pl.DataFrame, excluded: set[str], ref_gid: str | None,
     return {a: (None if rec[a] is None else float(rec[a])) for a in present}
 
 
+def wafer_stats_of(state, aliases: list[str], agg: str = "avg",
+                   where: pl.Expr | None = None) -> WaferStats:
+    """`wafer_stats`를 상태 위에서 — 값을 item 묶음으로 나눠 읽는다.
+
+    값은 메모리에 다 있지 않다(작업 세트, `loader.frame`). 묶음 하나가
+    `loader.CHUNK_BYTES`를 넘지 않게 나눠 **같은 `wafer_stats`**를 돌리고 합치므로
+    화면·xlsx·PPT의 숫자는 예전과 같다. `where`는 행을 먼저 좁힐 때(그룹별 표).
+    """
+    from etreport.data import loader
+    out = WaferStats({}, {})
+    for i, batch in enumerate(loader.item_batches(state, aliases)):
+        df = loader.frame(state, batch)
+        ws = wafer_stats(df if where is None else df.filter(where),
+                         state.hidden(), batch, agg)
+        for k, v in ws.values.items():
+            out.values.setdefault(k, {}).update(v)
+        if i == 0:                       # 제외 수는 키만 보므로 묶음마다 같다
+            out.excluded = ws.excluded
+    return out
+
+
+def ref_values_of(state, ref_gid: str | None, aliases: list[str],
+                  agg: str = "avg") -> dict[str, float | None]:
+    """`ref_values`를 상태 위에서 — `wafer_stats_of`와 같은 묶음 규칙."""
+    from etreport.data import loader
+    out: dict[str, float | None] = {}
+    if not ref_gid:
+        return out
+    for batch in loader.item_batches(state, aliases):
+        out.update(ref_values(loader.frame(state, batch), state.hidden(),
+                              ref_gid, batch, agg))
+    return out
+
+
 def offspec(value: float | None, rule) -> bool:
     if value is None or rule is None:
         return False

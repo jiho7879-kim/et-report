@@ -31,8 +31,11 @@ class AppState:
     factors: list[str] = field(default_factory=list)
     groups: list[GroupStyle] = field(default_factory=list)
 
-    # wide 포인트 테이블: key, lot, wafer, gid + <ALIAS>…
+    # 키 프레임: key, lot, wafer, gid, step, temp, site (+ 붙인 tracking·계측 열).
+    # item 값은 **여기 없다** — 작업 세트(`workset`)에서 `loader.frame()`으로 그
+    # 열만 읽는다. long DB·데모처럼 메모리에 다 있는 경우만 item 열이 함께 있다.
     data: pl.DataFrame | None = None
+    workset: object | None = None      # data.workset.Workset — [적용]이 뜬 값 파일
     excluded: set[str] = field(default_factory=set)
     # 되돌리기 — (뺀 곳, 뺀 key들). 뺀 곳은 `excluded`이거나 어떤 plot의
     # `local_excluded`다. 드래그 한 번이 한 칸이라 Ctrl+Z 한 번에 통째로 돌아온다.

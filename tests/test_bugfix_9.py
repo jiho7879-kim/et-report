@@ -99,8 +99,9 @@ def test_raw_temperatures_merge_into_one_point(tmp_path, appdata):
          "et_value": 1e-9, "tkout_time": datetime(2026, 8, 4, 9, 5)},
     ]))
 
-    assert st.data.height == 1
-    row = st.data.row(0, named=True)
+    df = loader.frame(st, ["Vt", "Ioff"])
+    assert df.height == 1
+    row = df.row(0, named=True)
     assert row["Vt"] is not None and row["Ioff"] is not None
     assert int(row["temp"]) == 25
 

@@ -156,8 +156,7 @@ def apply(state, cfg: TukeyConfig | None = None) -> TukeyResult:
     **끄면 즉시 비운다** — 껐는데 예전에 걸러진 점이 남아 있으면 그 점이 왜
     없는지 알 방법이 없다.
     """
-    from etreport.data import exclusions
-    from etreport.data.loader import item_columns
+    from etreport.data import exclusions, loader
 
     cfg = cfg or getattr(state, "tukey", None) or TukeyConfig()
     state.tukey = cfg
@@ -167,7 +166,16 @@ def apply(state, cfg: TukeyConfig | None = None) -> TukeyResult:
             exclusions.save_filtered(state.db_path, {})
         return TukeyResult(k=cfg.k, scope=cfg.scope)
 
-    res = find(state.data, item_columns(state.data), cfg)
+    # 값은 작업 세트에서 묶음으로 읽는다(loader.item_batches) — item 수백 개를
+    # 한꺼번에 올리지 않는다. 처음 걸린 item이 이유가 되는 규칙은 묶음 순서로 지킨다.
+    res = TukeyResult(k=cfg.k, scope=cfg.scope)
+    items = loader.value_items(state)
+    for batch in loader.item_batches(state, items):
+        got = find(loader.frame(state, batch), batch, cfg)
+        for key, why in got.points.items():
+            res.points.setdefault(key, why)
+        res.by_item.update(got.by_item)
+        res.checked = max(res.checked, got.checked)
     state.filtered = res.points
     if getattr(state, "db_path", ""):
         exclusions.save_filtered(state.db_path, res.points)

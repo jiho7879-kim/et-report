@@ -78,7 +78,8 @@ myenv/bin/ruff check --fix .                        # 안전한 것만 자동 �
 | `test_reformatter_apply.py` | SCALE→ABS→ADDP 순서, ALIAS 개명, 키별 계산 |
 | `test_templates.py` | plot/table 템플릿 검증과 Report 분리 |
 | `test_pipeline_duckdb.py` | 리포메팅 → 적재 → 읽기전용 로딩 → 제외 사이드카 |
-| `test_step_seq_merge.py` | **§10.1** seq 병합·QUALIFY 파티션·합치면 안 되는 키 |
+| `test_step_seq_merge.py` | **§10.1** 적재 때 seq 병합(retest 최신·seq 중복 평균)·합치면 안 되는 키·이어 적재(늦은 값이 이긴다)·예전 형식 차단 |
+| `test_workset.py` | **작업 세트** — [적용] 뒤 메모리에는 키만 · `frame()` 값 = DB 값 · 재사용·최근 2벌 정리 · 묶음 집계 = 한 번에 집계 |
 | `test_absolute_reapply.py` | **§10.2** 로딩 시점 절대값 재적용 · 스케일은 재적용 금지 |
 | `test_extract_schema.py` | **§10.4** 문자열 시각 파싱 · Categorical · 청크 스키마 고정 |
 | `test_pptgen_deck.py` | **§7** 16:9 고정 · 페이지 순서 · 표 전용 페이지 · 병합 순서(§10.5) |
@@ -96,7 +97,7 @@ myenv/bin/ruff check --fix .                        # 안전한 것만 자동 �
 | `test_s3.py` | 기능 C — 키 조립·페이지네이션·자격 증명 보관(가짜 클라이언트) |
 | `test_chunk_plan.py` | **§4.2·§10.10** 기간×item 그룹 청크 · 진행 라벨 · 미리보기 |
 | `test_dock_and_samples.py` | **§5.1·§11.4·§3.4·§14** REPORT 문구·예시 파일·붙여넣기·배정 lot |
-| `test_db_buckets.py` | 버킷 수가 저장 결과를 바꾸지 않는다는 불변식(예전 DB 호환) |
+| `test_db_buckets.py` | 버킷 수가 저장 결과를 바꾸지 않는다는 불변식 · 예전 DB는 읽기만 |
 | `test_oom_storage.py` | **OOM 회귀** — item 테이블 500열 분할·행 정렬(POSITIONAL)·1GB 상한 이어 적재·필요한 item만 읽기·`ensure_items` |
 | `test_cond_filter.py` | **측정 조건 필터** — 빈 조건=예전 그대로 · 로딩이 좁힌다 · 목록은 좁히기 전 기준 · 지연 계산 |
 | `test_analysis_core.py` | 축 범위 ×1.2 · 로그 패턴 · wafer 집계 · 자릿수 |
@@ -167,8 +168,8 @@ UI는 스모크 수준만 있다(`test_ui_smoke.py`, offscreen). 화면을 바�
 **[데이터] 파이프라인** (`data/pipeline.py: run()`):
 ```
 리포메터 로드(xlwings) → querybuilder(Impala SQL) → extractor(일 단위 청크·병렬
-→ long parquet) → reformatter.apply(long, 청크별) → db.pivot_and_load(512 버킷
-피벗 → DuckDB et_data)
+→ long parquet) → reformatter.apply(long, 청크별) → db.pivot_and_load(버킷별
+step_seq 병합·피벗 → DuckDB et_data, die 하나가 한 행)
 ```
 **이 함수는 Qt를 모른다.** `ui/data_ws.py`의 `_ExtractThread`는 콜백을 시그널로
 옮기는 껍데기일 뿐이고, 예약 실행(§13)도 같은 함수를 그냥 부른다 — 화면 안에
@@ -186,7 +187,8 @@ COM이 계정에 묶여 있어 로그인 없이 돌리면 조용히 빈 결과�
 파일 선택은 **경로만 담는다(staging)**. [적용]을 눌렀을 때 `session.apply_config()`가
 리포메터 → 템플릿 → 실험 조건 → DuckDB 순으로 **한 번만** 읽고 검증하며, 결과를
 `LoadReport`(lines/warnings/error) 하나로 모아 UI가 일괄 표시한다. 이 함수는
-예외를 던지지 않는다 — 실패도 `LoadReport`로 돌려준다.
+예외를 던지지 않는다 — 실패도 `LoadReport`로 돌려준다. DB 단계는 값을 메모리에
+올리지 않는다 — 작업 세트 parquet + 키 프레임(아래 "DuckDB" 절).
 
 ### 지켜야 하는 단일 진실(single source of truth)들
 이 프로젝트의 설계 대부분은 "같은 규칙을 두 곳에 두지 않는다"에 걸려 있다.
@@ -204,7 +206,9 @@ COM이 계정에 묶여 있어 로그인 없이 돌리면 조용히 빈 결과�
 | 이상치 판정 | `model/outliers.py` — Q1−k·IQR / Q3+k·IQR, 기본은 `(step, temp)`별 |
 | 조회 조건 기본값 | `data/lotcontext.py` — 분석 DB의 line·process·part + ET tkout 기준 180일 |
 | 자릿수 포맷 | `model/specs.py: fmt_value` (<1→3자리, ≤10→2자리, >10→1자리) |
-| wafer 집계(평균/n-1 표준편차) | `model/aggregate.py` — 화면·xlsx·PPT 공용, group_by 1회 |
+| wafer 집계(평균/n-1 표준편차) | `model/aggregate.py` — 화면·xlsx·PPT 공용, group_by 1회. 상태 위에서는 `wafer_stats_of`(item 묶음) |
+| item 값 읽기 | `data/loader.py: frame()`·`with_values()` — 키 프레임 + 작업 세트에서 그 열만 |
+| step_seq 병합 | `data/db.py: merge_seq` — **적재 때** 한 번(retest 최신·seq 중복 평균) |
 | lot·wafer 표기 비교 | `model/wafers.py` — `W01`·`W1`·`01`·`1`을 한 키로 |
 | 그리기 | `render/mpl_renderer.py` — **화면 캔버스도 이걸 쓴다** |
 | 덱 조립 | `render/pptgen.py: build_deck` — 크기·순서·표 페이지가 전부 여기 |
@@ -546,14 +550,54 @@ item 5,000개짜리 한 테이블은 500행만 이어 붙여도 4GB 상한에서
   뷰는 **테이블을 그대로** POSITIONAL JOIN한다(중복 key_hash는 바깥 SELECT의
   `EXCLUDE`로 뺀다). 서브쿼리를 끼우면 스트리밍 `POSITIONAL_SCAN`이 오른쪽을
   버퍼에 쌓는 조인으로 바뀌어 item 1,000열 내보내기가 18초 → 113초가 됐다.
-- 예전 형식(`et_data`·`fact`가 **테이블**)도 읽고 이어 적재한다(예전 경로 그대로).
-  다만 item이 수천 개면 그 경로는 적재 OOM이 날 수 있으니 새 파일로 적재한다.
-- **[적용]은 item을 전부 읽지 않는다.** `state.needed_items()`(템플릿 모든
-  Report의 x·y·item_id + 리포트 슬롯 + 탐색 축)만 `load_state(items=…)`로 읽고,
-  DB에 있는 이름 전체는 `state.db_items`가 값 없이 든다. 다른 item을 고르면
-  **그리기 직전** `loader.ensure_items()`가 그 열만 같은 SQL로 더 읽어 `key`로
-  붙인다 — 화면(`PlotCanvas.draw_spec`)과 PPT(`deckbuild.generate`)가 같은 함수를
-  부른다. item이 `LOAD_ALL_ITEMS`(300) 이하인 DB는 예전처럼 전부 읽는다.
+- **step_seq는 적재할 때 합친다**(2026-10-13, `db.merge_seq`). 저장 키는
+  `KEY7`(lot·wafer·die 좌표·온도·step_id·site_cnt)이고 **die 하나가 한 행**이다.
+  같은 seq 안의 재측정(retest)은 **가장 늦은 값**, seq가 다른데 같은 item이면
+  **평균**(드물다 — 평균 낸 칸은 item별로 적재 로그에 남는다). `et_keys.tkout_time`은
+  그 측정점의 마지막 측정 시각이다. 예전에는 seq·시각까지 키에 두고 **읽을 때**
+  window + item마다 `arg_max`로 합쳤는데, 그 조회가 데이터의 10배 메모리를 써서
+  lot 두 개만 골라도 OOM이 났다(실측: die 6만 × item 400에서 1.9GB, 300MB 상한에서
+  사망 — 평평한 SELECT는 0.74GB·통과). 그래서 **읽을 때 병합하는 코드는 없다.**
+  **step_id·온도·site_cnt가 다르면 다른 측정점이라 합치지 않는다.** 규칙은
+  `tests/test_step_seq_merge.py`.
+- 같은 측정점이 다시 적재되면(`_fill_gaps`) **더 늦게 잰 값**이면 들어온 값으로
+  갈아 끼우고(들어온 쪽이 빈 칸은 기존 유지), 아니면 빈 칸만 채운다. 며칠씩 겹쳐
+  도는 예약 추출에서 다음 날의 retest가 묻히지 않고, 예전 기간을 다시 받아도
+  새 값이 뒤집히지 않는다. 같은 파일을 다시 적재하면 아무것도 바뀌지 않는다.
+- 새 DB에는 형식 표시 테이블 `et_format`이 있다(`compat.FORMAT_TABLE`). 이것이
+  있는 DB(`TableProfile.merged`)는 QUALIFY·GROUP BY 없는 **평평한 SELECT**로 읽는다.
+  **예전 형식(표시 없이 `et_data`·`fact`·`et_keys`가 있는 DB)은 폐기 대상이다** —
+  읽기는 되지만 seq를 합치지 않고([적용]이 "새 DB 파일로 다시 적재" 안내를
+  notes에 붙인다), **이어 적재는 막는다**(`db.format_problem` — 파이프라인이 추출
+  **전에** 묻는다. 섞이면 같은 측정이 두 형식으로 두 번 들어간다). 변환 도구는
+  만들지 않기로 했다(사용자 결정).
+- **[적용]은 값을 메모리에 올리지 않는다**(2026-10-13, `data/workset.py`). 고른
+  lot·item을 DuckDB가 `COPY … TO parquet`으로 **작업 세트**에 흘려 쓰고(파이썬을
+  거치지 않는다), `state.data`에는 **키 프레임**(`RESERVED` 열 + 붙인 tracking·
+  계측 열)만 남는다. 측정 조건·제외·그룹은 키 프레임에서 걸린다. 예전에는 `행 ×
+  item` 프레임 하나를 올린 뒤 제외·그룹 분할·집계가 저마다 한 벌씩 복사해서
+  full map lot 두 개면 수 GB였다.
+- **값은 `loader.frame(state, names)` 하나로 읽는다** — 키 프레임 + 그 item 열만
+  (작업 세트에서 열 단위로 읽어 `key`로 붙인다, ABSOLUTE도 여기서). 이미 걸러 둔
+  프레임에 붙일 때는 `loader.with_values(state, df, names)`(plot 캔버스가 `active()`에).
+  item을 많이 쓰는 곳(요약 표·xlsx·PPT 표·REF Δ·이상치·커버리지·계측 유의 인자)은
+  `loader.item_batches()`로 **`CHUNK_BYTES`(64MB) 단위 묶음**을 돌며
+  `aggregate.wafer_stats_of`·`ref_values_of`가 기존 `wafer_stats`·`ref_values`를
+  묶음마다 부르고 합친다 — 숫자는 한 번에 계산한 것과 같다(`tests/test_workset.py`).
+  피크는 묶음의 약 3배다(읽기·key 조인·제외 필터가 한 벌씩). 실측(die 6만 × item
+  400): 프레임을 통째로 읽던 방식 780MB → 550MB, 그중 약 110MB는 DuckDB가
+  `compat.profile`의 `information_schema` 조회로 카탈로그를 올리는 몫이다.
+  `state.data[item]`을 직접 읽는 코드를 새로 만들지 말 것 — 키 프레임에는 item이 없다.
+- 작업 세트 파일은 `%APPDATA%\ETReport\workset\ws_<해시>.parquet`. 해시는 DB
+  정체(경로·크기·수정 시각)와 SQL이라 같은 조합이면 [적용]을 다시 눌러도 다시 뜨지
+  않고, 이어 적재하면 새로 뜬다. **최근 `workset.KEEP`(2)벌만** 남기고 [적용] 때
+  지운다(하루 지난 `.tmp`도). 다른 창이 지웠으면 읽을 때 다시 뜬다(`Workset.read`).
+  손으로 만든 **long** DB만 예전처럼 통째로 메모리에 읽는다(키를 파이썬에서 만든다).
+- 작업 세트에 담는 item은 `state.needed_items()`(템플릿 모든 Report의 x·y·item_id
+  + 리포트 슬롯 + 탐색 축)이고, item이 `LOAD_ALL_ITEMS`(300) 이하인 DB는 전부 담는다.
+  DB에 있는 이름 전체는 `state.db_items`가 값 없이 든다. 그 밖의 item을 고르면
+  **그리기 직전** `loader.ensure_items()`가 그 열만 더 읽어 키 프레임에 붙인다 —
+  화면(`PlotCanvas.draw_spec`)과 PPT(`deckbuild.generate`)가 같은 함수를 부른다.
 - 메모리 상한은 **물리 메모리 총량의 35%, 2~6GB**(`loader.duckdb_memory_limit`).
   가용 메모리가 아니라 총량인 이유: 같은 파일의 연결은 설정이 글자까지 같아야 함께
   열린다. 넘는 몫은 `temp_directory`로 흘러가 느려질 뿐 죽지 않는다.
@@ -588,41 +632,29 @@ different configuration`), `duckdb.connect(..., read_only=True)`를 직접 부�
   예전과 같다), 숫자 item이 **하나도 없는** 테이블은 남은 문자열 컬럼을 item으로
   보고 `TableProfile.numeric_expr()`로 읽는다. 적재는 여전히 숫자만 받는다 —
   읽기만 관대해진다.
-- **`step_seq`만 다른 행은 읽으면서 한 측정점으로 합친다**(`compat.merges_seq`·
-  `MERGE_ROLES`). x가 `step_seq=1`·y가 `2`에 기록되는 경우가 흔한데, 합치지
-  않으면 x·y가 함께 있는 행이 0개가 되어 산점도가 통째로 빈다. 그룹 키는
-  `lot·wafer + die 좌표·온도·step_id·site_cnt`이고, 각 item 값은
-  **`arg_max(item, tkout_time)`** — NULL이 아닌 값 중 가장 늦게 찍힌 것이다.
-  **step_id·온도·site_cnt가 다르면 다른 측정점이므로 합치지 않는다.**
-  seq 컬럼이 없는 스키마는 병합하지 않는다(키가 부족한 채로 그룹핑하면 wafer
-  하나가 한 점으로 뭉갠다).
-
-  **병합 경로에서는 retest를 QUALIFY로 지우지 않는다.** 파티션에 `step_seq`를
-  넣어도 그 값이 `NULL`이면(= 적재 당시 seq를 못 받아 온 DB) seq가 다른 두 행이
-  한 파티션에 들어가 늦은 쪽만 남고 **이른 쪽 item이 통째로 사라졌다** — x는
-  있는데 y가 없어 산점도도 요약 표도 비는, 열 번 되풀이된 그 증상의 원인이다.
-  `arg_max` 하나가 retest(같은 item 재측정 → 최신 값)와 seq 분산(서로 다른
-  item → 한 행에 모임)을 같은 식으로 푼다. 병합하지 않는 경로는 예전처럼
-  QUALIFY로 지운다.
-
-  합친 행의 `key`는 `min(key) FILTER (WHERE __rn = 1)` — 예전과 같은 집합
-  (seq마다 최신 행)의 최솟값이라 제외 사이드카가 그대로 유지된다. 규칙은
-  `tests/test_step_seq_merge.py`.
+- x가 `step_seq=1`·y가 `2`에 기록되는 경우가 흔하다 — 적재가 합치므로(위
+  `db.merge_seq`) 새 DB에서는 한 행에 함께 있다. seq가 NULL로 들어온 추출도
+  (seq, item)마다 최신을 고르므로 서로 다른 item이 둘 다 산다(예전 읽기 병합은
+  여기서 이른 쪽 item을 통째로 잃었다). 예전 형식·손으로 만든 DB는 retest만
+  QUALIFY(파티션에 seq 포함)로 지우고 seq는 합치지 않는다.
 - 제외 포인트는 DB에 쓰지 않고 `data/exclusions.py`가
   `%APPDATA%\ETReport\exclusions\<DB>_<해시>.json` 사이드카에 DB 경로별로 저장한다.
-- 분석용 wide 프레임의 예약 컬럼은 `key, lot, wafer, gid, step, temp, site`이고
-  나머지가 item이다(`loader.RESERVED` — 컬럼 목록을 손으로 적지 말고
-  `loader.item_columns()`를 쓸 것). `step/temp/site`는 측정 조건이며 그룹 편집의
-  4단 필터와 배정 범위가 쓴다. 없는 스키마에서도 NULL로 자리를 만든다.
+- 키 프레임(`state.data`)의 예약 컬럼은 `key, lot, wafer, gid, step, temp, site`이다
+  (`loader.RESERVED` — 컬럼 목록을 손으로 적지 말 것). 값을 읽을 수 있는 item
+  목록은 `loader.value_items()`(메모리 + 작업 세트)다. `step/temp/site`는 측정
+  조건이며 그룹 편집의 4단 필터와 배정 범위가 쓴다. 없는 스키마에서도 NULL로
+  자리를 만든다.
 - 손으로 짠 그룹은 `state.manual_groups`(`(lot, wafer, step, temp, site) → gid`,
   None은 조건 무관)에 남고 `loader.apply_manual_groups()`가 로딩 때 다시 붙인다 —
   [적용]으로 DB를 다시 읽어도 배정이 살아 있고, **[적용] 전에 짜 둔 그룹도**
   그대로 반영된다. 실험 조건 배정보다 뒤에 걸어 사용자가 고른 쪽이 이긴다.
-- 적재는 `key_hash` ANTI JOIN(행 중복) + `load_log`(파일 중복) 2단으로 막는다.
-  `key_hash_expr()`는 **절대 바꾸지 않는다** — 바뀌면 기존 DB에 이어 적재할 때
-  같은 포인트가 중복으로 들어간다.
+- 적재는 `key_hash`(측정점) ANTI JOIN + `load_log`(파일 중복) 2단으로 막는다.
+  `key_hash_expr()`는 2026-10-13 형식 개편 때 KEY9 → KEY7로 한 번 바꿨고(예전 DB
+  폐기와 함께), **이제 다시 바꾸지 않는다** — 바뀌면 이어 적재할 때 같은 측정점이
+  두 번 들어가고 제외 사이드카가 끊긴다.
 - 원본 컬럼 `et_value`는 내부 표준 `value`로 정규화한다.
-- **ABSOLUTE는 로딩할 때 다시 건다**(`loader.apply_absolute`). 추출 시점에만
+- **ABSOLUTE는 값을 읽을 때 다시 건다**(`loader.apply_absolute` — 작업 세트 값은
+  `with_values`가, 메모리 값은 `load_state`·`ensure_items`가). 추출 시점에만
   적용하면 이미 음수로 적재된 DB는 리포메터를 고쳐도 그대로다. 절대값은
   멱등이라 안전하지만 **스케일은 멱등이 아니므로 여기서 절대 재적용하지 않는다.**
 - 적재 버킷 수는 `plan_buckets(키 수, item 수)`가 데이터 모양을 보고 정한다
@@ -753,16 +785,16 @@ temperature)가 wide에 모두 있으면 그 묶음의 그룹 표본표준편차
 검증 실패 행은 **버리고 나머지로 진행**하며 이유를 `warnings`에 남긴다 — 이게 이
 코드베이스 전반의 오류 처리 방식이다(중단하지 않고 건너뛰고 보고).
 
-**step_seq 원칙: 저장은 seq를 살리고, 표·plot만 seq를 무시한다.** REAL 값은
-추출·DuckDB에 원래 seq 그대로 들어가고, 합치는 일은 읽을 때(§10.1) 한다.
-예외가 ADDP 하나다 — 리포메팅은 병합보다 **앞에서** 돌아서, seq가 갈려 기록되는
-두 항목(DC는 seq 1, 누설은 2)을 한 수식에 쓰면 행 단위 결과가 전부 NULL이 되어
+**step_seq 원칙: 추출·리포메팅은 seq를 살리고, 적재가 합친다**(`db.merge_seq`,
+2026-10-13). 리포메팅은 병합보다 **앞에서** 돌아서, seq가 갈려 기록되는 두
+항목(DC는 seq 1, 누설은 2)을 한 수식에 쓰면 행 단위 결과가 전부 NULL이 되어
 `drop_nulls`가 그 item을 적재 전에 지웠다(표의 CAT1이 비고 산점도가 비던 원인).
 그래서 `apply()`는 **참조 항목을 모두 담은 seq가 없는 ADDP**(`_cross_seq_aliases`,
-연쇄 포함)만 로딩과 같은 규칙(seq마다 최신 retest → seq·시각을 뺀 키로 합침)의
-프레임에서 다시 계산해 **die의 최신 행마다** 같은 값으로 붙인다(`_fill_cross_seq`).
-이때 `Std()` 묶음 키에서도 step_seq가 빠진다. seq 안에서 풀리는 ADDP는 예전과
-같다. 규칙은 `tests/test_step_seq_merge.py` 아래쪽 ADDP 절.
+연쇄 포함)만 적재와 같은 규칙(seq마다 최신 retest → seq·시각을 뺀 키로 합침,
+같은 항목이 여러 seq에 있으면 평균)의 프레임에서 다시 계산해 **die의 최신 행마다**
+같은 값으로 붙인다(`_fill_cross_seq`) — 적재가 그 행들을 다시 합치므로 저장되는
+REAL과 수식의 입력이 같다. 이때 `Std()` 묶음 키에서도 step_seq가 빠진다. seq
+안에서 풀리는 ADDP는 예전과 같다. 규칙은 `tests/test_step_seq_merge.py` 아래쪽 ADDP 절.
 단 리포메팅은 **추출 파일 단위**(하루 × item 그룹)라 자정을 넘겨 다른 날에
 찍힌 seq끼리는 여전히 한 수식에 모이지 않는다.
 

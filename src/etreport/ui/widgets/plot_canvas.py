@@ -60,14 +60,19 @@ class PlotCanvas(FigureCanvasQTAgg):
     # ── 그리기 ───────────────────────────────────────────────
     def render_args(self, spec: PlotSpec) -> tuple | None:
         """렌더러에 넘길 인자 묶음 — 데이터 준비와 렌더를 나눠 둔다."""
+        from etreport.data.loader import with_values
         st = self.state
         if st.data is None or not spec.pairs():
             return None
         styles = st.groups or [_ALL]
+        names = [n for pair in spec.pairs() for n in pair]
         active = st.active()
         if spec.local_excluded:          # 이 plot에서만 뺀 점(요청 §4)
             active = active.filter(
                 ~pl.col("key").is_in(list(spec.local_excluded)))
+        # 키 프레임에 **이 plot의 item 열만** 붙인다(작업 세트) — 슬롯 6개가 각자
+        # item 전부를 들고 있지 않게. 그룹 분할도 그 좁은 프레임에서 한다.
+        active = with_values(st, active, names)
         if not st.groups:
             data = {"": active}
         else:
@@ -84,7 +89,7 @@ class PlotCanvas(FigureCanvasQTAgg):
                     data[g.gid] = sub
         w, h = self.figure.get_size_inches()
         return (spec, data, styles, st.rf, st.log_patterns, (w, h),
-                self._excluded_frame(), self.mini,
+                with_values(st, self._excluded_frame(), names), self.mini,
                 bool(getattr(st, "lot_split_symbols", False)))
 
     def _sync_size(self) -> None:
@@ -166,7 +171,8 @@ class PlotCanvas(FigureCanvasQTAgg):
         if cache == self._series_key:
             return
         self._series, self._series_key = [], cache
-        base = st.data
+        from etreport.data.loader import with_values
+        base = with_values(st, st.data, [n for pair in spec.pairs() for n in pair])
         if gids is not None and "gid" in base.columns:
             base = base.filter(pl.col("gid").is_in(gids))
         for ax_x, ax_y in spec.pairs():

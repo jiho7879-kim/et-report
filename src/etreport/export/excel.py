@@ -45,7 +45,7 @@ def build_table(state, cat1: str, opt: SummaryOptions) -> TableData:
     DB를 다시 조회하지 않는다 — 분석은 읽기 전용이고, 화면·xlsx·PPT가
     같은 숫자를 보여야 하므로 집계 소스를 하나로 둔다(model/aggregate.py).
     """
-    from etreport.model.aggregate import offspec, ref_values, wafer_stats
+    from etreport.model.aggregate import offspec, ref_values_of, wafer_stats_of
 
     if opt.agg == "gavg":
         return _group_table(state, cat1, opt)
@@ -54,12 +54,11 @@ def build_table(state, cat1: str, opt: SummaryOptions) -> TableData:
     header = state.wafer_columns()
     rows_spec = [r for r in state.report.table_rows if r.cat1 == cat1]
     aliases = [r.item_id for r in rows_spec]
-    ws = wafer_stats(state.data, state.hidden(), aliases, opt.agg)
+    ws = wafer_stats_of(state, aliases, opt.agg)
     ref = {}
     if opt.delta_vs_ref:
         g = state.ref_group()
-        ref = ref_values(state.data, state.hidden(), g.gid if g else None,
-                         aliases, opt.agg)
+        ref = ref_values_of(state, g.gid if g else None, aliases, opt.agg)
 
     rows = []
     for rs in rows_spec:
@@ -112,17 +111,16 @@ def group_wafer_columns(state) -> list[tuple[str, list[tuple[str, str]]]]:
 
 def _group_wafer_table(state, cat1: str, opt: SummaryOptions) -> TableData:
     """그룹으로 묶은 wafer 표 — 값은 wafer 평균(또는 산포)."""
-    from etreport.model.aggregate import offspec, ref_values, wafer_stats
+    from etreport.model.aggregate import offspec, ref_values_of, wafer_stats_of
 
     rows_spec = [r for r in state.report.table_rows if r.cat1 == cat1]
     aliases = [r.item_id for r in rows_spec]
     header = group_wafer_columns(state)
-    ws = wafer_stats(state.data, state.hidden(), aliases, "avg")
+    ws = wafer_stats_of(state, aliases, "avg")
     ref = {}
     if opt.delta_vs_ref:
         g = state.ref_group()
-        ref = ref_values(state.data, state.hidden(), g.gid if g else None,
-                         aliases, "avg")
+        ref = ref_values_of(state, g.gid if g else None, aliases, "avg")
 
     rows = []
     for rs in rows_spec:
@@ -153,7 +151,7 @@ def _group_table(state, cat1: str, opt: SummaryOptions) -> TableData:
     각 그룹의 (lot, wafer) 평균을 다시 평균한다. wafer 집계는
     `model/aggregate.wafer_stats`를 그대로 쓰므로 화면·xlsx·PPT가 같은 숫자다.
     """
-    from etreport.model.aggregate import offspec, wafer_stats
+    from etreport.model.aggregate import offspec, wafer_stats_of
 
     rows_spec = [r for r in state.report.table_rows if r.cat1 == cat1]
     aliases = [r.item_id for r in rows_spec]
@@ -163,9 +161,8 @@ def _group_table(state, cat1: str, opt: SummaryOptions) -> TableData:
 
     per_group: list[dict[str, float | None]] = []
     for g in groups or [None]:
-        sub = (state.data if g is None
-               else state.data.filter(pl.col("gid") == g.gid))
-        ws = wafer_stats(sub, state.hidden(), aliases, "avg")
+        ws = wafer_stats_of(state, aliases, "avg",
+                            where=None if g is None else pl.col("gid") == g.gid)
         vals: dict[str, float | None] = {}
         for a in aliases:
             got = [v for per in ws.values.values()

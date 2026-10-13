@@ -127,8 +127,12 @@ def db_state(bundle, appdata):
 
 
 def test_db_frame_equals_in_memory_frame(db_state, state):
-    """DuckDB를 거쳐 온 값이 화면 값과 같아야 한다 — 데모의 핵심 계약."""
-    got, want = db_state.data, state.data
+    """DuckDB를 거쳐 온 값이 화면 값과 같아야 한다 — 데모의 핵심 계약.
+
+    DB 쪽 값은 작업 세트에 있다 — 화면이 읽는 길(`loader.frame`) 그대로 꺼낸다.
+    """
+    want = state.data
+    got = loader.frame(db_state, loader.item_columns(want))
 
     assert set(got.columns) == set(want.columns)
     assert got.height == want.height
@@ -145,17 +149,18 @@ def test_db_frame_equals_in_memory_frame(db_state, state):
 
 
 def test_db_merges_step_seq_into_one_point(db_state):
-    """§10.1 — seq 1(DC)과 seq 2(누설)가 한 행에 함께 있어야 한다."""
-    st = db_state
-    both = st.data.filter(pl.col("Vtlin N SVT").is_not_null()
-                          & pl.col("Ioff N SVT").is_not_null())
-    assert both.height == st.data.height
+    """§10.1 — seq 1(DC)과 seq 2(누설)가 한 행에 함께 있어야 한다(적재 때 합친다)."""
+    df = loader.frame(db_state, ["Vtlin N SVT", "Ioff N SVT"])
+    both = df.filter(pl.col("Vtlin N SVT").is_not_null()
+                     & pl.col("Ioff N SVT").is_not_null())
+    assert both.height == df.height
 
 
 def test_db_keeps_only_the_latest_retest(db_state):
     """더 이른 시각의 재측정(값 0.55배)이 살아 있으면 안 된다."""
-    w01 = db_state.data.filter((pl.col("lot") == "PA123") & (pl.col("wafer") == "W01")
-                         & (pl.col("step") == "M2ET"))
+    df = loader.frame(db_state, ["Vtlin N SVT"])
+    w01 = df.filter((pl.col("lot") == "PA123") & (pl.col("wafer") == "W01")
+                    & (pl.col("step") == "M2ET"))
     assert w01.height > 0
     assert w01["Vtlin N SVT"].min() > 0.30      # 0.55배 값이면 0.25 언저리다
 

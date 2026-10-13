@@ -166,19 +166,23 @@ def test_full_pipeline_one_day(big, tmp_path, appdata):
     print(f"  분석 로딩         {summary}  ({el_open:.1f}초)")
 
     assert st.data.height == WAFERS * CHIPS
-    items = loader.item_columns(st.data)
+    items = loader.value_items(st)
     assert len(items) == N_ITEM + N_ADDP
     assert el_open < 60
 
     # 값이 끝까지 살아 있는지 — ADDP 하나를 long 결과와 대조
     alias = rf.addps()[0].alias
     expect = out.filter(pl.col("item_id") == alias)["value"].sort().to_list()
-    got = st.data[alias].drop_nulls().sort().to_list()
+    got = loader.frame(st, [alias])[alias].drop_nulls().sort().to_list()
     assert got == pytest.approx(expect)
 
 
 def test_seven_days_load(big, tmp_path):
-    """일주일치(140만 행) 적재 — 실사용에서 가장 무거운 축."""
+    """일주일치(140만 행) 적재 — 실사용에서 가장 무거운 축.
+
+    날마다 다른 lot이다 — 같은 die를 날마다 다시 잰 것은 측정점 하나로 합쳐진다
+    (적재 때 step_seq·retest 병합, 2026-10-13).
+    """
     from datetime import date, timedelta
 
     rf, _ = big
@@ -187,7 +191,8 @@ def test_seven_days_load(big, tmp_path):
     for d in range(7):
         day = date(2026, 8, 1) + timedelta(days=d)
         src = make_long(itemids, lots=1, wafers=WAFERS, chips=CHIPS,
-                        seed=200 + d, start=day)
+                        seed=200 + d, start=day).with_columns(
+            root_lot_id=pl.lit(f"PW{d:04d}"))
         p = tmp_path / f"raw_{day:%Y%m%d}_{day:%Y%m%d}.parquet"
         rf_apply(rf, src).write_parquet(p)
         files.append(p)

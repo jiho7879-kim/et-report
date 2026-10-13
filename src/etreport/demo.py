@@ -70,6 +70,7 @@ def load_demo(state: AppState) -> None:
     state.split = SplitMatrix.from_dataframe(demo_data.split_frame())
     state.factors = ["M1"]
     state.data = _points()
+    state.workset = None               # 값은 전부 메모리에 있다(예전 DB의 작업 세트를 떼어 낸다)
     apply_split(state)
     state.explore = PlotSpec(x="Vtlin N SVT", y="Idsat N SVT")
     _seed_exclusions(state)

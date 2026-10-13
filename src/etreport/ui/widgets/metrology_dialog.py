@@ -241,20 +241,26 @@ class MetrologyDialog(QDialog):
         self._show_preview(names)
 
     def _analyze(self) -> None:
+        from etreport.data import loader
         from etreport.data import metrology as mt
+        from etreport.model.aggregate import wafer_stats_of
         from etreport.ui.widgets.worker import run_in_background
         st = self.state
         if st.data is None or not st.met_columns:
             self.lbl.setText("먼저 [불러오기]로 조회한 뒤 [분석에 활용]을 누르세요")
             return
-        et_items = [c for c in st.aliases() if c in st.data.columns] or [
-            c for c in st.data.columns if c not in st.met_columns]
-        # 계측 인자 × ET item 전수 훑기 — item이 많으면 수십 초가 걸린다
+        have = loader.value_items(st)
+        et_items = [c for c in st.aliases() if c in have] or [
+            c for c in have if c not in st.met_columns]
+        k = self.spin_k.value()
+        # 계측 인자 × ET item 전수 훑기 — item이 많으면 수십 초가 걸린다.
+        # 값은 작업 세트에서 묶음으로 집계한다(item 전부를 한꺼번에 올리지 않는다).
         self.lbl.setText("유의 인자 분석 중…")
         run_in_background(
             self, "유의 인자 분석",
-            lambda: mt.top_factors(st.data, st.met_columns, et_items,
-                                   excluded=st.hidden(), k=self.spin_k.value()),
+            lambda: mt.top_factors(
+                st.data, st.met_columns, et_items, excluded=st.hidden(), k=k,
+                stats=wafer_stats_of(st, [*st.met_columns, *et_items])),
             done=self._analyze_done)
 
     def _analyze_done(self, top) -> None:

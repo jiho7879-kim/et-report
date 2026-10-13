@@ -79,7 +79,7 @@ def test_context_columns_are_loaded_but_are_not_items(db_path, appdata):
 
     for col in ("step", "temp", "site"):
         assert col in st.data.columns
-    assert loader.item_columns(st.data) == ["Vt"]      # 조건은 item이 아니다
+    assert loader.value_items(st) == ["Vt"]      # 조건은 item이 아니다
     assert sorted(set(st.data["step"])) == ["M2", "M5"]
 
 

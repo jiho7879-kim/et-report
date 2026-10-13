@@ -171,27 +171,28 @@ def _big_db(tmp_path, n_items=400):
 
 
 def test_load_state_reads_only_the_named_items(tmp_path, appdata):
-    """item이 많은 DB는 고른 것만 올리고, 무엇이 있는지는 `db_items`가 안다."""
+    """item이 많은 DB는 고른 것만 작업 세트에 담고, 무엇이 있는지는 `db_items`가 안다."""
     path = _big_db(tmp_path)
     st = AppState()
     summary = loader.load_state(st, path, items=["it00001", "it00399"])
-    assert loader.item_columns(st.data) == ["it00001", "it00399"]
+    assert loader.value_items(st) == ["it00001", "it00399"]
     assert len(st.db_items) == 400 and "item 2/400" in summary
-    # seq 1·2에 갈려 있어도 병합으로 한 행에 모인다(§10.1)
-    assert st.data.height == 4
-    assert st.data["it00399"].null_count() == 0
+    # seq 1·2에 갈려 있어도 적재가 한 행으로 합쳤다(§10.1)
+    df = loader.frame(st, ["it00399"])
+    assert df.height == 4
+    assert df["it00399"].null_count() == 0
 
 
 def test_small_db_still_loads_everything(tmp_path, appdata):
-    """item이 LOAD_ALL_ITEMS 이하면 예전처럼 전부 읽는다."""
+    """item이 LOAD_ALL_ITEMS 이하면 예전처럼 전부 담는다."""
     path = _big_db(tmp_path, n_items=20)
     st = AppState()
     loader.load_state(st, path, items=["it00001"])
-    assert len(loader.item_columns(st.data)) == 20
+    assert len(loader.value_items(st)) == 20
 
 
 def test_ensure_items_adds_columns_equal_to_a_full_load(tmp_path, appdata):
-    """나중에 고른 item은 열만 더 읽는다 — 값·행 순서가 처음부터 읽은 것과 같다."""
+    """나중에 고른 item은 열만 더 읽는다 — 값이 처음부터 읽은 것과 같다."""
     path = _big_db(tmp_path)
     full = AppState()
     loader.load_state(full, path)
@@ -201,7 +202,7 @@ def test_ensure_items_adds_columns_equal_to_a_full_load(tmp_path, appdata):
         == ["it00300"]
     assert st.data.height == full.data.height
     assert st.data.select("key", "it00300").sort("key").equals(
-        full.data.select("key", "it00300").sort("key"))
+        loader.frame(full, ["it00300"]).select("key", "it00300").sort("key"))
     assert loader.ensure_items(st, ["it00300"]) == []        # 이미 있으면 그대로
 
 

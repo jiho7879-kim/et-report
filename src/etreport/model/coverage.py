@@ -105,33 +105,46 @@ class CoverageReport:
 
 
 def build(state) -> CoverageReport:
-    """AppState의 분석 프레임 → CoverageReport. DB를 다시 조회하지 않는다."""
+    """AppState → CoverageReport. 값은 작업 세트에서 item 묶음으로 읽는다."""
     df = getattr(state, "data", None)
     if df is None or df.is_empty() or "lot" not in df.columns:
         return CoverageReport()
-    from etreport.data.loader import item_columns
-    return build_frame(df, item_columns(df))
+    from etreport.data import loader
+    items = loader.value_items(state)
+    present: dict[str, set[str]] = {}
+    for batch in loader.item_batches(state, items):
+        for lot, have in _present(loader.frame(state, batch), batch).items():
+            present.setdefault(lot, set()).update(have)
+    return build_frame(df, items, present)
 
 
-def build_frame(df: pl.DataFrame, items: list[str]) -> CoverageReport:
-    """프레임과 item 목록만으로 계산 — 테스트가 상태 없이 부를 수 있게 나눠 둔다."""
+def _present(df: pl.DataFrame, items: list[str]) -> dict[str, set[str]]:
+    """lot → 값이 하나라도 있는 item. group_by 한 번으로 전부 센다."""
+    if not items:
+        return {}
+    got = df.group_by(pl.col("lot").cast(pl.Utf8)).agg(
+        [pl.col(c).is_not_null().any() for c in items])
+    return {lot: {c for c, on in zip(items, flags) if on}
+            for lot, *flags in got.iter_rows()}
+
+
+def build_frame(df: pl.DataFrame, items: list[str],
+                present: dict[str, set[str]] | None = None) -> CoverageReport:
+    """프레임과 item 목록만으로 계산 — 테스트가 상태 없이 부를 수 있게 나눠 둔다.
+
+    `present`(lot → 값이 있는 item)를 주면 그것을 쓴다 — 값이 작업 세트에 있어
+    프레임에는 키 열만 있을 때(`build`)."""
     lots = [str(v) for v in dict.fromkeys(df["lot"].to_list()) if v is not None]
     if not lots:
         return CoverageReport()
+    if present is None:
+        present = _present(df, items)
 
     rows: list[LotRow] = []
-    present: dict[str, set[str]] = {}
     conds: dict[str, set[str]] = {}
     for lot in lots:
         sub = df.filter(pl.col("lot").cast(pl.Utf8) == lot)
-        # item별 "값이 하나라도 있는가"를 한 번에 센다 — item이 1000개인 실측
-        # 규모에서 컬럼마다 따로 훑으면 눈에 띄게 느려진다.
-        have: set[str] = set()
-        if items:
-            counts = sub.select(
-                [pl.col(c).is_not_null().sum().alias(c) for c in items]).row(0)
-            have = {c for c, n in zip(items, counts) if n}
-        present[lot] = have
+        have = present.setdefault(lot, set())
 
         cond = set()
         if {"step", "temp", "site"} <= set(sub.columns):

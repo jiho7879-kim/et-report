@@ -159,7 +159,7 @@ def pick_table(con: duckdb.DuckDBPyConnection,
         if cand and cand.lower() in lower:
             return lower[cand.lower()]
     # 뷰·메타 테이블을 빼고 남은 것 중 가장 컬럼이 많은 것
-    meta = {"load_log", "exclusions"}
+    meta = {"load_log", "exclusions", FORMAT_TABLE}
     rest = [n for n in names if n.lower() not in meta]
     if not rest:
         return None

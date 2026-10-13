@@ -70,7 +70,7 @@ def test_reload_same_file_does_not_duplicate(loaded, monkeypatch):
 
 
 def test_analysis_load_state(loaded, appdata):
-    """분석 화면이 읽는 경로 — 읽기 전용 연결 + wide 프레임."""
+    """분석 화면이 읽는 경로 — 읽기 전용 연결 + 키 프레임 + 작업 세트."""
     from etreport.model.state import AppState
 
     st = AppState()
@@ -80,7 +80,7 @@ def test_analysis_load_state(loaded, appdata):
     assert st.data is not None
     assert st.data.columns[:4] == ["key", "lot", "wafer", "gid"]
     assert st.data.height == 20
-    items = loader.item_columns(st.data)
+    items = loader.value_items(st)
     for r in loaded["rf"].rules:
         assert r.alias in items
     assert st.data["lot"].unique().to_list() == ["PA2600"]
@@ -102,7 +102,7 @@ def test_values_survive_the_round_trip(loaded, appdata):
     alias = loaded["rf"].addps()[0].alias
     expect = (loaded["long"].filter(pl.col("item_id") == alias)
               .select(["wafer_id", "value"]).sort("wafer_id"))
-    got = (st.data.select(["wafer", alias]).drop_nulls()
+    got = (loader.frame(st, [alias]).select(["wafer", alias]).drop_nulls()
            .rename({"wafer": "wafer_id", alias: "value"}).sort("wafer_id"))
     assert got.height == expect.height
     assert (got.sort(["wafer_id", "value"])["value"].to_list()
