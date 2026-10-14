@@ -315,7 +315,10 @@ class FabTrackDialog(QDialog):
         cols = list(df.columns)
         self.preview.setColumnCount(len(cols))
         self.preview.setRowCount(min(df.height, 60))
-        self.preview.setHorizontalHeaderLabels(cols)
+        # 머리글은 원본 키 이름으로 — 표가 `root_lot_id | wafer_id | <step_seq…>`
+        # 모양임이 한눈에 보이게(붙일 때 키는 lot·wafer 그대로다)
+        self.preview.setHorizontalHeaderLabels(
+            [{"lot": "root_lot_id", "wafer": "wafer_id"}.get(c, c) for c in cols])
         self.preview.verticalHeader().setVisible(False)
         for r, rec in enumerate(df.head(60).iter_rows(named=True)):
             for c, col in enumerate(cols):

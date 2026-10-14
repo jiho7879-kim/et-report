@@ -279,9 +279,9 @@ def test_fake_metrology_follows_subitem_rules(sources, state):
 
     data, names = mt.attach(state.data, raw, level="wafer")
     assert names and all("::" in n for n in names)          # step::item
-    top = mt.top_factors(data, names, [r.alias for r in state.rf.reals()][:5],
-                         state.excluded)
-    assert top.height > 0 and top["r"].abs().max() > 0.3
+    y = state.rf.reals()[0].alias
+    top = mt.vote_factors(data, names, y, state.excluded)
+    assert top.height > 0 and top["votes"].max() > 0
 
 
 def test_fake_tracking_splits_on_recipe_and_ppid(sources, state):
@@ -297,7 +297,7 @@ def test_fake_tracking_splits_on_recipe_and_ppid(sources, state):
 
     sm = ft.to_split_matrix(tr)
     codes = set(sm.wide[steps[0]].to_list()) | set(sm.wide[steps[-1]].to_list())
-    assert any(c.startswith("RT_") for c in codes)      # PHOTO = reticle
+    assert all(c.startswith(("P100_", "P500_")) for c in codes)   # 값 = ppid
     assert any(c.startswith("I300_") for c in sm.wide["300"].to_list())  # ppid
 
 

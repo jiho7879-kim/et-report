@@ -7,10 +7,12 @@ step에서 조건이 갈렸는가"이고, 그 결과를 `model/split.SplitMatrix
 핵심 규칙(확정):
   - `line_id = 'KFBK'` 기본, `ein_ecn_no IS NOT NULL`인 lot을 먼저 본다
     (split 실험이 걸린 lot이라는 뜻).
-  - **조건 비교 컬럼은 area에 따라 다르다** — `area='PHOTO'`면 `reticle_id`
-    (=포토의 recipe), 그 외는 `ppid`.
-  - 유효 wafer 안에서 step별 조건을 비교해 **서로 다른 값이 나오는 step만**
-    골라낸다. 그 step들이 곧 실험 축(factor) 후보다.
+  - **조건 값은 `ppid`다**(2026-10-14 요청). ppid가 비어 있는 행만 `reticle_id`로
+    채운다 — 예전에는 PHOTO면 reticle_id를 봤는데, 사용자가 보고 싶은 표는
+    "step_seq마다 ppid"다. reticle은 컬럼 정의에서 원본으로 골라 따로 뽑는다.
+  - step_seq마다 (lot, wafer)의 ppid를 비교해 **하나라도 다른 step_seq만**
+    남긴다. 그 step들이 곧 실험 축(factor) 후보이고, 자동 결과는
+    `root_lot_id | wafer_id | <step_seq…>`(값 = ppid) 한 장이다.
   - 컬럼명은 **원본 그대로** 유지한다(추출 경로에서 축약·변형 금지).
 """
 from __future__ import annotations
@@ -34,8 +36,7 @@ COLUMNS: list[str] = [
     "ppid", "reticle_id", "ein_ecn_no", "line_id",
 ]
 
-PHOTO_AREA = "PHOTO"
-#: PHOTO는 recipe(=reticle_id), 그 외 area는 ppid로 조건을 본다.
+#: 조건 값은 ppid, 비었을 때만 recipe(=reticle_id).
 RECIPE_COL = "reticle_id"
 PPID_COL = "ppid"
 
@@ -90,12 +91,12 @@ def fetch(sql: str) -> pl.DataFrame:
     return normalize_categoricals(pl.from_pandas(bdq.getData(sql)))
 
 
-def condition_expr() -> pl.Expr:
-    """조건 값 컬럼 — PHOTO면 reticle_id, 그 외는 ppid(확정 규칙)."""
-    return (pl.when(pl.col("area").cast(pl.Utf8).str.to_uppercase() == PHOTO_AREA)
-            .then(pl.col(RECIPE_COL).cast(pl.Utf8))
-            .otherwise(pl.col(PPID_COL).cast(pl.Utf8))
-            .alias("condition"))
+def condition_expr(columns=None) -> pl.Expr:
+    """조건 값 — ppid, 비었으면 reticle_id(2026-10-14 요청). 없는 컬럼은 건너뛴다."""
+    cols = [c for c in (PPID_COL, RECIPE_COL) if columns is None or c in columns]
+    if not cols:
+        return pl.lit(None, dtype=pl.Utf8).alias("condition")
+    return pl.coalesce([pl.col(c).cast(pl.Utf8) for c in cols]).alias("condition")
 
 
 def step_key_expr(columns=None) -> pl.Expr:
@@ -125,7 +126,7 @@ def wafer_conditions(df: pl.DataFrame) -> pl.DataFrame:
     if df.is_empty():
         return pl.DataFrame(schema={"root_lot_id": pl.Utf8, "wafer_id": pl.Utf8,
                                     "step_id": pl.Utf8, "condition": pl.Utf8})
-    out = df.with_columns(step_key_expr(df.columns), condition_expr())
+    out = df.with_columns(step_key_expr(df.columns), condition_expr(df.columns))
     if "tkout_time" in out.columns:
         out = out.sort("tkout_time")
     return (out.group_by(["root_lot_id", "wafer_id", "step_id"], maintain_order=True)
@@ -134,20 +135,28 @@ def wafer_conditions(df: pl.DataFrame) -> pl.DataFrame:
 
 
 def split_steps(df: pl.DataFrame, min_wafers: int = 2) -> list[str]:
-    """조건이 **갈리는 step**만 골라낸다 — 이게 실험 축 후보다.
+    """조건이 **갈리는 step_seq**만 골라낸다 — 이게 실험 축 후보다.
 
-    lot 안에서 wafer마다 조건이 다르면 그 step에서 split이 걸린 것이다.
-    모든 wafer가 같은 조건이면 실험과 무관하므로 뺀다(비교해도 의미가 없다).
-    멀티 lot이면 **lot 하나라도** 갈리는 step을 후보로 본다.
+    조회한 (lot, wafer) **전체**에서 그 step_seq의 ppid가 모두 같으면 실험과
+    무관하므로 뺀다. 하나라도 다르면 남긴다 — lot 안에서 갈리든 lot끼리 갈리든
+    (2026-10-14 요청: "ppid가 모두 같은 경우만 제외").
     """
     cond = wafer_conditions(df)
     if cond.is_empty():
         return []
-    per_lot = (cond.group_by(["root_lot_id", "step_id"])
-               .agg(pl.col("condition").n_unique().alias("n"),
-                    pl.len().alias("wafers")))
-    hit = per_lot.filter((pl.col("n") > 1) & (pl.col("wafers") >= min_wafers))
-    return sorted(set(hit["step_id"].to_list()))
+    per_step = (cond.group_by("step_id")
+                .agg(pl.col("condition").drop_nulls().n_unique().alias("n"),
+                     pl.len().alias("wafers")))
+    hit = per_step.filter((pl.col("n") > 1) & (pl.col("wafers") >= min_wafers))
+    return sorted(hit["step_id"].to_list(), key=_step_order)
+
+
+def _step_order(s: str):
+    """step_seq 정렬 — 숫자면 숫자 순(`900` < `1000`), 아니면 글자 순."""
+    try:
+        return (0, float(s), "")
+    except (TypeError, ValueError):
+        return (1, 0.0, str(s))
 
 
 def to_split_matrix(df: pl.DataFrame, baseline: str | None = None,
@@ -240,7 +249,7 @@ class TrackColumn:
     원본 컬럼**을 사용자가 각각 정하게 한다.
 
     name   : 분석 프레임에 붙을 컬럼 이름 (plot 축·표 범주로 그대로 쓰인다)
-    source : 원본 컬럼. `AUTO_SOURCE`면 예전 규칙(PHOTO=reticle_id, 그 외=ppid)
+    source : 원본 컬럼. `AUTO_SOURCE`면 ppid(비었으면 reticle_id)
     step   : 그 step의 값만 뽑는다. 비우면(`ANY_STEP`) step을 가리지 않는다
     """
     name: str
@@ -248,7 +257,7 @@ class TrackColumn:
     step: str = ANY_STEP
 
     def label(self) -> str:
-        src = "자동(PHOTO=recipe·그 외=ppid)" if self.source == AUTO_SOURCE \
+        src = "자동(ppid)" if self.source == AUTO_SOURCE \
             else self.source
         return f"{self.name} ← {src}" + (f" @ {self.step}" if self.step else "")
 
@@ -270,10 +279,10 @@ def safe_name(raw: str, taken: set[str] | None = None) -> str:
     return f"{name}_{i}"
 
 
-def source_expr(source: str) -> pl.Expr:
-    """원본 컬럼 하나를 문자열 값으로. `AUTO_SOURCE`는 예전 규칙 그대로."""
+def source_expr(source: str, columns=None) -> pl.Expr:
+    """원본 컬럼 하나를 문자열 값으로. `AUTO_SOURCE`는 ppid(비면 reticle_id)."""
     if source == AUTO_SOURCE:
-        return condition_expr().alias("_v")
+        return condition_expr(columns).alias("_v")
     return pl.col(source).cast(pl.Utf8).alias("_v")
 
 
@@ -303,7 +312,7 @@ def derive(df: pl.DataFrame, cols: list[TrackColumn]) -> pl.DataFrame:
         if sub.is_empty():
             log.warning("'%s': step %s에 해당하는 행이 없습니다", c.name, c.step)
             continue
-        part = (sub.with_columns(source_expr(c.source))
+        part = (sub.with_columns(source_expr(c.source, sub.columns))
                 .group_by(["root_lot_id", "wafer_id"], maintain_order=True)
                 .agg(pl.col("_v").drop_nulls().last().alias(c.name))
                 .rename({"root_lot_id": "lot", "wafer_id": "wafer"}))

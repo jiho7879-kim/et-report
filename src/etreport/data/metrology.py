@@ -180,126 +180,106 @@ def _pearson(xs: list[float], ys: list[float]) -> float | None:
     return sxy / math.sqrt(sxx * syy)
 
 
-def _welch_t(a: list[float], b: list[float]) -> float | None:
-    """그룹 간 유의차 — Welch t (분산이 달라도 되는 쪽)."""
-    if len(a) < 2 or len(b) < 2:
-        return None
-    ma, mb = sum(a) / len(a), sum(b) / len(b)
-    va = sum((x - ma) ** 2 for x in a) / (len(a) - 1)
-    vb = sum((x - mb) ** 2 for x in b) / (len(b) - 1)
-    se = math.sqrt(va / len(a) + vb / len(b))
-    return None if se <= 0 else (ma - mb) / se
+#: 표본(wafer)이 이보다 적으면 모델을 세우지 않는다 — 나무 몇 그루가 외운 값이 된다.
+MIN_WAFERS = 6
+#: 빈 칸이 이 비율을 넘는 계측 인자는 뺀다(대부분을 메워 넣은 값으로 순위를 매기게 된다).
+MAX_MISSING = 0.5
 
 
-def top_factors(data: pl.DataFrame, met_names: list[str], et_items: list[str],
-                excluded: set[str] | None = None, k: int = 10,
-                group_col: str = "gid", stats=None) -> pl.DataFrame:
-    """계측 인자 × ET item의 관계를 훑어 **유의미한 순으로 k개**.
+def _models() -> dict[str, object]:
+    """투표에 들어가는 모델 — 이름 → 회귀기. xgboost는 설치돼 있을 때만 낀다.
 
-    세 가지를 함께 본다(확정 요구):
-      - 상관: wafer 집계값끼리의 피어슨 r (|r|이 클수록 위)
-      - **lot 내 상관 `r_within`**: lot마다 따로 구해 wafer 수로 가중 평균한 값
-      - 그룹 간 유의차: REF/그 외 그룹으로 나눈 Welch t
+    전부 나무 모델이라 단위·비선형·상호작용에 둔감하고, `feature_importances_`로
+    같은 잣대의 중요도를 낸다. 시드를 고정해 같은 데이터면 같은 순위다.
+    """
+    from sklearn.ensemble import (
+        ExtraTreesRegressor,
+        GradientBoostingRegressor,
+        RandomForestRegressor,
+    )
+    out: dict[str, object] = {
+        "RF": RandomForestRegressor(n_estimators=300, random_state=0, n_jobs=-1),
+        "ET": ExtraTreesRegressor(n_estimators=300, random_state=0, n_jobs=-1),
+        "GB": GradientBoostingRegressor(n_estimators=200, max_depth=3,
+                                        random_state=0),
+    }
+    try:
+        from xgboost import XGBRegressor
+        out["XGB"] = XGBRegressor(n_estimators=200, max_depth=3, random_state=0,
+                                  n_jobs=1, verbosity=0)
+    except ImportError:
+        pass
+    return out
 
-    lot을 여러 개 놓고 상관을 구하면 lot 사이의 평균 차이만으로도 r이 커진다
-    ("lot 효과"). 그러면 lot 안에서는 아무 관계가 없는 쌍이 상위로 올라온다.
-    그래서 **정렬은 둘 중 보수적인 쪽**(|r|과 |r_within| 중 작은 값)으로 한다 —
-    두 값이 갈리는 쌍은 화면에서 표식으로 알린다. lot이 하나면 두 값이 같아
-    지금까지의 순위 그대로다.
 
-    wafer 집계는 `model/aggregate.wafer_stats`를 쓴다 — 화면·표·PPT와 같은
-    숫자여야 한다. 값이 작업 세트에 있으면 `stats`(`wafer_stats_of`)로 미리
-    집계해 넘긴다 — `data`는 그때 lot·wafer·gid만 쓴다.
+def vote_factors(data: pl.DataFrame, met_names: list[str], y_item: str,
+                 excluded: set[str] | None = None, k: int = 10,
+                 stats=None) -> pl.DataFrame:
+    """ET item 하나(`y_item`)를 가장 잘 설명하는 계측 인자 — 모델 여럿의 **투표**.
+
+    wafer 집계값(`model/aggregate.wafer_stats`, 화면·표·PPT와 같은 숫자)으로
+    표본 = wafer, 입력 = 계측 인자, 정답 = `y_item`인 회귀를 모델마다 세우고,
+    중요도 순위를 매긴 뒤 **평균 순위(Borda)**로 합친다. `votes`는 그 인자를
+    top-k에 올린 모델 수다 — 한 모델만 좋아하는 인자와 모두가 고른 인자를 가른다.
+
+    lot이 둘 이상이면 x·y 모두 **lot 평균을 빼고** 학습한다. 그대로 두면 lot
+    사이의 평균 차이만으로 lot을 가르는 인자가 1등이 된다("lot 효과") — 예전
+    상관 순위가 lot 내 상관(`r_within`)을 함께 보던 것과 같은 이유다.
+
+    `r`(피어슨, 같은 lot 보정 후)은 순위에 쓰지 않고 방향을 읽으라고 함께 낸다.
+    scikit-learn이 없으면 `ImportError`를 그대로 올린다(창이 안내한다).
     """
     from etreport.model.aggregate import wafer_stats
 
-    empty = {"met": pl.Utf8, "item": pl.Utf8, "r": pl.Float64,
-             "r_within": pl.Float64, "lots": pl.Int64, "n": pl.Int64,
-             "t": pl.Float64, "score": pl.Float64}
-    if data is None or data.is_empty() or not met_names or not et_items:
+    empty = {"rank": pl.Int64, "met": pl.Utf8, "item": pl.Utf8,
+             "votes": pl.Int64, "mean_rank": pl.Float64, "r": pl.Float64,
+             "n": pl.Int64}
+    if data is None or data.is_empty() or not met_names or not y_item:
         return pl.DataFrame(schema=empty)
     if stats is None:
-        aliases = [c for c in {*met_names, *et_items} if c in data.columns]
-        st = wafer_stats(data, excluded or set(), aliases, "avg")
-    else:
-        aliases, st = [*met_names, *et_items], stats
-    keys = sorted(st.values)
-    groups = {}
-    if group_col in data.columns:
-        groups = {(lot, wf): g for lot, wf, g in
-                  zip(data["lot"], data["wafer"], data[group_col])}
-
-    rows = []
-    for met in met_names:
-        for item in et_items:
-            if met == item or met not in aliases or item not in aliases:
-                continue
-            pairs = [(st.values[k2].get(met), st.values[k2].get(item))
-                     for k2 in keys]
-            pairs = [(x, y) for x, y in pairs if x is not None and y is not None]
-            if len(pairs) < 3:
-                continue
-            xs = [x for x, _ in pairs]
-            ys = [y for _, y in pairs]
-            r = _pearson(xs, ys)
-            r_within, n_lots = _within_lot_r(st.values, keys, met, item)
-            t = None
-            if groups:
-                by: dict[str, list[float]] = {}
-                for k2 in keys:
-                    v = st.values[k2].get(met)
-                    g = groups.get(k2, "")
-                    if v is not None and g:
-                        by.setdefault(g, []).append(v)
-                if len(by) >= 2:
-                    big = sorted(by.values(), key=len, reverse=True)[:2]
-                    t = _welch_t(big[0], big[1])
-            # lot 효과로 부풀려진 상관이 위로 올라오지 않게 보수적인 쪽을 쓴다.
-            # lot이 하나뿐이면 r_within이 None이라 예전과 같은 값이 된다.
-            r_use = abs(r or 0.0) if r_within is None else min(
-                abs(r or 0.0), abs(r_within))
-            score = max(r_use, min(abs(t or 0.0) / 3.0, 1.0))
-            rows.append({"met": met, "item": item, "r": r,
-                         "r_within": r_within, "lots": n_lots,
-                         "n": len(pairs), "t": t, "score": score})
-    if not rows:
+        names = [c for c in {*met_names, y_item} if c in data.columns]
+        stats = wafer_stats(data, excluded or set(), names, "avg")
+    rows = [{"lot": str(lot), **vals} for (lot, _w), vals in stats.values.items()
+            if vals.get(y_item) is not None]
+    if len(rows) < MIN_WAFERS:
         return pl.DataFrame(schema=empty)
-    return (pl.DataFrame(rows, schema=empty)
-            .sort("score", descending=True).head(k))
+    feats = [m for m in dict.fromkeys(met_names) if m != y_item]
+    df = pl.DataFrame(rows, schema={"lot": pl.Utf8, y_item: pl.Float64,
+                                    **dict.fromkeys(feats, pl.Float64)})
+    feats = [m for m in feats
+             if df[m].null_count() <= MAX_MISSING * df.height
+             and (df[m].drop_nulls().std() or 0) > 0]
+    if not feats:
+        return pl.DataFrame(schema=empty)
+    cols = [y_item, *feats]
+    if df["lot"].n_unique() > 1:                       # lot 효과를 뺀다
+        df = df.with_columns([(pl.col(c) - pl.col(c).mean().over("lot")).alias(c)
+                              for c in cols])
+    # 빈 칸은 그 인자의 중앙값 — 나무 모델 셋이 같은 입력을 보게 한다
+    df = df.with_columns([pl.col(c).fill_null(pl.col(c).median()) for c in feats])
+    x = df.select(feats).to_numpy()
+    y = df[y_item].to_numpy()
 
-
-def _within_lot_r(values: dict, keys: list, met: str,
-                  item: str) -> tuple[float | None, int]:
-    """lot 안에서만 구한 상관을 wafer 수로 가중 평균. (값, 쓴 lot 수).
-
-    lot이 하나뿐이면 **None**을 돌려준다 — 합친 상관과 같은 값이므로 따로
-    보여 줄 것이 없고, 호출부가 '비교할 수 없음'과 '같음'을 구분하게 된다.
-    wafer가 3장 미만인 lot은 뺀다(전체 상관의 기준과 같다).
-
-    함께 돌려주는 수는 **상관을 구할 수 있었던 lot 수**다 — 표의 `lots` 열이
-    "몇 개의 lot을 견줘 본 값인가"를 말해야 해석이 된다.
-    """
-    by_lot: dict[str, list[tuple[float, float]]] = {}
-    for k in keys:
-        lot = k[0] if isinstance(k, tuple) else k
-        x, y = values[k].get(met), values[k].get(item)
-        if x is not None and y is not None:
-            by_lot.setdefault(str(lot), []).append((x, y))
-    usable = {lot: pr for lot, pr in by_lot.items() if len(pr) >= 3}
-    if len(usable) < 2:
-        return None, len(usable)
-    num = den = 0.0
-    used = 0
-    for pr in usable.values():
-        r = _pearson([x for x, _ in pr], [y for _, y in pr])
-        if r is None:                     # 한쪽 값이 전부 같으면 상관이 없다
-            continue
-        num += r * len(pr)
-        den += len(pr)
-        used += 1
-    if not den or used < 2:
-        return None, used
-    return num / den, used
+    import numpy as np
+    ranks: dict[str, np.ndarray] = {}
+    for name, model in _models().items():
+        model.fit(x, y)
+        imp = np.asarray(model.feature_importances_, dtype=float)
+        # 1 = 가장 중요. 동률은 같은 순위의 평균이 아니라 순서대로 — 결정적이면 된다
+        ranks[name] = np.argsort(np.argsort(-imp, kind="stable")) + 1
+    top = min(k, len(feats))
+    mean_rank = np.mean(list(ranks.values()), axis=0)
+    votes = sum((r <= top).astype(int) for r in ranks.values())
+    out = pl.DataFrame({
+        "met": feats, "item": [y_item] * len(feats),
+        "votes": votes.astype(np.int64), "mean_rank": mean_rank,
+        "r": [_pearson(df[m].to_list(), df[y_item].to_list()) for m in feats],
+        "n": [int(df.height)] * len(feats),
+        **{f"rank_{n}": r.astype(np.int64) for n, r in ranks.items()}},
+        schema_overrides={"r": pl.Float64})
+    return (out.sort(["mean_rank", "votes", "met"], descending=[False, True, False])
+            .head(k).with_row_index("rank", offset=1)
+            .with_columns(pl.col("rank").cast(pl.Int64)))
 
 
 def match_regex(items: list[str], pattern: str = ITEM_REGEX) -> list[str]:

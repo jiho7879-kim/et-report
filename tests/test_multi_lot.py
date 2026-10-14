@@ -456,15 +456,15 @@ def test_tracking_baseline_lot_is_per_step():
     from etreport.data import fabtracking as ft
     df = pl.DataFrame([
         {"root_lot_id": "PA", "wafer_id": "01", "process_id": "M1",
-         "area": "PHOTO", "reticle_id": "R1", "ppid": "x", "step_seq": "M1"},
+         "area": "PHOTO", "reticle_id": "x", "ppid": "R1", "step_seq": "M1"},
         {"root_lot_id": "PA", "wafer_id": "02", "process_id": "M1",
-         "area": "PHOTO", "reticle_id": "R1", "ppid": "x", "step_seq": "M1"},
+         "area": "PHOTO", "reticle_id": "x", "ppid": "R1", "step_seq": "M1"},
         {"root_lot_id": "PA", "wafer_id": "03", "process_id": "M1",
-         "area": "PHOTO", "reticle_id": "R2", "ppid": "x", "step_seq": "M1"},
+         "area": "PHOTO", "reticle_id": "x", "ppid": "R2", "step_seq": "M1"},
         {"root_lot_id": "PB", "wafer_id": "01", "process_id": "M1",
-         "area": "PHOTO", "reticle_id": "R2", "ppid": "x", "step_seq": "M1"},
+         "area": "PHOTO", "reticle_id": "x", "ppid": "R2", "step_seq": "M1"},
         {"root_lot_id": "PB", "wafer_id": "02", "process_id": "M1",
-         "area": "PHOTO", "reticle_id": "R2", "ppid": "x", "step_seq": "M1"},
+         "area": "PHOTO", "reticle_id": "x", "ppid": "R2", "step_seq": "M1"},
     ])
     sm = ft.to_split_matrix(df, baseline_lot="PA")
 
@@ -478,67 +478,6 @@ def test_majority_code_falls_back_when_lot_missing():
                           "condition": "R1"}])
 
     assert _majority_code(cond, lot="없는lot") == "R1"
-
-
-# ── §6 계측 lot 내 순위 ──────────────────────────────────────
-#: x=0..5에 대해 상관이 **정확히 0**인 y — lot 안에서는 아무 관계가 없게 만든다
-_FLAT_Y = (0.0, 2.0, 1.0, 1.0, 2.0, 0.0)
-
-
-def _met_frame(lot_effect: bool) -> pl.DataFrame:
-    """lot_effect=True면 lot 안에서는 관계가 없고 **lot 평균만** 다르다.
-
-    그 경우 합친 상관은 1에 가깝지만 lot 안의 상관은 0이다 — 계측값이 ET값을
-    설명하는 것이 아니라 lot이 둘 다를 밀어 올린 것뿐이다.
-    """
-    rows = []
-    for li, lot in enumerate(("PA", "PB")):
-        off = li * 100 if lot_effect else 0
-        for i in range(6):
-            y = off + (_FLAT_Y[i] if lot_effect else i)
-            rows.append({"key": f"{lot}{i}", "lot": lot, "wafer": f"{i:02d}",
-                         "gid": "", "CD": float(off + i), "Vt": float(y)})
-    return pl.DataFrame(rows)
-
-
-def test_top_factors_has_within_lot_columns():
-    from etreport.data.metrology import top_factors
-    top = top_factors(_met_frame(False), ["CD"], ["Vt"])
-
-    assert {"r", "r_within", "lots", "score"} <= set(top.columns)
-    assert top["r"][0] == pytest.approx(1.0)
-    assert top["r_within"][0] == pytest.approx(1.0)   # lot 안에서도 같은 관계
-
-
-def test_lot_effect_is_scored_down():
-    """★ lot 평균 차이로만 생긴 상관은 순위를 밀어 올리지 못한다."""
-    from etreport.data.metrology import top_factors
-    top = top_factors(_met_frame(True), ["CD"], ["Vt"])
-
-    assert abs(top["r"][0]) > 0.9                 # 합치면 강한 상관처럼 보이나
-    assert top["r_within"][0] == pytest.approx(0.0)   # lot 안에서는 무관하고
-    assert top["score"][0] == pytest.approx(0.0)      # 점수는 보수적인 쪽을 쓴다
-    assert top["lots"][0] == 2
-
-
-def test_single_lot_keeps_old_ranking():
-    """★ lot이 하나면 r_within이 None이라 예전과 같은 점수다."""
-    from etreport.data.metrology import top_factors
-    df = _met_frame(False).filter(pl.col("lot") == "PA")
-    top = top_factors(df, ["CD"], ["Vt"])
-
-    assert top["lots"][0] == 1
-    assert top["r_within"][0] is None
-    assert top["score"][0] == pytest.approx(abs(top["r"][0]))
-
-
-def test_lot_effect_flag():
-    from etreport.render.pptgen import _lot_effect
-
-    assert _lot_effect(0.9, -0.8)                 # 부호가 뒤집힘
-    assert _lot_effect(0.9, 0.2)                  # 크기가 두 배 넘게 차이
-    assert not _lot_effect(0.9, 0.85)
-    assert not _lot_effect(0.9, None)             # lot이 하나면 비교하지 않는다
 
 
 # ── §4 멀티 lot 탭 ───────────────────────────────────────────

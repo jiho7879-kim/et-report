@@ -175,7 +175,7 @@ def split_sample() -> Sample:
          "엑셀에서 복사해 [실험 조건] 창에 그대로 붙여넣을 수 있다"),
         ("(fab tracking)", "자동으로 채우기", "",
          "[실험 조건] 창의 [fab tracking 자동]은 fab.f_fab_tracking에서 조건이 "
-         "갈리는 step만 찾아 이 표를 대신 만들어 준다(PHOTO는 recipe, 그 외 ppid)"),
+         "갈리는 step만 찾아 이 표를 대신 만들어 준다(step_seq마다 ppid)"),
     ])
     return Sample("split", "실험 조건", data, desc)
 

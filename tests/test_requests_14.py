@@ -525,9 +525,9 @@ def test_tracking_table_columns_are_step_seq():
     from tests.test_fabtracking import ROW
 
     rows = [
-        # seq 100(PHOTO): wafer마다 reticle이 다르다 → 남는다
-        {"wafer_id": "01", "step_seq": 100, "area": "PHOTO", "reticle_id": "RT_A"},
-        {"wafer_id": "02", "step_seq": 100, "area": "PHOTO", "reticle_id": "RT_B"},
+        # seq 100(PHOTO): wafer마다 ppid가 다르다 → 남는다
+        {"wafer_id": "01", "step_seq": 100, "area": "PHOTO", "ppid": "PH_A"},
+        {"wafer_id": "02", "step_seq": 100, "area": "PHOTO", "ppid": "PH_B"},
         # seq 200(ETCH): ppid가 같다 → 빠진다
         {"wafer_id": "01", "step_seq": 200, "area": "ETCH", "ppid": "E_STD"},
         {"wafer_id": "02", "step_seq": 200, "area": "ETCH", "ppid": "E_STD"},
@@ -541,8 +541,8 @@ def test_tracking_table_columns_are_step_seq():
     assert ft.split_steps(df) == ["100", "300"]
     wide = ft.derive(df, ft.suggest_columns(df))
     assert wide.columns == ["lot", "wafer", "100", "300"]
-    assert wide["100"].to_list() == ["RT_A", "RT_B"]     # PHOTO = reticle_id
-    assert wide["300"].to_list() == ["I_LOW", "I_HI"]    # 그 외 = ppid
+    assert wide["100"].to_list() == ["PH_A", "PH_B"]     # 값은 ppid(2026-10-14)
+    assert wide["300"].to_list() == ["I_LOW", "I_HI"]
 
 
 # ── 실험 조건 연결 해제 ────────────────────────────────────────────

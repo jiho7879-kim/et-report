@@ -76,34 +76,40 @@ def test_sql_can_include_non_ecn_rows():
     assert "ein_ecn_no" in sql.split("FROM")[0]
 
 
-# ── PHOTO는 recipe, 그 외는 ppid ─────────────────────────────
-def test_photo_uses_recipe_others_use_ppid():
-    """★ area에 따라 비교 컬럼이 달라진다."""
+# ── 조건 값은 ppid (2026-10-14) ────────────────────────────────
+def test_condition_is_ppid_in_every_area():
+    """★ area와 무관하게 ppid로 비교한다 — ppid가 모두 같은 step은 빠진다."""
     df = _df([
         {"wafer_id": "01", "process_id": "M1", "area": "PHOTO",
          "reticle_id": "RA", "ppid": "SAME"},
         {"wafer_id": "02", "process_id": "M1", "area": "PHOTO",
-         "reticle_id": "RB", "ppid": "SAME"},        # recipe만 다르다
+         "reticle_id": "RB", "ppid": "SAME"},        # recipe만 다르다 → 빠진다
         {"wafer_id": "01", "process_id": "M5", "area": "ETCH",
          "reticle_id": "RX", "ppid": "P1"},
         {"wafer_id": "02", "process_id": "M5", "area": "ETCH",
-         "reticle_id": "RY", "ppid": "P1"},          # ppid는 같다 → split 아님
+         "reticle_id": "RX", "ppid": "P2"},          # ppid가 갈린다 → 남는다
     ])
 
     cond = ft.wafer_conditions(df)
     photo = cond.filter(pl.col("step_id") == "M1")["condition"].to_list()
-    etch = cond.filter(pl.col("step_id") == "M5")["condition"].to_list()
-
-    assert sorted(photo) == ["RA", "RB"]             # PHOTO → reticle_id
-    assert etch == ["P1", "P1"]                      # 그 외 → ppid
-    assert ft.split_steps(df) == ["M1"]              # 갈리는 step만
+    assert photo == ["SAME", "SAME"]
+    assert ft.split_steps(df) == ["M5"]
 
 
-def test_photo_area_is_case_insensitive():
-    df = _df([{"wafer_id": "01", "process_id": "M1", "area": "photo",
-               "reticle_id": "RA", "ppid": "P1"},
-              {"wafer_id": "02", "process_id": "M1", "area": "Photo",
-               "reticle_id": "RB", "ppid": "P1"}])
+def test_empty_ppid_falls_back_to_recipe():
+    df = _df([{"wafer_id": "01", "process_id": "M1", "area": "PHOTO",
+               "reticle_id": "RA", "ppid": None},
+              {"wafer_id": "02", "process_id": "M1", "area": "PHOTO",
+               "reticle_id": "RB", "ppid": None}])
+    assert ft.split_steps(df) == ["M1"]
+
+
+def test_steps_differing_only_between_lots_are_kept():
+    """lot 안에서는 같아도 lot끼리 ppid가 다르면 "모두 같다"가 아니다."""
+    df = _df([{"root_lot_id": "PA100", "wafer_id": "01", "process_id": "M1",
+               "ppid": "A"},
+              {"root_lot_id": "PB200", "wafer_id": "01", "process_id": "M1",
+               "ppid": "B"}])
     assert ft.split_steps(df) == ["M1"]
 
 

@@ -592,40 +592,23 @@ def _split_slide(prs, layout, wide, name: str = "실험 조건",
 def _factor_slide(prs, layout, top: pl.DataFrame) -> None:
     """inline 계측 유의 인자 top-k — 표 한 장(§7.4 스타일 공용).
 
-    분석 대상 lot 안에서 계측 인자와 ET item의 상관(r)·그룹 간 유의차(t)를
-    훑은 결과다. 숫자는 표 렌더러가 아니라 여기서 직접 쓰되 자릿수 규칙
-    (`fmt_value`)은 같은 것을 쓴다.
+    ET item 하나(y)를 두고 모델 여럿이 매긴 중요도 순위를 평균(투표)한 결과다
+    (`metrology.vote_factors`). 모델별 순위를 함께 실어 "모두가 고른 인자"와
+    "한 모델만 고른 인자"를 슬라이드에서도 가를 수 있게 한다.
     """
-    rows, suspect = [], 0
+    models = [c for c in top.columns if c.startswith("rank_")]
+    rows = []
     for rec in top.iter_rows(named=True):
-        r, rw = rec.get("r"), rec.get("r_within")
-        if _lot_effect(r, rw):
-            suspect += 1
-        rows.append({
-            "cats": [rec["met"]],
-            "item": rec["item"],
-            "values": [r, rw, rec.get("t"), float(rec.get("n") or 0)],
-            "offspec": [False, False, False, False]})
-    name = "유의 인자 top-k (inline 계측)"
-    if suspect:
-        name += f"  — lot 효과 의심 {suspect}건"
-    td = TableData(name,
-                   [("통계", ["r", "r (lot 내)", "Welch t", "n"])], rows,
+        vals = [float(rec["mean_rank"]), float(rec["votes"]), rec.get("r"),
+                *[float(rec[m]) for m in models], float(rec.get("n") or 0)]
+        rows.append({"cats": [rec["met"]], "item": rec["item"],
+                     "values": vals, "offspec": [False] * len(vals)})
+    y = top["item"][0] if top.height else ""
+    td = TableData(f"유의 인자 top-{top.height} — {y} (inline 계측 · 모델 투표)",
+                   [("투표", ["평균 순위", "득표", "r",
+                             *[m[5:] for m in models], "wafer"])], rows,
                    cat_names=["계측 인자"])
     _table_slide(prs, layout, td)
-
-
-def _lot_effect(r, r_within) -> bool:
-    """합친 상관과 lot 내 상관이 크게 갈리면 lot 효과를 의심한다.
-
-    부호가 뒤집히거나 크기가 두 배 넘게 차이 나면, 그 상관은 계측값과 ET값의
-    관계가 아니라 **lot 사이의 평균 차이**를 보고 있을 가능성이 크다.
-    """
-    if r is None or r_within is None:
-        return False
-    if (r > 0) != (r_within > 0) and abs(r) > 0.2 and abs(r_within) > 0.2:
-        return True
-    return abs(r) > 2 * abs(r_within) + 0.2
 
 
 def _exclusion_slide(prs, layout, log: pl.DataFrame) -> None:

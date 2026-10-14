@@ -23,6 +23,7 @@ from etreport.config.catalog import Catalog
 from etreport.config.settings import Condition
 from etreport.data.querybuilder import (
     ITEM_ID_CHUNK,
+    OPTIONAL_COLS,
     build_date_probe_sql,
     build_extract_sql,
 )
@@ -81,6 +82,8 @@ ARROW_SCHEMA = pa.schema([
     ("tkout_time", pa.timestamp("us")),
     ("item_id", pa.string()),
     ("et_value", pa.float64()),
+    # 선택 컬럼(querybuilder.OPTIONAL_COLS) — 테이블에 없으면 조용히 NULL
+    ("part_id", pa.string()),
 ])
 
 
@@ -470,8 +473,9 @@ def normalize_schema(df: pl.DataFrame) -> pl.DataFrame:
                  strict=False)
 
     missing = [c for c in target if c not in df.columns]
+    if loud := [c for c in missing if c not in OPTIONAL_COLS]:
+        log.warning("조회 결과에 없는 컬럼을 null로 채웁니다: %s", ", ".join(loud))
     if missing:
-        log.warning("조회 결과에 없는 컬럼을 null로 채웁니다: %s", ", ".join(missing))
         df = df.with_columns([pl.lit(None, dtype=target[c]).alias(c)
                               for c in missing])
     df = correct_temperature(df)

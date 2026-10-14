@@ -485,3 +485,25 @@ def test_null_seq_retest_still_keeps_latest(tmp_path, appdata):
     df = _vals(st, "Vt")
     assert df.height == 1
     assert df["Vt"][0] == pytest.approx(0.99)
+
+
+@pytest.mark.parametrize("together", [True, False])
+def test_seq_from_another_day_chunk_survives(tmp_path, together):
+    """seq A와 B가 다른 날짜(=다른 청크 파일)에 찍혀도 die 한 행에 둘 다 남는다.
+
+    한 번에 적재하든(파일 두 개) 날을 나눠 이어 적재하든 같아야 한다.
+    """
+    a = [{"step_seq": "A", "item_id": f"a{i}", "value": float(i)} for i in range(6)]
+    b = [{"step_seq": "B", "item_id": f"b{i}", "value": 100.0 + i,
+          "tkout_time": datetime(2026, 8, 5, 9, 0)} for i in range(3)]
+    files = [_write(tmp_path, a, "d4"), _write(tmp_path, b, "d5")]
+    dbp = tmp_path / "et.duckdb"
+    for batch in ([files] if together else [[f] for f in files]):
+        with db.Store(dbp) as store:
+            db.pivot_and_load(store, batch)
+    con = duckdb.connect(str(dbp), read_only=True)
+    try:
+        got = con.execute("SELECT a0, a5, b0, b2 FROM et_data").fetchall()
+    finally:
+        con.close()
+    assert got == [(0.0, 5.0, 100.0, 102.0)]

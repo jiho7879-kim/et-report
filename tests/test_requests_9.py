@@ -178,3 +178,82 @@ def test_bar_has_no_error_bars_and_is_wide():
     assert not any(type(c).__name__ == "ErrorbarContainer"
                    for c in ax.containers)
     assert ax.patches[0].get_width() > 0.7       # 그룹 하나면 자리를 다 쓴다
+
+
+def test_wafer_mode_click_excludes_the_whole_wafer(qapp, demo_state):
+    """점을 wafer 평균으로 찍어도 클릭 제외가 된다 — 점 하나 = 그 wafer 전부."""
+    from etreport.model.state import StateBus
+    from etreport.ui.tabs.explore import ExploreTab
+
+    demo_state.excluded.clear()
+    demo_state.explore.mode = "avg"
+    tab = ExploreTab(demo_state, StateBus())
+    tab.redraw()
+    cv = tab.canvas
+    xs, ys, keys = cv._series[0]
+    assert isinstance(keys[0], list), "wafer 모드인데 측정점 좌표를 모았다"
+    px = cv.figure.axes[0].transData.transform((xs[0], ys[0]))
+    cv._on_press(_Ev(*px))
+    cv._on_release(_Ev(*px))
+    assert demo_state.excluded == set(keys[0])
+    assert len(demo_state.undo_stack) == 1
+    demo_state.explore.mode = "site"
+    tab.deleteLater()
+
+
+def test_hover_shows_lot_and_wafer_without_collecting_at_draw(qapp, demo_state):
+    """마우스를 올리면 그 점의 lot·wafer — 좌표는 그릴 때가 아니라 그때 모은다."""
+    from etreport.ui.widgets.plot_canvas import PlotCanvas
+
+    cv = PlotCanvas(demo_state)                  # 클릭 제외 없음 = 리포트 미리보기
+    cv.resize(500, 400)
+    cv.draw_spec(demo_state.explore)
+    assert cv._series == []                      # 그리기 비용은 그대로
+    cv._collect_points(demo_state.explore, force=True)
+    xs, ys, _keys = cv._series[0]
+    px = cv.figure.axes[0].transData.transform((xs[0], ys[0]))
+    key, _x, _y = cv._nearest(*px)
+    text = cv.hover_text(key, _x, _y)
+    row = demo_state.data.filter(demo_state.data["key"] == key).row(0, named=True)
+    assert f"lot  {row['lot']}" in text and f"wafer  {row['wafer']}" in text
+    cv.deleteLater()
+
+
+def test_inline_and_tracking_columns_reach_plots_and_ppt(qapp, demo_state):
+    """inline 계측(숫자) = 산점도 축, fab tracking(문자열) = boxplot 범주 —
+    화면·리포트 슬롯 후보·PPT 데이터까지 같은 열로 간다(요청 2026-10-14 §5)."""
+    from etreport import demo_data
+    from etreport.data import fabtracking as ft
+    from etreport.data import metrology as mt
+    from etreport.export.deckbuild import _plot_data
+    from etreport.model import categories as cat
+    from etreport.model.state import StateBus
+    from etreport.ui.tabs.report import ReportTab
+    from etreport.ui.widgets.plot_canvas import PlotCanvas
+
+    st = demo_state
+    lots = sorted(set(st.data["lot"].to_list()))
+    st.data, met = mt.attach(st.data, demo_data.metrology_frame(lots), "wafer")
+    st.met_columns = met
+    tf = demo_data.tracking_frame(lots)
+    st.data, trk = ft.attach(st.data, ft.derive(tf, ft.suggest_columns(tf)))
+    st.track_columns = trk
+    assert met and trk
+
+    y = st.aliases()[0]
+    scatter = PlotSpec(x=met[0], y=y, type="scatter", mode="avg")
+    box = PlotSpec(x=trk[0], y=y, type="box")
+    assert met[0] in st.value_columns()
+    assert trk[0] in cat.choices(st.data, st.track_columns + st.met_columns)
+    tab = ReportTab(st, StateBus())
+    assert met[0] in tab._alias_items()          # 리포트 슬롯 축 후보에도
+    tab.deleteLater()
+    for spec in (scatter, box):
+        cv = PlotCanvas(st)
+        cv.draw_spec(spec)
+        assert _drawn_points(cv.figure) or cv.figure.axes[0].patches \
+            or cv.figure.axes[0].lines, f"{spec.type}: 아무것도 그려지지 않았다"
+        cv.deleteLater()
+        data = _plot_data(st, "", spec)
+        assert any(spec.x in d.columns and d[spec.x].drop_nulls().len()
+                   for d in data.values()), f"PPT 데이터에 {spec.x}가 없다"

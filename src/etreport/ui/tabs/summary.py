@@ -250,13 +250,10 @@ class SummaryTab(StaleMixin, QWidget):
             t = QTableWidget(len(rows), ncol)
             t.setObjectName("sumTable")
             heads = [*cat_heads, "item", *spec_heads]
-            # 제외한 점 수는 **머리글**에 적는다 — wafer 단위 값이라 예전처럼 셀마다
-            # `378.5  −1`로 붙이면 그 wafer 셀이 전부 같은 숫자를 달고 있어 값이
-            # 깨진 것처럼 보였다(복사·xlsx 값과도 글자가 달랐다).
+            # 제외한 점 수는 표에 적지 않는다(2026-10-14 요청) — 머리글 높이만
+            # 들쭉날쭉해지고, 합계는 아래 상태 줄(`제외 N점 반영`)이 이미 말한다.
             for lot, wl in header:
-                heads += [f"{lot}\n{w}" + (f"\n제외 {n}점"
-                                            if (n := ws.ex(lot, w)) else "")
-                          for w in wl]
+                heads += [f"{lot}\n{w}" for w in wl]
             t.setHorizontalHeaderLabels(heads)
             t.verticalHeader().setVisible(False)
             t.setAlternatingRowColors(True)

@@ -92,7 +92,7 @@ myenv/bin/ruff check --fix .                        # 안전한 것만 자동 �
 | `test_ux_requests.py` | 사용자 요청 8건(표지 장표·그룹별 평균·콤보 지연…) |
 | `test_bugfix_9.py` | 분석 화면 버그 9건 회귀(온도 5단위·자동그룹핑·표 그룹 반영…) |
 | `test_ux_requests3.py` | 요청 15건 — 연결 충돌·SQL OOM·S3 트리·wafer 표기 통일·온도 적재 보정 |
-| `test_fabtracking.py` | 기능 A — PHOTO=recipe/그 외=ppid, 갈리는 step만 factor |
+| `test_fabtracking.py` | 기능 A — step_seq마다 ppid, 하나라도 갈리는 step만 factor |
 | `test_metrology.py` | 기능 B — subitem 규칙·(lot,wafer) 매칭·top-k |
 | `test_s3.py` | 기능 C — 키 조립·페이지네이션·자격 증명 보관(가짜 클라이언트) |
 | `test_chunk_plan.py` | **§4.2·§10.10** 기간×item 그룹 청크 · 진행 라벨 · 미리보기 |
@@ -115,7 +115,7 @@ myenv/bin/ruff check --fix .                        # 안전한 것만 자동 �
 | `test_requests_13.py` | 요청 13건 — 단일 exe·리소스 경로·빌드 스탬프·fab tracking 이름 컬럼·조회 조건 자동 채움·boxplot·plot 종류·VARCHAR 읽기·Tukey 필터·예약 실행 |
 | `test_export_safety.py` | 적재 후 자동 [적용] 없음 · SBDF 사전 점검(행 수·메모리 예산)이 `.df()`보다 먼저 · CSV/parquet은 COPY 그대로 |
 | `test_ui_feature_requests.py` | 실험 조건 열이 범주 축으로 붙는다 · 빈 심볼 · 요약 표 복사(HTML: 병합·색 + TSV) |
-| `test_extract_skip_empty.py` | 빈 청크 건너뛰기 · 날짜 프로브(SUM) · 청크 폭(개발자 모드) |
+| `test_extract_skip_empty.py` | 빈 청크 건너뛰기 · 날짜 프로브(GEN) · 청크 폭(개발자 모드) |
 | `test_bigset.py` (slow) | 실측 규모 성능·정확성 회귀 (`-s`로 단계별 시간 출력) |
 
 `tools/make_testset.py`는 **사내 PC에서 실제 앱으로** 리포메터를 확인하기 위한
@@ -490,7 +490,7 @@ item은 9999개씩 나눠 쿼리 하나가 Impala IN 상한을 넘지 않게 한
 
 **빈 날짜에 비용을 쓰지 않는다**(`tests/test_extract_skip_empty.py`).
 - **날짜 프로브** — 조건에 `root_lot_id`가 있으면 추출 전에
-  `build_date_probe_sql()`로 `SELECT DISTINCT TO_DATE(tkout_time) … data_class='SUM'`
+  `build_date_probe_sql()`로 `SELECT DISTINCT TO_DATE(tkout_time) … data_class='GEN'`(추출과 같은 클래스 — SUM으로 물으면 SUM이 없는 날의 seq가 통째로 빠졌다)
   을 한 번 던져 **데이터가 있는 날짜만** 청크로 만든다(`extractor.probe_days` →
   `plan_chunks(days=…)`). lot이 좁으면 기간 대부분이 빈 날짜인데, 그 날짜마다
   무거운 GEN 조회가 한 번씩 나가고 있었다. 프로브는 최적화일 뿐이라 **실패하면
@@ -715,11 +715,12 @@ different configuration`), `duckdb.connect(..., read_only=True)`를 직접 부�
 ## 사내 소스 3종 (ET 계측 외)
 
 **fab tracking** (`data/fabtracking.py`) — `fab.f_fab_tracking`에서 split 실험
-lot을 찾는다. **`area='PHOTO'`면 recipe(`reticle_id`), 그 외는 `ppid`**로 step별
-조건을 비교하고, **조건이 갈리는 step만** 실험 축(factor)으로 올린다.
+lot을 찾는다. **조건 값은 `ppid`**(비어 있을 때만 `reticle_id`, 2026-10-14 요청 —
+예전 규칙 "PHOTO=recipe"는 폐기)이고, 조회한 (lot, wafer) 전체에서 **ppid가 하나라도
+다른 step_seq만** 실험 축(factor)으로 올린다(모두 같으면 뺀다).
 **step을 가르는 키는 `step_seq`다**(`step_key_expr`, 요청 §3) — process_id는
 route에서 여러 번 반복되어 서로 다른 지점의 조건이 한 열로 뭉쳤다. 그래서 표는
-`lot | wafer | <step_seq…>`로 자동 구성된다. 그룹핑과
+`root_lot_id | wafer_id | <step_seq…>`(값 = ppid)로 자동 구성된다. 그룹핑과
 혼입 감지는 `model/split.SplitMatrix`가 하며 여기서 매트릭스만 만들어 넘긴다 —
 그룹핑 로직을 두 곳에 두지 않는다.
 

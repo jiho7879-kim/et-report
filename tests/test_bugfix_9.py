@@ -334,3 +334,24 @@ def test_build_table_header_matches_visible_groups(appdata):
     st.groups[1].visible = False
     assert build_table(st, "DC", SummaryOptions()).header_lots == [
         ("PA1", ["01"])]
+
+
+def test_auto_group_by_partid7(qapp, tmp_path, appdata):
+    """part_id 앞 7글자가 같은 wafer끼리 한 그룹 — part_id는 적재 때 함께 실린다."""
+    dbp = _load_db(tmp_path, [
+        {"wafer_id": "01", "item_id": "Vt", "et_value": 0.4,
+         "part_id": "8NMSRAM-R01"},
+        {"wafer_id": "02", "chip_x_pos": 2, "item_id": "Vt", "et_value": 0.5,
+         "part_id": "8NMSRAM-R02"},
+        {"root_lot_id": "PB200", "wafer_id": "01", "chip_x_pos": 3,
+         "item_id": "Vt", "et_value": 0.6, "part_id": "8NMLOGC-R01"},
+    ])
+    st = AppState()
+    dlg = _dialog(st, db_path=dbp)
+
+    assert dlg.auto_group("part7") == 2
+    assert [g.name for g in st.groups] == ["8NMLOGC", "8NMSRAM"]
+    sram = st.groups[1].gid
+    assert {k[:2] for k, v in st.manual_groups.items() if v == sram} == {
+        ("PA100", "01"), ("PA100", "02")}
+    dlg.deleteLater()

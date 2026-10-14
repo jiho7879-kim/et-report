@@ -245,6 +245,36 @@ def wafer_index_from_db(db_path: str,
     return idx.with_columns([pl.col(c).cast(pl.Utf8) for c in compat.CTX_ROLES])
 
 
+def part_index(state: AppState, db_path: str = "") -> pl.DataFrame:
+    """(lot, wafer) → part_id. partid7 자동 그룹핑이 쓴다.
+
+    DB에 part_id가 함께 적재돼 있으면 거기서(가벼운 DISTINCT), 없으면 fab
+    tracking 조회 결과(`state.track_frame`)에서 가져온다 — part_id를 싣기 전에
+    적재한 DB도 tracking만 조회하면 묶을 수 있다. 둘 다 없으면 빈 프레임.
+    """
+    empty = pl.DataFrame(schema={"lot": pl.Utf8, "wafer": pl.Utf8, "part": pl.Utf8})
+    path = db_path or getattr(state, "db_path", "")
+    if path and Path(path).exists():
+        with readonly_query(path) as con:
+            tbl = compat.pick_table(con)
+            r = compat.profile(con, tbl).roles if tbl else {}
+            if {"lot", "wafer", "part"} <= set(r):
+                got = con.execute(
+                    f'SELECT DISTINCT CAST("{r["lot"]}" AS VARCHAR) AS lot, '
+                    f'CAST("{r["wafer"]}" AS VARCHAR) AS wafer, '
+                    f'CAST("{r["part"]}" AS VARCHAR) AS part FROM "{tbl}" '
+                    f'WHERE "{r["part"]}" IS NOT NULL').pl()
+                if not got.is_empty():
+                    return got
+    tf = getattr(state, "track_frame", None)
+    if tf is not None and {"root_lot_id", "wafer_id", "part_id"} <= set(tf.columns):
+        return (tf.select(pl.col("root_lot_id").cast(pl.Utf8).alias("lot"),
+                          pl.col("wafer_id").cast(pl.Utf8).alias("wafer"),
+                          pl.col("part_id").cast(pl.Utf8).alias("part"))
+                .drop_nulls().unique(maintain_order=True))
+    return empty
+
+
 def lot_index(db_path: str) -> pl.DataFrame:
     """DB에 들어 있는 lot 목록 — `(lot, wafers)`. 도크 lot 리스트가 쓴다.
 

@@ -161,6 +161,15 @@ KEY_COLS: list[str] = [
 ]
 
 SELECT_COLS = ", ".join(KEY_COLS)
+#: 있으면 함께 싣는 컬럼 — 키가 아니라 wafer의 성질이다(partid7 그룹핑).
+#: 테이블에 없는 사이트도 있어 카탈로그에 있을 때만 SELECT에 넣는다 — 없는
+#: 컬럼을 적으면 조회 전체가 실패한다.
+OPTIONAL_COLS = ("part_id",)
+
+
+def select_cols(catalog: Catalog) -> str:
+    extra = [c for c in OPTIONAL_COLS if catalog.get(c) is not None]
+    return ", ".join([*KEY_COLS, *extra])
 
 # item_id IN (...) 절을 나누는 크기. Impala IN 값 개수 제한을 피하기 위해
 # 10000 미만인 9999로 쪼갠다(마지막 청크는 나머지). 더 많이 쪼개지 않는다.
@@ -170,9 +179,6 @@ ITEM_ID_CHUNK = 9999
 # 세 빌더가 전부 _build_where를 거치므로 여기 한 줄이 추출·미리보기·probe에 함께 걸린다.
 DATA_CLASS = "GEN"
 
-# 날짜 프로브(build_date_probe_sql)가 보는 클래스. 요약 행이라 GEN보다 훨씬
-# 가벼워서 "이 lot이 어느 날짜에 찍혔나"만 먼저 묻는 데 쓴다.
-SUMMARY_CLASS = "SUM"
 
 
 def _build_where(conditions: list[Condition], d_from: date, d_to: date,
@@ -232,7 +238,7 @@ def build_extract_sql(
         where.append("(\n    " + "\n    OR ".join(clauses) + "\n  )")
     body = "\n  AND  ".join(where)
     return (
-        f"SELECT {SELECT_COLS}\n"
+        f"SELECT {select_cols(catalog)}\n"
         f"FROM   {table}\n"
         f"WHERE  {body}"
     )
@@ -258,7 +264,7 @@ def build_preview_sql(
         groups = (n + ITEM_ID_CHUNK - 1) // ITEM_ID_CHUNK
         where.append(f"item_id IN ( … {n:,}개 … )")
     body = "\n  AND  ".join(where)
-    sql = (f"SELECT {SELECT_COLS}\n"
+    sql = (f"SELECT {select_cols(catalog)}\n"
            f"FROM   {table}\n"
            f"WHERE  {body}")
     if n:
@@ -274,14 +280,19 @@ def build_date_probe_sql(
     d_to: date,
     catalog: Catalog,
     table: str = "eds.f_et_test",
-    data_class: str = SUMMARY_CLASS,
+    data_class: str = DATA_CLASS,
 ) -> str:
     """**데이터가 있는 날짜만** 먼저 알아내는 가벼운 프로브.
 
     lot 조건(root_lot_id)이 좁으면 기간 대부분의 날짜에는 그 lot의 측정이 아예
     없다. 그래도 지금까지는 하루가 곧 청크 하나라 빈 날짜마다 무거운 GEN 조회를
-    한 번씩 던졌다. 요약 클래스(SUM)로 날짜만 먼저 받아 **그 날짜의 청크만**
-    만들면 그 낭비가 통째로 사라진다.
+    한 번씩 던졌다. 날짜만 먼저 받아 **그 날짜의 청크만** 만들면 그 낭비가
+    통째로 사라진다.
+
+    **추출과 같은 클래스(GEN)를 본다.** 처음에는 가벼운 요약(SUM) 행으로 물었는데,
+    SUM이 남지 않는 측정(다른 날 찍힌 step_seq의 추가 item 등)은 그 날짜가 통째로
+    빠져 적재에서 seq 하나의 값이 사라졌다. 날짜 하나만 읽는 DISTINCT라 GEN이어도
+    값 조회보다 훨씬 가볍다.
     """
     where = _build_where(conditions, d_from, d_to, catalog, data_class)
     body = "\n  AND  ".join(where)

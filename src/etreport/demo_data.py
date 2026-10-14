@@ -432,6 +432,13 @@ def _cast_long(df: pl.DataFrame) -> pl.DataFrame:
         pl.col("chip_x_pos").cast(pl.Int32), pl.col("chip_y_pos").cast(pl.Int32),
         pl.col("total_site_cnt").cast(pl.Int32),
         pl.col("temperature").cast(pl.Float64))
+    if "part_id" not in df.columns:
+        # partid7 그룹핑을 밟아 보게 lot마다 part를 다르게 — 앞 7글자는 둘로 갈린다
+        lots = sorted(df["root_lot_id"].unique().to_list())
+        part = {lot: ("8NMSRAM" if i % 2 == 0 else "8NMLOGC") + f"-R{i + 1:02d}"
+                for i, lot in enumerate(lots)}
+        df = df.with_columns(pl.col("root_lot_id").replace_strict(
+            part, return_dtype=pl.Utf8).alias("part_id"))
     return df.select(order)
 
 
@@ -516,7 +523,7 @@ def metrology_frame(lots: list[str] | None = None,
 
 
 def tracking_frame(lots: list[str] | None = None) -> pl.DataFrame:
-    """`fab.f_fab_tracking` 모양 — PHOTO는 reticle, 그 외는 ppid로 갈린다.
+    """`fab.f_fab_tracking` 모양 — 실험 step은 ppid가 갈린다(PHOTO는 reticle도).
 
     실험이 걸린 step(M1·M5·M8)만 조건이 wafer마다 다르고 나머지는 같다.
     `split_steps()`가 갈리는 step만 factor로 올리는지 확인할 수 있다.
@@ -550,7 +557,8 @@ def tracking_frame(lots: list[str] | None = None) -> pl.DataFrame:
                     "foup_id": f"FP{seq:03d}", "eqp_model": "MDL",
                     "eqp_id": f"EQ{seq:03d}", "unit_id": "U1",
                     "chamber_id": "C1",
-                    "ppid": f"{step}_{tag}" if area != "PHOTO" else f"{step}_STD",
+                    # 갈리는 값은 ppid다(2026-10-14 — PHOTO도 ppid로 본다)
+                    "ppid": f"{step}_{tag}",
                     "reticle_id": f"RT_{tag}" if area == "PHOTO" else "RT_STD",
                     "ein_ecn_no": "ECN-2026-0815", "line_id": LINE_ID})
     return pl.DataFrame(rows)

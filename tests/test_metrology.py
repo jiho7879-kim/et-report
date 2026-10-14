@@ -135,63 +135,53 @@ def test_attach_without_match_leaves_nulls():
     assert out["M1::CD_A"].null_count() == 4
 
 
-# ── top-k ────────────────────────────────────────────────────
-def test_top_factors_ranks_correlation():
-    """★ 상관이 큰 인자가 위로 온다 — wafer 집계는 aggregate를 재사용."""
-    data = pl.DataFrame({
-        "key": [str(i) for i in range(6)],
-        "lot": ["PA"] * 6,
-        "wafer": ["01", "02", "03", "04", "05", "06"],
-        "gid": ["g0", "g0", "g0", "g1", "g1", "g1"],
-        "Vt": [0.40, 0.44, 0.48, 0.52, 0.56, 0.60],
-        "M1::CD": [10.0, 11.0, 12.0, 13.0, 14.0, 15.0],     # Vt와 완전 상관
-        "M1::THK": [5.0, 4.0, 6.0, 5.0, 4.5, 5.5]})         # 무관
+# ── 유의 인자 — 모델 투표 ─────────────────────────────────────
+def _wafers(n=24, lots=("PA",), lot_shift=0.0):
+    """CD가 Vt를 (비선형으로) 결정하고 THK·RCS는 잡음 — 정답이 분명한 데이터."""
+    import random
+    rnd = random.Random(1)
+    rows = []
+    for li, lot in enumerate(lots):
+        for w in range(n):
+            cd = rnd.uniform(10, 20)
+            rows.append({"key": f"{lot}{w}", "lot": lot, "wafer": f"{w + 1:02d}",
+                         "gid": "", "M1::CD": cd + li * lot_shift,
+                         "M1::THK": rnd.uniform(4, 6),
+                         "M2::RCS": rnd.uniform(0, 1) + li * lot_shift,
+                         "Vt": (cd - 15) ** 2 * 0.01 + rnd.gauss(0, 0.005)})
+    return pl.DataFrame(rows)
 
-    top = mt.top_factors(data, ["M1::CD", "M1::THK"], ["Vt"], k=2)
 
+def test_vote_factors_puts_the_real_driver_first():
+    """★ 모델마다 순위를 매겨 평균 — 모두가 고른 인자가 1등, 득표도 만장일치."""
+    top = mt.vote_factors(_wafers(), ["M1::CD", "M1::THK", "M2::RCS"], "Vt", k=1)
+
+    assert top["met"].to_list() == ["M1::CD"]
+    assert top["rank"][0] == 1 and top["item"][0] == "Vt"
+    models = [c for c in top.columns if c.startswith("rank_")]
+    assert {"rank_RF", "rank_ET", "rank_GB"} <= set(models)
+    assert top["votes"][0] == len(models)                 # 만장일치
+    assert top["n"][0] == 24
+
+
+def test_vote_factors_removes_the_lot_effect():
+    """★ lot 평균만 다른 인자(RCS)는 lot 평균을 빼면 순위를 얻지 못한다."""
+    top = mt.vote_factors(_wafers(lots=("PA", "PB"), lot_shift=50.0),
+                          ["M1::CD", "M1::THK", "M2::RCS"], "Vt", k=3)
     assert top["met"][0] == "M1::CD"
-    assert abs(top["r"][0]) > 0.99
-    assert top["n"][0] == 6
-    assert top["score"][0] >= top["score"][1]
 
 
-def test_top_factors_sees_group_difference():
-    """상관이 없어도 그룹 간 차이가 크면 유의 인자로 올라온다."""
-    data = pl.DataFrame({
-        "key": [str(i) for i in range(6)],
-        "lot": ["PA"] * 6,
-        "wafer": ["01", "02", "03", "04", "05", "06"],
-        "gid": ["g0", "g0", "g0", "g1", "g1", "g1"],
-        "Vt": [0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
-        "M1::CD": [10.0, 10.1, 9.9, 20.0, 20.1, 19.9]})     # 그룹이 완전히 갈린다
-
-    top = mt.top_factors(data, ["M1::CD"], ["Vt"], k=5)
-
-    assert top.height == 1
-    assert abs(top["t"][0]) > 3
+def test_vote_factors_needs_enough_wafers():
+    data = _wafers(n=mt.MIN_WAFERS - 1)
+    assert mt.vote_factors(data, ["M1::CD"], "Vt").is_empty()
 
 
-def test_top_factors_needs_three_points():
-    data = pl.DataFrame({
-        "key": ["1", "2"], "lot": ["PA", "PA"], "wafer": ["01", "02"],
-        "gid": ["", ""], "Vt": [0.4, 0.5], "M1::CD": [1.0, 2.0]})
-    assert mt.top_factors(data, ["M1::CD"], ["Vt"]).is_empty()
-
-
-def test_top_factors_respects_exclusions():
+def test_vote_factors_respects_exclusions():
     """제외한 점은 통계에서도 빠진다(화면과 같은 기준)."""
-    data = pl.DataFrame({
-        "key": ["1", "2", "3", "4"],
-        "lot": ["PA"] * 4, "wafer": ["01", "02", "03", "04"],
-        "gid": [""] * 4,
-        "Vt": [0.4, 0.45, 0.5, 9.9],
-        "M1::CD": [10.0, 11.0, 12.0, 13.0]})
-
-    full = mt.top_factors(data, ["M1::CD"], ["Vt"])
-    cut = mt.top_factors(data, ["M1::CD"], ["Vt"], excluded={"4"})
-
-    assert full["n"][0] == 4 and cut["n"][0] == 3
-    assert abs(cut["r"][0]) > abs(full["r"][0])          # 이상점이 빠져 상관↑
+    data = _wafers()
+    full = mt.vote_factors(data, ["M1::CD", "M1::THK"], "Vt")
+    cut = mt.vote_factors(data, ["M1::CD", "M1::THK"], "Vt", excluded={"PA0"})
+    assert full["n"][0] == 24 and cut["n"][0] == 23
 
 
 # ── 입력 파싱·필터 ───────────────────────────────────────────

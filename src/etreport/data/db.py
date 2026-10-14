@@ -1,6 +1,6 @@
 """DuckDB 저장소.
 
-et_keys         : 측정점 키 7종 + tkout_time(마지막 측정) + line_id + key_hash
+et_keys         : 측정점 키 7종 + tkout_time(마지막 측정) + line_id + part_id + key_hash
 et_items_NNN    : key_hash + item 컬럼 **최대 ITEMS_PER_TABLE개**. 넘치면 다음 번호
 et_data (뷰)    : et_keys POSITIONAL JOIN et_items_* — `select * from et_data`가
                   예전처럼 키 + item 전부를 돌려준다. 읽는 코드는 이 뷰만 본다.
@@ -54,7 +54,9 @@ KEYS_TABLE = "et_keys"
 ITEMS_PREFIX = "et_items_"
 #: 테이블 하나의 item 열 상한 — 적재 메모리를 정하는 다이얼(위 docstring).
 ITEMS_PER_TABLE = 500
-KEY_COLS = (*KEY7, "tkout_time", "line_id", "key_hash")
+#: 키는 아니지만 측정점과 함께 싣는 열. part_id는 wafer의 성질이라 첫 값을 둔다
+#: (partid7 그룹핑) — part_id를 싣기 전의 추출·DB에서는 NULL이다.
+KEY_COLS = (*KEY7, "tkout_time", "line_id", "part_id", "key_hash")
 
 
 def layout(con: duckdb.DuckDBPyConnection) -> str:
@@ -447,10 +449,12 @@ def merge_seq(part: pl.DataFrame) -> tuple[pl.DataFrame, dict[str, int]]:
     - 같은 step_seq 안의 재측정(retest)은 tkout_time이 **가장 늦은** 값 하나.
     - step_seq가 다른데 같은 item이면 **평균**. 드문 일이라 item별 칸 수를 함께
       돌려준다 — 적재 로그에 남아, 겹치지 않는다던 item이 겹치면 눈에 띈다.
-    - tkout_time은 그 측정점의 **마지막** 측정 시각, line_id는 첫 값.
+    - tkout_time은 그 측정점의 **마지막** 측정 시각, line_id·part_id는 첫 값.
 
     값이 NULL인 행은 retest 판정에서 빠진다(늦게 찍힌 NULL이 값을 지우지 않게).
     """
+    if "part_id" not in part.columns:            # part_id를 싣기 전의 추출 파일
+        part = part.with_columns(pl.lit(None, dtype=pl.Utf8).alias("part_id"))
     latest = (part.sort("tkout_time", nulls_last=False, maintain_order=True)
               .group_by(["key_hash", "step_seq", "item_id"], maintain_order=True)
               .agg(pl.col("value").drop_nulls().last()))
@@ -463,7 +467,8 @@ def merge_seq(part: pl.DataFrame) -> tuple[pl.DataFrame, dict[str, int]]:
                     .iter_rows())
     keys = part.group_by("key_hash", maintain_order=True).agg(
         *[pl.col(c).first() for c in KEY7],
-        pl.col("tkout_time").max(), pl.col("line_id").first())
+        pl.col("tkout_time").max(), pl.col("line_id").first(),
+        pl.col("part_id").drop_nulls().first())
     return (vals.drop("_n").join(keys, on="key_hash", how="left",
                                  maintain_order="left"), averaged)
 

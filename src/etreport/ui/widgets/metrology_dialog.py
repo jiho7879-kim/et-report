@@ -6,7 +6,8 @@
      미리보기만 보여 준다(분석 데이터에는 아직 붙이지 않는다)
   3. [분석에 활용] — 조회 결과를 (lot, wafer)로 분석 데이터에 붙인다.
      이 버튼을 누르기 전에는 **결과만 조회한 상태**다(요구 사항)
-  4. [유의 인자 분석] — 계측 인자 × ET item을 훑어 top-k를 뽑는다.
+  4. [유의 인자 분석] — 고른 ET item(y) 하나를 정답으로 모델 여럿(RF·ET·GB,
+     있으면 XGBoost)을 세우고 중요도 순위를 투표로 합쳐 top-k를 뽑는다.
      결과는 상태에 남아 [PPT 생성] 때 슬라이드로 나간다
 
 지연 계산 규약을 지킨다 — 이 창에서도 버튼을 눌러야 계산한다.
@@ -111,14 +112,24 @@ class MetrologyDialog(QDialog):
         self.btn_use.clicked.connect(self._use)
         bar.addWidget(self.btn_use)
         bar.addSpacing(12)
+        bar.addWidget(QLabel("y item"))
+        self.cmb_y = QComboBox()
+        self.cmb_y.setEditable(True)            # item이 수천 개라 글자로 찾는다
+        self.cmb_y.setMinimumWidth(140)
+        self.cmb_y.setToolTip("이 ET item을 가장 잘 설명하는 계측 인자를 찾습니다")
+        self._fill_y()
+        bar.addWidget(self.cmb_y)
         bar.addWidget(QLabel("top-k"))
         self.spin_k = QSpinBox()
         self.spin_k.setRange(1, 50)
         self.spin_k.setValue(10)
         bar.addWidget(self.spin_k)
         b2 = QPushButton("유의 인자 분석")
-        b2.setToolTip("분석 대상 lot 안에서 계측 인자와 ET item의 상관·그룹 차이를\n"
-                      "훑어 유의미한 순으로 뽑습니다. 결과는 PPT에 슬라이드로 나갑니다.")
+        b2.setToolTip("고른 y item을 정답으로 RandomForest·ExtraTrees·GradientBoosting\n"
+                      "(설치돼 있으면 XGBoost까지)을 세우고, 모델마다 매긴 중요도 순위를\n"
+                      "평균 내 가장 유의한 계측 인자를 뽑습니다. lot이 여럿이면 lot 평균을\n"
+                      "빼고 학습해 lot 차이만으로 순위가 오르지 않게 합니다.\n"
+                      "결과는 PPT에 슬라이드로 나갑니다.")
         b2.clicked.connect(self._analyze)
         bar.addWidget(b2)
         bar.addStretch(1)
@@ -240,8 +251,24 @@ class MetrologyDialog(QDialog):
             f"탐색 X축과 요약에서 쓸 수 있습니다")
         self._show_preview(names)
 
-    def _analyze(self) -> None:
+    def _et_items(self) -> list[str]:
         from etreport.data import loader
+        st = self.state
+        have = loader.value_items(st) if st.data is not None else []
+        names = [c for c in st.aliases() if c in have] or have
+        return [c for c in names if c not in st.met_columns]
+
+    def _fill_y(self) -> None:
+        cur = self.cmb_y.currentText()
+        items = self._et_items()
+        self.cmb_y.clear()
+        self.cmb_y.addItems(items)
+        y = self.state.explore.y.split(",")[0].strip() if self.state.explore else ""
+        pick = cur if cur in items else (y if y in items else "")
+        if pick:
+            self.cmb_y.setCurrentText(pick)
+
+    def _analyze(self) -> None:
         from etreport.data import metrology as mt
         from etreport.model.aggregate import wafer_stats_of
         from etreport.ui.widgets.worker import run_in_background
@@ -249,28 +276,37 @@ class MetrologyDialog(QDialog):
         if st.data is None or not st.met_columns:
             self.lbl.setText("먼저 [불러오기]로 조회한 뒤 [분석에 활용]을 누르세요")
             return
-        have = loader.value_items(st)
-        et_items = [c for c in st.aliases() if c in have] or [
-            c for c in have if c not in st.met_columns]
+        y = self.cmb_y.currentText().strip()
+        if y not in self._et_items():
+            self.lbl.setText("y item을 고르세요 — 그 item을 설명하는 계측 인자를 찾습니다")
+            return
         k = self.spin_k.value()
-        # 계측 인자 × ET item 전수 훑기 — item이 많으면 수십 초가 걸린다.
-        # 값은 작업 세트에서 묶음으로 집계한다(item 전부를 한꺼번에 올리지 않는다).
-        self.lbl.setText("유의 인자 분석 중…")
-        run_in_background(
-            self, "유의 인자 분석",
-            lambda: mt.top_factors(
-                st.data, st.met_columns, et_items, excluded=st.hidden(), k=k,
-                stats=wafer_stats_of(st, [*st.met_columns, *et_items])),
-            done=self._analyze_done)
+        # 값은 작업 세트에서 묶음으로 wafer 집계한다(item 전부를 올리지 않는다)
+        self.lbl.setText(f"{y} 유의 인자 분석 중… (모델 학습)")
+
+        def work():
+            stats = wafer_stats_of(st, [*st.met_columns, y])
+            try:
+                return mt.vote_factors(st.data, st.met_columns, y,
+                                       excluded=st.hidden(), k=k, stats=stats)
+            except ImportError as e:            # 실패는 워커가 알림 창으로 띄운다
+                raise RuntimeError("scikit-learn이 없어 유의 인자를 분석할 수 "
+                                   "없습니다 — 새 빌드로 실행하세요") from e
+
+        run_in_background(self, "유의 인자 분석", work, done=self._analyze_done)
 
     def _analyze_done(self, top) -> None:
         st = self.state
         st.met_top = top
         if top.is_empty():
-            self.lbl.setText("유의 인자를 찾지 못했습니다 (점이 3개 미만일 수 있습니다)")
+            from etreport.data.metrology import MIN_WAFERS
+            self.lbl.setText(f"유의 인자를 찾지 못했습니다 — wafer가 {MIN_WAFERS}장 "
+                             f"이상이고 값이 절반 넘게 찬 계측 인자가 있어야 합니다")
             self.table.setRowCount(0)
             return
-        self.lbl.setText(f"top {top.height}개 — [PPT 생성] 때 슬라이드로 나갑니다")
+        models = [c[5:] for c in top.columns if c.startswith("rank_")]
+        self.lbl.setText(f"{top['item'][0]} — {'·'.join(models)} 투표 top {top.height}개 "
+                         f"· [PPT 생성] 때 슬라이드로 나갑니다")
         self._show_table(top)
 
     # ── 표시 ─────────────────────────────────────────────────

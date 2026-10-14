@@ -47,7 +47,12 @@ FILTERS = (("step_id", "step"), ("site", "site"), ("temp", "temp"))
 
 #: 자동 그룹핑 콤보의 라벨 → 모드. 멀티 lot 탭은 여기에 'split factor별'이 더 붙는다
 #: (단일 lot 탭에서는 lot 경계를 넘는 묶음이 의미가 없다).
-AUTO_MODES = {"wafer별": "wafer", "lot별": "lot", "split factor별": "factor"}
+AUTO_MODES = {"wafer별": "wafer", "lot별": "lot", "partid7별": "part7",
+              "split factor별": "factor"}
+#: partid7 = part_id 앞 7글자(LEFT(part_id, 7)) — 같은 제품의 변형을 한 묶음으로
+PART_PREFIX = 7
+NO_PART = ("part_id를 찾지 못했습니다 — part_id가 함께 적재된 DB이거나, "
+           "[도구] → fab tracking을 먼저 조회해야 합니다")
 
 #: 머리글로 인정하는 단어 — 있으면 첫 줄을 건너뛰고, 없으면 첫 줄도 자료로 본다
 _HEAD_WORDS = {"lot", "lot_id", "root_lot_id", "랏", "로트",
@@ -181,7 +186,7 @@ class GroupDialog(QDialog):
         # 자동 그룹핑 — 모드는 사용자가 고른다(wafer별 / lot별)
         fl.addWidget(QLabel("자동 그룹핑"))
         self.cmb_auto = QComboBox()
-        self.cmb_auto.addItems(["wafer별", "lot별"])
+        self.cmb_auto.addItems(["wafer별", "lot별", "partid7별"])
         fl.addWidget(self.cmb_auto)
         b = QPushButton("실행")
         b.setToolTip("조회 범위를 wafer(또는 lot)마다 그룹으로 자동 배정합니다.\n"
@@ -243,7 +248,7 @@ class GroupDialog(QDialog):
             self._lookup()
         return w
 
-    # ── 자동 그룹핑 (wafer별 / lot별 / split factor별) ───────
+    # ── 자동 그룹핑 (wafer별 / lot별 / partid7별 / split factor별) ───
     def auto_group(self, mode: str | None = None,
                    lots: list[str] | None = None) -> int:
         """조회 범위를 자동 배정. 만든 그룹 수를 반환.
@@ -269,18 +274,32 @@ class GroupDialog(QDialog):
                else self.index.filter(pl.col("lot").is_in(lots)))
         if idx.is_empty():
             return 0
-        keys = (["lot"] if mode == "lot" else ["lot", "wafer"])
         # DB 조회 순서는 보장되지 않는다 — lot·wafer 순으로 정렬해 그룹 번호와
         # 색이 실행할 때마다 달라지지 않게 한다
-        rows = idx.select(keys).unique().sort(keys).iter_rows(named=True)
+        pairs = idx.select(["lot", "wafer"]).unique().sort(["lot", "wafer"]).rows()
+        # 묶음 키 → (그룹 이름, [(lot, wafer)…])
+        buckets: dict[tuple, tuple[str, list]] = {}
+        if mode == "part7":
+            parts = loader.part_index(st, self.db_path)
+            pmap = {wnorm.key(lot, w): p for lot, w, p in parts.rows()}
+            for lot, w in pairs:
+                p = pmap.get(wnorm.key(lot, w))
+                if p:
+                    name = p[:PART_PREFIX]
+                    buckets.setdefault((name,), (name, []))[1].append((lot, w))
+            buckets = dict(sorted(buckets.items()))
+        else:
+            for lot, w in pairs:
+                # 멀티 lot 탭에서는 wafer ID만으로 어느 lot인지 알 수 없어 lot을
+                # 앞에 붙인다. 단일 lot 탭(lots=None)은 지금까지의 이름 그대로 둔다.
+                k = (lot,) if mode == "lot" else (lot, w)
+                name = lot if mode == "lot" else (
+                    f"{lot}·{w}" if lots is not None else w)
+                buckets.setdefault(k, (name, []))[1].append((lot, w))
+        if not buckets:
+            return 0
         kept = self._clear_scope(lots)         # 멱등 — 이 범위는 처음부터
-        made = 0
-        for i, rec in enumerate(rows):
-            lot = rec["lot"]
-            # 멀티 lot 탭에서는 wafer ID만으로 어느 lot인지 알 수 없어 lot을
-            # 앞에 붙인다. 단일 lot 탭(lots=None)은 지금까지의 이름 그대로 둔다.
-            name = lot if mode == "lot" else (
-                f"{lot}·{rec['wafer']}" if lots is not None else rec["wafer"])
+        for i, (name, members) in enumerate(buckets.values()):
             n = kept + i                       # 남아 있는 그룹 뒤에 이어 붙인다
             gid = self._free_gid("a")
             st.groups.append(GroupStyle(
@@ -288,16 +307,12 @@ class GroupDialog(QDialog):
                 color=REF_COLOR if n == 0 else PALETTE_OKABE[n % len(PALETTE_OKABE)],
                 symbol="d" if n == 0 else SYMBOLS[n % len(SYMBOLS)],
                 ref=n == 0))
-            members = (idx.filter(pl.col("lot") == lot) if mode == "lot"
-                       else idx.filter((pl.col("lot") == lot)
-                                       & (pl.col("wafer") == rec["wafer"])))
-            for w in dict.fromkeys(members["wafer"].to_list()):
+            for lot, w in members:
                 st.manual_groups[(lot, w, None, None, None)] = gid
-            made += 1
         if st.data is not None:
             st.data = loader.apply_manual_groups(st.data, st.manual_groups)
         self._fill_groups()
-        return made
+        return len(buckets)
 
     def _clear_scope(self, lots: list[str] | None) -> int:
         """자동 그룹핑을 다시 돌리기 전에 **그 범위만** 비운다. 남은 그룹 수 반환.
@@ -391,7 +406,9 @@ class GroupDialog(QDialog):
 
     def _auto_clicked(self) -> None:
         n = self.auto_group()
-        self.lbl_auto.setText(f"{n}개 그룹 생성" if n else "조회 결과가 없습니다")
+        self.lbl_auto.setText(f"{n}개 그룹 생성" if n else
+                              NO_PART if self.auto_mode() == "part7"
+                              else "조회 결과가 없습니다")
         self._refresh_lists()
 
     # ── 데이터 원천 ──────────────────────────────────────────
@@ -788,7 +805,7 @@ class GroupDialog(QDialog):
         fl.addStretch(1)
         fl.addWidget(QLabel("자동 그룹핑"))
         self.m_cmb_auto = QComboBox()
-        self.m_cmb_auto.addItems(["lot별", "wafer별", "split factor별"])
+        self.m_cmb_auto.addItems(["lot별", "wafer별", "partid7별", "split factor별"])
         fl.addWidget(self.m_cmb_auto)
         b = QPushButton("실행")
         b.setToolTip("고른 lot을 자동으로 그룹에 배정합니다.\n"
@@ -985,6 +1002,7 @@ class GroupDialog(QDialog):
             return
         n = self.auto_group(mode, lots)
         self.m_lbl_valid.setText(f"{n}개 그룹 생성" if n
+                                 else NO_PART if mode == "part7"
                                  else "배정할 wafer가 없습니다")
         self._m_refresh_lists()
 

@@ -80,7 +80,7 @@ class SplitSourceDialog(QDialog):
         b = QPushButton("fab tracking 자동")
         b.setToolTip("사내 fab.f_fab_tracking에서 이 lot들의 split 조건을 읽어\n"
                      "조건이 갈리는 step만 실험 축으로 올립니다.\n"
-                     "(PHOTO는 recipe, 그 외는 ppid 기준)")
+                     "(step_seq마다 ppid 기준)")
         b.clicked.connect(self._from_tracking)
         top.addWidget(b)
         self.lbl_src = QLabel(path or "(파일을 고르거나 아래에 붙여넣으세요)")

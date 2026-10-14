@@ -274,13 +274,12 @@ class ReportTab(StaleMixin, QWidget):
         return [self.slot_card, self.info]
 
     def _alias_items(self) -> list[str]:
-        """자동완성 후보 — 리포메터 ALIAS, 없으면 데이터의 item 컬럼."""
-        from etreport.data.loader import item_columns
-        st = self.state
-        if st.rf.rules:
-            return st.aliases()
-        return st.db_items or (item_columns(st.data)
-                               if st.data is not None else [])
+        """자동완성 후보 — ALIAS(없으면 DB item) + 붙여 둔 계측 열.
+
+        탐색 탭 Y와 같은 목록(`state.value_columns`)이다. 예전에는 여기만 ALIAS로
+        끝나서 inline 계측을 [분석에 활용]해도 리포트 슬롯 축에서는 고를 수 없었다.
+        """
+        return self.state.value_columns()
 
     def _x_items(self) -> list[str]:
         """X 자동완성 — 종류에 따라 뜻이 다르다(탐색 탭과 같은 규칙)."""

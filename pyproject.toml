@@ -13,6 +13,8 @@ dependencies = [
     "xlwings>=0.31",
     "requests>=2.31",
     "packaging>=23",
+    # inline 계측 유의 인자 — 모델 투표(RF·ExtraTrees·GB). xgboost는 있으면 낀다
+    "scikit-learn>=1.4",
 ]
 # bigdataquery(bdq)는 사내 패키지 — 사내 인덱스에서 별도 설치
 

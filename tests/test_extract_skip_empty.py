@@ -3,7 +3,7 @@
 빈 날짜에도 무거운 GEN 조회를 던지고, 그 빈 결과로 리포메팅까지 돌던 것이
 현장에서 가장 큰 낭비였다. 세 가지가 함께 그것을 없앤다.
   ① 행이 없는 청크는 리포메팅·적재에서 뺀다
-  ② root_lot_id 조건이 있으면 **데이터가 있는 날짜만** 먼저 묻는다(SUM 클래스)
+  ② root_lot_id 조건이 있으면 **데이터가 있는 날짜만** 먼저 묻는다(추출과 같은 GEN)
   ③ 청크 폭은 개발자 모드에서 1~N일로 바꾼다
 """
 from __future__ import annotations
@@ -39,12 +39,13 @@ def _cond(lot: str = "") -> list[Condition]:
 
 
 # ── ② 날짜 프로브 ────────────────────────────────────────────
-def test_probe_sql_asks_the_summary_class_only(catalog):
-    """무거운 GEN이 아니라 요약(SUM) 행에서 날짜만 받는다."""
+def test_probe_sql_asks_the_same_class_as_the_extraction(catalog):
+    """추출과 같은 GEN 행에서 날짜만 받는다 — SUM만 보면 SUM이 없는 날(다른 날
+    찍힌 step_seq)이 통째로 빠져 그 seq의 값이 적재되지 않았다."""
     sql = build_date_probe_sql(_cond("PA123"), D1, D5, catalog)
 
     assert "DISTINCT TO_DATE(tkout_time)" in sql
-    assert "data_class = 'SUM'" in sql
+    assert "data_class = 'GEN'" in sql
     assert "root_lot_id = 'PA123'" in sql          # 조건은 그대로 실린다
     assert "item_id" not in sql                    # item 목록은 싣지 않는다
 
