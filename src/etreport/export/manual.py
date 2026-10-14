@@ -148,16 +148,27 @@ def sections(shots: dict[str, Path] | None = None) -> list[Section]:
              "쌍마다 하나씩 그립니다. 색으로 쌍을 구분하지는 않습니다 — 점 색은 그룹의",
              "몫이니까요.",
              "",
-             "튀는 점은 클릭해서 바로 빼세요. 드래그로 네모를 그리면 그 안이 한꺼번에",
-             "빠지고, 표·PPT에서도 함께 빠집니다. 점을 wafer 평균·중앙값으로 찍고 있을",
-             "때는 점 하나가 wafer 하나라서, 찍으면 그 wafer의 측정점이 전부 빠집니다.",
-             "잘못 뺐으면 Ctrl+Z. 제외 목록은 DB가 아니라 사용자 폴더에 DB 경로별로",
-             "저장되므로, 앱을 껐다 켜도 그대로 남아 있습니다.",
-             "",
-             "점 위에 마우스를 1초쯤 올려 두면 그 점의 lot·wafer·그룹·측정 조건과",
-             "x·y 값이 뜹니다. 튀는 점이 어느 wafer인지 빼기 전에 확인해 보세요."],
+             "튀는 점을 빼는 법은 다음 장에 따로 모았습니다."],
             shot=s.get("explore"),
             caption="탐색 — 산점도, 오른쪽에 축·범위·그룹 스타일"),
+        Section(
+            "점 빼기 · 점 정보",
+            ["튀는 점은 클릭해서 바로 빼세요. 표·PPT에서도 함께 빠집니다.",
+             "제외는 화면의 일이 아니라 분석의 일이라, 한 번 빼면 모든 출력이 같은",
+             "숫자를 봅니다."],
+            rows=[
+                ("클릭", "가장 가까운 점 하나를 뺍니다"),
+                ("드래그", "네모 안의 점을 한꺼번에 뺍니다 — Ctrl+Z 한 번에 통째로 돌아옵니다"),
+                ("wafer 평균·중앙값", "점 하나 = wafer 하나 — 찍으면 그 wafer가 전부 빠집니다"),
+                ("마우스 1초 올리기", "그 점의 lot · wafer · 그룹 · 조건과 x·y 값이 뜹니다"),
+                ("Ctrl+Z", "방금 뺀 것을 되돌립니다"),
+            ],
+            tail=["빼기 전에 마우스를 올려 어느 wafer인지 먼저 확인해 보세요. 한 wafer에서만",
+                  "튀는지, 여러 wafer에 흩어져 있는지에 따라 원인이 전혀 다릅니다.",
+                  "",
+                  "제외 목록은 DB가 아니라 사용자 폴더에 DB 경로별로 저장됩니다. DB를",
+                  "건드리지 않으니 앱을 껐다 켜도 그대로 남고, 다른 사람의 분석에도",
+                  "영향을 주지 않습니다."]),
         Section(
             "기하(W/L) trend",
             ["X축에 W 또는 L을 넣으면 리포메터의 WIDTH·LENGTH 값을 X로 삼아 item마다",
@@ -274,18 +285,27 @@ def sections(shots: dict[str, Path] | None = None) -> list[Section]:
                   "같은 이름의 열은 새 값으로 바뀝니다.",
                   "",
                   "처음 조회하면 ppid가 하나라도 다른 step_seq만 골라 열로 세워 둡니다.",
-                  "모든 wafer가 같은 ppid를 받은 step은 실험과 무관하니 빠집니다.",
+                  "모든 wafer가 같은 ppid를 받은 step은 실험과 무관하니 빠집니다."]),
+        Section(
+            "inline 계측 — 유의 인자 찾기",
+            ["[도구] → [inline 계측 불러오기]도 fab tracking처럼 조회 조건을 분석 DB에서",
+             "채우고, SQL을 직접 고칠 수 있습니다. 흐름은 세 단계입니다."],
+            rows=[
+                ("불러오기", "분석 중인 lot의 계측값을 조회해 미리보기만 합니다"),
+                ("분석에 활용", "(lot, wafer)로 붙입니다 — 이때부터 산점도 축에서 고를 수 있어요"),
+                ("유의 인자 분석", "y item 하나를 가장 잘 설명하는 계측 인자를 순위로 뽑습니다"),
+            ],
+            tail=["유의 인자는 모델 여럿의 투표로 정합니다. RandomForest · ExtraTrees ·",
+                  "GradientBoosting(설치돼 있으면 XGBoost까지)이 각자 계측 인자의 중요도",
+                  "순위를 매기고, 그 순위를 평균 냅니다. 한 모델만 좋아하는 인자에 속지",
+                  "않으려는 장치예요. 결과의 '득표'는 그 인자를 top-k에 올린 모델 수입니다.",
                   "",
-                  "inline 계측([도구] → [inline 계측 불러오기])도 같은 방식으로 기간과",
-                  "SQL을 손볼 수 있습니다. [분석에 활용]으로 붙인 계측값은 산점도",
-                  "축으로 바로 고를 수 있어요.",
+                  "lot이 여럿이면 lot 평균을 빼고 학습합니다. 그러지 않으면 lot끼리 평균만",
+                  "다른 인자가 1등을 차지합니다 — 계측값이 ET를 설명하는 게 아니라 lot이",
+                  "둘 다를 밀어 올린 것뿐인데도요.",
                   "",
-                  "[유의 인자 분석]은 y item 하나를 고르면 RandomForest·ExtraTrees·",
-                  "GradientBoosting(설치돼 있으면 XGBoost까지)이 저마다 계측 인자의",
-                  "중요도 순위를 매기고, 그 순위를 평균 내 가장 유의한 인자를 뽑습니다.",
-                  "한 모델만 좋아하는 인자에 속지 않으려고 투표로 정합니다. lot이",
-                  "여럿이면 lot 평균을 빼고 학습해서, lot 차이만으로 순위가 오르지",
-                  "않게 했습니다."]),
+                  "wafer가 6장 미만이거나 값이 절반 넘게 빈 인자는 순위에서 뺍니다. 결과는",
+                  "[PPT 생성] 때 표 한 장으로 나갑니다."]),
         Section(
             "예약 실행 — 앱을 켜 두지 않아도",
             ["[데이터] 화면의 [예약 실행…]으로 프리셋 하나를 정해진 시각에 자동으로",
@@ -454,23 +474,25 @@ def _section_page(painter, page, sec: Section, index: int, total: int,
     painter.setFont(f)
     painter.setPen(QColor(TOKENS["TEXT"]))
     top = int(page.height() * 0.075)
-    text_h = int(page.height() * (0.36 if sec.shot else 0.85))
+    # 본문 칸은 넉넉히 잡고, 캡처는 **실제로 그린 본문 바로 아래**에 둔다. 예전에는
+    # 본문을 페이지의 36%로 잘라서, 글이 길면 끝 줄이 캡처 밑으로 숨었다.
+    text_h = int(page.height() * 0.85)
     y = page.top() + top
     line_h = painter.fontMetrics().lineSpacing()
+    flags = Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap
     if sec.body:
-        painter.drawText(QRectF(page.left(), y, page.width(), text_h),
-                         Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap,
-                         "\n".join(sec.body))
-        y += line_h * len(sec.body)
+        box = painter.drawText(QRectF(page.left(), y, page.width(), text_h),
+                               flags, "\n".join(sec.body))
+        y = box.bottom()
     if sec.rows:
         y = _rows(painter, page, y + line_h * 0.4, sec.rows, QRectF, Qt, QFont)
     if sec.tail:
         painter.setFont(f)
         painter.setPen(QColor(TOKENS["TEXT"]))
-        painter.drawText(QRectF(page.left(), y + line_h * 0.4, page.width(),
-                                text_h),
-                         Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap,
-                         "\n".join(sec.tail))
+        box = painter.drawText(QRectF(page.left(), y + line_h * 0.4, page.width(),
+                                      text_h), flags, "\n".join(sec.tail))
+        y = box.bottom()
+    text_end = y
 
     _footer(painter, page, index, total, version, QRectF, Qt, QFont)
 
@@ -480,7 +502,7 @@ def _section_page(painter, page, sec: Section, index: int, total: int,
     if img.isNull():
         log.warning("캡처를 읽지 못했습니다: %s", sec.shot)
         return
-    area_top = page.top() + top + text_h + int(page.height() * 0.02)
+    area_top = int(text_end + page.height() * 0.025)
     area_h = page.bottom() - area_top - int(page.height() * 0.08)
     scaled = img.scaled(page.width(), area_h, Qt.KeepAspectRatio,
                         Qt.SmoothTransformation)
