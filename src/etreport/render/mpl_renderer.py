@@ -79,6 +79,17 @@ def lot_markers(data: dict[str, pl.DataFrame]) -> dict[str, str]:
     return {lot: marks[i % len(marks)] for i, lot in enumerate(lots)}
 
 
+def _shown(data: dict[str, pl.DataFrame],
+           styles: list[GroupStyle]) -> list[pl.DataFrame]:
+    """보이기를 끈 그룹을 뺀 프레임들 — 자동 축 범위는 **그려지는 점**으로만 잡는다.
+
+    숨긴 그룹까지 세면 체크를 꺼도 축이 그 그룹 자리를 비워 둔 채로 남는다.
+    lot 심볼(`lot_markers`)은 일부러 전체를 본다 — 보이기에 따라 모양이 바뀌면 안 된다.
+    """
+    hidden = {st.gid for st in styles if not st.visible}
+    return [df for gid, df in data.items() if gid not in hidden]
+
+
 def _lot_parts(df: pl.DataFrame, lot_split: bool, markers: dict[str, str],
                st: GroupStyle) -> list[tuple[pl.DataFrame, str, str]]:
     """(하위 프레임, marker, 범례 라벨) 목록.
@@ -230,7 +241,7 @@ def render(spec: PlotSpec,
     pairs = spec.pairs()
     # 데이터 min/max 수집 (축 규칙 입력)
     dr: dict[str, tuple[float, float]] = {}
-    for df in data.values():
+    for df in _shown(data, styles):
         for a in {p for pr in pairs for p in pr}:
             if a in df.columns and df[a].drop_nulls().len():
                 lo, hi = float(df[a].min()), float(df[a].max())
@@ -460,7 +471,7 @@ def _render_trend(spec: PlotSpec,
                              max(xvals) if xvals else None, rf, False)
     y_min = y_max = None
     for it in plotted:
-        for df in data.values():
+        for df in _shown(data, styles):
             col = df[it].drop_nulls() if it in df.columns else None
             if col is None or col.is_empty():
                 continue

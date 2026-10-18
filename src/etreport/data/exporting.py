@@ -14,34 +14,45 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-#: 이 행 수를 넘으면 SBDF(메모리 경유) 내보내기는 헤드리스에서 건너뛴다 —
-#: pandas 프레임으로 올리다 OOM으로 죽기 전에 막는다.
-SBDF_WARN_ROWS = 2_000_000
+#: SBDF는 표 전체를 메모리에 올린다 — DuckDB 결과·pandas 프레임·spotfire 변환본이
+#: 한때 함께 산다고 보고 셀 크기에 이 배수를 건다.
+SBDF_COPIES = 3
 
-# pandas 전체 프레임과 SBDF 변환은 같은 데이터를 여러 벌 붙들 수 있다.
-SBDF_MAX_BYTES = 1 << 30
+#: 가용 메모리 중 SBDF 한 번에 쓸 수 있는 몫. 나머지는 Excel·화면 몫이다.
+SBDF_MEMORY_RATIO = 0.5
+
+#: 가용 메모리를 못 읽을 때 쓰는 예산 — 물리 메모리 총량의 이 비율.
+SBDF_TOTAL_RATIO = 0.25
+
+# pandas 셀 크기: 숫자·시각은 8바이트, 문자열은 파이썬 객체 머리(≈56)+포인터.
+_CELL_BYTES = 8
+_STR_CELL_BYTES = 64
+
+
+def sbdf_budget() -> int:
+    """SBDF 내보내기에 쓸 수 있는 바이트 수."""
+    from etreport.data.extractor import available_memory_bytes
+    from etreport.data.loader import total_memory_bytes
+
+    available = available_memory_bytes()
+    if available:
+        return int(available * SBDF_MEMORY_RATIO)
+    return int((total_memory_bytes() or 8 << 30) * SBDF_TOTAL_RATIO)
 
 
 def preflight_sbdf(con, sql: str) -> int:
-    """pandas/Arrow 할당 전에 안전하지 않은 전체 프레임 내보내기를 막는다.
+    """pandas/Arrow 할당 전에 메모리에 안 들어갈 내보내기를 막는다.
 
-    행 수·문자열 payload 집계는 DuckDB 안에서 끝낸다. 행 수만이 아니라 넓은
-    프레임·객체 오버헤드·변환 중 복사본까지 예산에 넣는다. CSV/parquet COPY는
-    직접 스트리밍하므로 이 가드를 일부러 거치지 않는다.
+    행 수·문자열 길이 집계는 DuckDB 안에서 끝낸다. 추정은 실제 pandas 크기
+    (숫자 8바이트/셀, 문자열 객체 + 내용) × `SBDF_COPIES`이고, 예산은 **지금 남은
+    메모리**를 따른다(`sbdf_budget`). 예전에는 셀당 512바이트·1GB 고정 상한이라
+    item 수백 개짜리 결과는 몇만 행만 돼도 거부됐다. CSV/parquet COPY는 직접
+    스트리밍하므로 이 가드를 일부러 거치지 않는다.
     """
-    from etreport.data.extractor import available_memory_bytes
-
     query = sql.strip().rstrip(";")
     rows = int(con.execute(f"SELECT count(*) FROM (\n{query}\n)").fetchone()[0])
-    if rows > SBDF_WARN_ROWS:
-        raise ValueError(f"SBDF 행 수 상한({SBDF_WARN_ROWS:,}) 초과: {rows:,}행. "
-                         "CSV 또는 parquet으로 저장하세요.")
     columns = con.execute(f"DESCRIBE (\n{query}\n)").fetchall()
-    available = available_memory_bytes()
-    budget = min(SBDF_MAX_BYTES, available // 4) if available else SBDF_MAX_BYTES
-    estimated = rows * max(1, len(columns)) * 128 * 4
-    if estimated > budget:
-        raise ValueError("SBDF 메모리 안전 상한 초과 — CSV 또는 parquet으로 저장하세요.")
+    per_row = 0
     payloads = []
     for name, dtype, *_ in columns:
         if any(token in dtype for token in ("[", "STRUCT", "MAP", "UNION")):
@@ -49,14 +60,26 @@ def preflight_sbdf(con, sql: str) -> int:
                              "CSV 또는 parquet으로 저장하세요.")
         quoted = '"' + name.replace('"', '""') + '"'
         if dtype == "VARCHAR":
-            payloads.append(f"coalesce(sum(octet_length(encode({quoted}))), 0)")
+            per_row += _STR_CELL_BYTES
+            # 파이썬 str은 한글을 글자당 2~4바이트로 든다 — UTF-8 길이 ×2로 넉넉히
+            payloads.append(f"coalesce(sum(octet_length(encode({quoted}))), 0) * 2")
         elif dtype == "BLOB":
+            per_row += _STR_CELL_BYTES
             payloads.append(f"coalesce(sum(octet_length({quoted})), 0)")
+        else:
+            per_row += _CELL_BYTES
+    estimated = rows * per_row
     if payloads:
         size = con.execute(f"SELECT {' + '.join(payloads)} FROM (\n{query}\n)").fetchone()[0]
-        estimated += int(size) * 4
+        estimated += int(size)
+    estimated *= SBDF_COPIES
+    budget = sbdf_budget()
     if estimated > budget:
-        raise ValueError("SBDF 메모리 안전 상한 초과 — CSV 또는 parquet으로 저장하세요.")
+        raise ValueError(
+            f"SBDF 메모리 부족 — 필요 약 {estimated / (1 << 30):.1f}GB, "
+            f"쓸 수 있는 메모리 약 {budget / (1 << 30):.1f}GB ({rows:,}행 × "
+            f"{len(columns):,}열).\n조건을 좁히거나 CSV·parquet으로 저장하세요 "
+            "(Spotfire에서 같은 결과로 열립니다).")
     return rows
 
 

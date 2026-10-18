@@ -199,7 +199,10 @@ def available_memory_bytes() -> int | None:
         page_size = os.sysconf("SC_PAGE_SIZE")
         return int(pages) * int(page_size)
     except (AttributeError, OSError, ValueError):
-        return None
+        pass
+    # Windows에는 sysconf가 없다 — 예전에는 여기서 None이 되어 SBDF 예산이 1GB로 묶였다
+    from etreport.data.loader import windows_memory
+    return windows_memory("ullAvailPhys")
 
 
 def plan_workers(available_bytes: int | None, estimated_bytes: int | None,

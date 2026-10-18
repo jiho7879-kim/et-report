@@ -19,23 +19,43 @@ def test_sbdf_small_result_and_trailing_semicolon(con):
     assert exporting.preflight_sbdf(con, "select 1 as n, '한글' as s;") == 1
 
 
-def test_sbdf_rejects_wide_result_below_row_ceiling(con, monkeypatch):
-    monkeypatch.setattr(exporting, "SBDF_MAX_BYTES", 1024)
-    with pytest.raises(ValueError, match="메모리 안전 상한"):
+def test_sbdf_rejects_wide_result(con, monkeypatch):
+    monkeypatch.setattr(exporting, "sbdf_budget", lambda: 3 * 8 * 3 - 1)
+    with pytest.raises(ValueError, match="메모리 부족"):
         exporting.preflight_sbdf(con, "select 1 a, 2 b, 3 c")
 
 
 def test_sbdf_counts_string_payload(con, monkeypatch):
-    monkeypatch.setattr(exporting, "SBDF_MAX_BYTES", 2048)
-    with pytest.raises(ValueError, match="메모리 안전 상한"):
+    monkeypatch.setattr(exporting, "sbdf_budget", lambda: 2048)
+    with pytest.raises(ValueError, match="메모리 부족"):
         exporting.preflight_sbdf(con, "select repeat('한', 1000) as text")
 
 
 def test_sbdf_respects_available_memory(con, monkeypatch):
     from etreport.data import extractor
-    monkeypatch.setattr(extractor, "available_memory_bytes", lambda: 1000)
-    with pytest.raises(ValueError, match="메모리 안전 상한"):
+    monkeypatch.setattr(extractor, "available_memory_bytes", lambda: 10)
+    with pytest.raises(ValueError, match="메모리 부족"):
         exporting.preflight_sbdf(con, "select 1")
+
+
+def test_sbdf_accepts_realistic_wide_result(con, monkeypatch):
+    """★ 20만 행 × item 300열(숫자)은 4GB 여유에서 통과한다.
+
+    예전 추정(셀당 512바이트·1GB 고정)은 이걸 30GB로 보고 거부했다 — SQL 창의
+    SBDF 저장이 사실상 막혀 있던 원인.
+    """
+    from etreport.data import extractor
+    monkeypatch.setattr(extractor, "available_memory_bytes", lambda: 4 << 30)
+    cols = ", ".join(f"random() AS i{n}" for n in range(300))
+    sql = f"select range AS k, 'L1' AS lot, {cols} from range(200000)"
+    assert exporting.preflight_sbdf(con, sql) == 200_000
+
+
+def test_sbdf_budget_falls_back_to_total_memory(monkeypatch):
+    from etreport.data import extractor, loader
+    monkeypatch.setattr(extractor, "available_memory_bytes", lambda: None)
+    monkeypatch.setattr(loader, "total_memory_bytes", lambda: 16 << 30)
+    assert exporting.sbdf_budget() == 4 << 30
 
 
 def test_sbdf_rejects_nested_columns(con):

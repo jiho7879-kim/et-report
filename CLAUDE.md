@@ -113,7 +113,7 @@ myenv/bin/ruff check --fix .                        # 안전한 것만 자동 �
 | `test_requests_9.py` | 요청 9건 — 리포트 X 스케일·한쪽 범위·흔적 없는 제외·드래그 네모·plot별 제외·그룹 스타일 보존·PPT 색·막대 |
 | `test_requests_14.py` | 요청 14건 — GEN 조건·적재 보전·산점도 설명·공통 legend·SPEC 열·조건 모드(LIKE·부등호)·예약 실행 왕복·계측/tracking 재부착·step_seq 표 |
 | `test_requests_13.py` | 요청 13건 — 단일 exe·리소스 경로·빌드 스탬프·fab tracking 이름 컬럼·조회 조건 자동 채움·boxplot·plot 종류·VARCHAR 읽기·Tukey 필터·예약 실행 |
-| `test_export_safety.py` | 적재 후 자동 [적용] 없음 · SBDF 사전 점검(행 수·메모리 예산)이 `.df()`보다 먼저 · CSV/parquet은 COPY 그대로 |
+| `test_export_safety.py` | 적재 후 자동 [적용] 없음 · SBDF 사전 점검(실제 pandas 크기 × 3 ≤ 가용 메모리의 절반)이 `.df()`보다 먼저 · CSV/parquet은 COPY 그대로 |
 | `test_ui_feature_requests.py` | 실험 조건 열이 범주 축으로 붙는다 · 빈 심볼 · 요약 표 복사(HTML: 병합·색 + TSV) |
 | `test_extract_skip_empty.py` | 빈 청크 건너뛰기 · 날짜 프로브(GEN) · 청크 폭(개발자 모드) |
 | `test_bigset.py` (slow) | 실측 규모 성능·정확성 회귀 (`-s`로 단계별 시간 출력) |

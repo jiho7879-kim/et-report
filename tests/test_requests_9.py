@@ -257,3 +257,21 @@ def test_inline_and_tracking_columns_reach_plots_and_ppt(qapp, demo_state):
         data = _plot_data(st, "", spec)
         assert any(spec.x in d.columns and d[spec.x].drop_nulls().len()
                    for d in data.values()), f"PPT 데이터에 {spec.x}가 없다"
+
+
+# ── 그룹 체크를 끄면 자동 축이 남은 그룹에 맞춰진다 ─────────────
+def test_hidden_group_leaves_autoscale():
+    import polars as pl
+
+    from etreport.data.reformatter import Reformatter
+    from etreport.render.mpl_renderer import render
+
+    near = pl.DataFrame({"key": ["a", "b"], "gid": ["g1"] * 2,
+                         "A": [1.0, 2.0], "B": [1.0, 2.0]})
+    far = pl.DataFrame({"key": ["c"], "gid": ["g2"], "A": [1000.0], "B": [1000.0]})
+    styles = [GroupStyle(gid="g1", name="g1"),
+              GroupStyle(gid="g2", name="g2", visible=False)]
+    fig = render(PlotSpec(x="A", y="B"), {"g1": near, "g2": far}, styles,
+                 Reformatter(rules=[]), [], (4, 3))
+    ax = fig.axes[0]
+    assert ax.get_xlim()[1] < 10 and ax.get_ylim()[1] < 10

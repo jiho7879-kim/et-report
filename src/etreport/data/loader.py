@@ -43,6 +43,11 @@ def total_memory_bytes() -> int | None:
         return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
     except (AttributeError, OSError, ValueError):
         pass
+    return windows_memory("ullTotalPhys")
+
+
+def windows_memory(field: str) -> int | None:
+    """`GlobalMemoryStatusEx`의 한 필드(Windows가 아니거나 못 읽으면 None)."""
     try:
         import ctypes
 
@@ -59,7 +64,7 @@ def total_memory_bytes() -> int | None:
         st = _MemStatus()
         st.dwLength = ctypes.sizeof(st)
         if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
-            return int(st.ullTotalPhys)
+            return int(getattr(st, field))
     except Exception:                          # noqa: BLE001 — 못 읽으면 기본값
         pass
     return None
