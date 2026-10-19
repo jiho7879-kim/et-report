@@ -11,6 +11,54 @@ import pytest
 from tests import factory
 
 
+@pytest.fixture(scope="session")
+def qapp():
+    """offscreen QApplication 하나 + 앱과 같은 QSS(`app._load_style`).
+
+    예전에는 파일마다 같은 픽스처를 한 벌씩(22벌) 두고 끝날 때 `processEvents()`를
+    불렀다. 그 한 번이 그 파일에서 그린 캔버스 수십 개의 밀린 `draw_idle`을
+    전부 실행해 파일 하나에 12초씩 걸렸다(test_perf_plot). 지금은 이벤트를 돌리지
+    않고, 남은 창은 `_drop_widgets`가 파일 끝에서 부순다.
+    """
+    try:
+        from PySide6.QtWidgets import QApplication
+    except ImportError:                                # pragma: no cover
+        pytest.skip("PySide6 없음")
+    app = QApplication.instance() or QApplication([])
+    from etreport.app import _load_style
+    _load_style(app)
+    return app
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _drop_widgets():
+    """파일이 끝나면 남은 창을 전부 부순다 — 안 그러면 다음 파일이 그만큼 느려진다.
+
+    테스트들은 창을 `close()`만 하고 지우지 않아서, 메뉴·팝업까지 합쳐 최상위
+    위젯이 파일마다 수백 개씩 쌓였다(측정: 창 조립 3초가 스위트 뒤쪽에서 29초).
+    파일 단위인 이유: 모듈 범위로 창 하나를 같이 쓰는 파일이 있다.
+    """
+    yield
+    import sys
+    if "PySide6.QtWidgets" not in sys.modules:
+        return
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is not None:
+        _drop_all(app)
+
+
+def _drop_all(app) -> None:
+    import gc
+
+    from PySide6.QtCore import QEvent
+    for w in app.topLevelWidgets():
+        w.close()
+        w.deleteLater()
+    app.sendPostedEvents(None, QEvent.DeferredDelete)
+    gc.collect()
+
+
 def qt_until(pred, ms: int = 3000) -> bool:
     """조건이 참이 될 때까지 Qt 이벤트를 돌린다.
 

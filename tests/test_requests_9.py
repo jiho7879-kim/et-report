@@ -11,15 +11,6 @@ import pytest
 from etreport.model.specs import GroupStyle, PlotSpec
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:                                # pragma: no cover
-        pytest.skip("PySide6 없음")
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def demo_state(appdata):
     from etreport import demo
@@ -297,3 +288,35 @@ def test_wafer_mode_drag_excludes_wafers_in_box(qapp, demo_state):
     assert set(keys[0]) <= demo_state.excluded
     demo_state.explore.mode = "site"
     tab.deleteLater()
+
+
+def test_exclusion_list_groups_by_action_and_restores(qapp, demo_state):
+    """제외 목록 — 한 번에 뺀 wafer가 한 줄, 고른 줄만 되살린다(Ctrl+Z 순서 무관)."""
+    from etreport.data.loader import exclusion_groups
+    from etreport.ui.widgets.exclusion_dialog import ExclusionDialog
+
+    st = demo_state
+    st.excluded.clear()
+    st.excl_points = {}
+    rows = st.data.filter(st.data["wafer"].is_in(st.data["wafer"].unique()[:2].to_list()))
+    keys = rows["key"].to_list()
+    st.excluded.update(keys)
+    g = exclusion_groups(st)
+    assert g["n"].sum() == len(keys)
+    assert set(g["wafer"].to_list()) == set(rows["wafer"].cast(str).unique())
+
+    restored = []
+
+    def restore(ks):
+        restored.extend(ks)
+        st.excluded.difference_update(ks)
+
+    dlg = ExclusionDialog(st, restore)
+    dlg.table.selectRow(0)
+    dlg.btn_sel.click()
+    assert set(restored) == set(g["keys"][0])
+    assert st.excluded == set(keys) - set(restored)
+    assert dlg.table.rowCount() == g.height - 1      # 되살린 줄은 목록에서 빠진다
+    dlg.btn_all.click()
+    assert not st.excluded and not dlg.btn_all.isEnabled()
+    dlg.deleteLater()

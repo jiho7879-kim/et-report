@@ -623,6 +623,35 @@ def sync_exclusion(state: AppState, key: str | list[str], exclude: bool,
         exclusions.remove(state.db_path, state.excl_points, key)
 
 
+def exclusion_groups(state: AppState) -> pl.DataFrame:
+    """손으로 뺀 점을 (lot, wafer, 사유, 시각)으로 묶은 목록 — 제외 목록 창용.
+
+    드래그 한 번은 같은 시각으로 기록되므로 한 줄이 곧 한 번의 동작이다. 기준은
+    `state.excluded`다 — 사이드카(`excl_points`)는 DB 경로가 없으면 기록되지
+    않으므로 사유·시각만 거기서 빌린다. 읽지 않은 lot의 점은 lot·wafer가 빈다.
+    열: lot · wafer · n · reason · at · keys(list).
+    """
+    schema = {"key": pl.Utf8, "reason": pl.Utf8, "at": pl.Utf8}
+    pts = getattr(state, "excl_points", {}) or {}
+    marks = pl.DataFrame({
+        "key": list(state.excluded),
+        "reason": [pts.get(k, {}).get("reason", "") for k in state.excluded],
+        "at": [pts.get(k, {}).get("at", "") for k in state.excluded],
+    }, schema=schema)
+    if state.data is not None and {"lot", "wafer"} <= set(state.data.columns):
+        where = state.data.select("key", pl.col("lot").cast(pl.Utf8),
+                                  pl.col("wafer").cast(pl.Utf8))
+        marks = marks.join(where, on="key", how="left")
+    else:
+        marks = marks.with_columns(lot=pl.lit(None, pl.Utf8),
+                                   wafer=pl.lit(None, pl.Utf8))
+    return (marks.group_by("lot", "wafer", "reason", "at")
+            .agg(pl.len().alias("n"), pl.col("key").alias("keys"))
+            .sort(["at", "lot", "wafer"], descending=[True, False, False],
+                  nulls_last=True)
+            .select("lot", "wafer", "n", "reason", "at", "keys"))
+
+
 def exclusion_frame(state: AppState, include_filtered: bool = False
                     ) -> pl.DataFrame:
     """PPT 제외 이력 슬라이드용.

@@ -617,15 +617,6 @@ def test_pipeline_is_reachable_without_qt():
 
 
 # ── 창 조립 스모크 ──────────────────────────────────────────
-@pytest.fixture(scope="module")
-def qapp():
-    try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:                                # pragma: no cover
-        pytest.skip("PySide6 없음")
-    app = QApplication.instance() or QApplication([])
-    yield app
-    app.processEvents()
 
 
 def test_fabtrack_dialog_builds_and_writes_sql(qapp, demo_state, appdata):

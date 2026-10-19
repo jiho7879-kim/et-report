@@ -18,19 +18,6 @@ import pytest
 from etreport.ui import guidance
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:                                # pragma: no cover
-        pytest.skip("PySide6 없음")
-    app = QApplication.instance() or QApplication([])
-    from etreport.app import _load_style
-    _load_style(app)
-    yield app
-    app.processEvents()
-
-
 @pytest.fixture
 def ws(qapp, appdata):
     from etreport.config.settings import Settings

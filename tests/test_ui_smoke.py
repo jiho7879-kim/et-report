@@ -15,17 +15,6 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:                                # pragma: no cover
-        pytest.skip("PySide6 없음")
-    app = QApplication.instance() or QApplication([])
-    yield app
-    app.processEvents()
-
-
 @pytest.fixture(autouse=True)
 def _no_modal_dialogs(qapp, no_modal_dialogs):
     """모달 차단은 conftest의 공용 픽스처가 한다 — 여기서는 자동으로 걸기만."""

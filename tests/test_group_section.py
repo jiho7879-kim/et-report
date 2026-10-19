@@ -19,17 +19,6 @@ import pytest
 from tests.conftest import qt_until
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:                                # pragma: no cover
-        pytest.skip("PySide6 없음")
-    app = QApplication.instance() or QApplication([])
-    yield app
-    app.processEvents()
-
-
 @pytest.fixture
 def sec(qapp, appdata):
     """데모 상태 위의 섹션 하나 — 탭도 창도 필요 없다."""

@@ -22,17 +22,6 @@ from etreport.model.specs import GroupStyle, PlotSpec
 from etreport.render import mpl_renderer
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:                                # pragma: no cover
-        pytest.skip("PySide6 없음")
-    app = QApplication.instance() or QApplication([])
-    yield app
-    app.processEvents()
-
-
 @pytest.fixture
 def state(qapp, appdata):
     from etreport import demo

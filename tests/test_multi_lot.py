@@ -481,15 +481,6 @@ def test_majority_code_falls_back_when_lot_missing():
 
 
 # ── §4 멀티 lot 탭 ───────────────────────────────────────────
-@pytest.fixture(scope="module")
-def qapp():
-    try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:                                # pragma: no cover
-        pytest.skip("PySide6 없음")
-    app = QApplication.instance() or QApplication([])
-    yield app
-    app.processEvents()
 
 
 def _dialog(state, db_path=""):

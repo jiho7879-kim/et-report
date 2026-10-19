@@ -27,17 +27,6 @@ def _met(rows: list[dict]) -> pl.DataFrame:
     return pl.DataFrame([{**ROW, **r} for r in rows])
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:                                # pragma: no cover
-        pytest.skip("PySide6 없음")
-    app = QApplication.instance() or QApplication([])
-    yield app
-    app.processEvents()
-
-
 # ── SQL ──────────────────────────────────────────────────────
 def test_sql_requires_lots():
     """★ lot 없이 부르면 전체 스캔이 되므로 막는다."""

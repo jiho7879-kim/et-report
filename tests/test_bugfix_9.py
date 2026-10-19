@@ -37,17 +37,6 @@ def _load_db(tmp_path, rows: list[dict], name: str = "et.duckdb") -> str:
     return str(dbp)
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:                                # pragma: no cover
-        pytest.skip("PySide6 없음")
-    app = QApplication.instance() or QApplication([])
-    yield app
-    app.processEvents()
-
-
 # ── 1 · 9 배포본에서 터지던 import/시그니처 ──────────────────
 def test_session_can_import_table_mode_of():
     """[적용] 경로가 pptgen.table_mode_of를 실제로 부른다(§10.8 'wide' 흡수)."""

@@ -20,19 +20,6 @@ NARROW = (1366, 768)
 
 
 @pytest.fixture(scope="module")
-def qapp():
-    try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:                                # pragma: no cover
-        pytest.skip("PySide6 없음")
-    app = QApplication.instance() or QApplication([])
-    from etreport.app import _load_style
-    _load_style(app)
-    yield app
-    app.processEvents()
-
-
-@pytest.fixture(scope="module")
 def win(qapp, tmp_path_factory):
     """창 하나를 모듈 안에서 돌려 쓴다(탭 전환마다 plot을 다시 그리므로)."""
     from _pytest.monkeypatch import MonkeyPatch

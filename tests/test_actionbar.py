@@ -18,19 +18,6 @@ import pytest
 
 
 @pytest.fixture(scope="module")
-def qapp():
-    try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:                                # pragma: no cover
-        pytest.skip("PySide6 없음")
-    app = QApplication.instance() or QApplication([])
-    from etreport.app import _load_style
-    _load_style(app)
-    yield app
-    app.processEvents()
-
-
-@pytest.fixture(scope="module")
 def win(qapp, tmp_path_factory):
     """창 하나를 모듈 안에서 돌려 쓴다 — 탭을 옮기면 plot 6장을 다시 그리므로
     테스트마다 창을 새로 조립하면 이 파일만 90초가 된다. 여기 검사는 배치와

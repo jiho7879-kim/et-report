@@ -16,19 +16,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:                                # pragma: no cover
-        pytest.skip("PySide6 없음")
-    app = QApplication.instance() or QApplication([])
-    from etreport.app import _load_style
-    _load_style(app)
-    yield app
-    app.processEvents()
-
-
 @pytest.fixture
 def win(qapp, appdata):
     from etreport import demo

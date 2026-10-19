@@ -62,7 +62,7 @@ _RAIL_WIDGETS = frozenset({
     "tukey_section", "chk_tukey", "cmb_tukey_k", "cmb_tukey_scope",
     "btn_tukey_log", "sources_section", "lbl_sources", "btn_factor",
     "lbl_factor", "btn_apply", "lbl_apply", "btn_apply_log", "lbl_report", "lbl_summary",
-    "btn_undo",
+    "btn_undo", "btn_excl_list",
 })
 
 
@@ -770,6 +770,7 @@ class AnalysisWorkspace(QWidget):
             self._load_lots(c.db_path)
         self._refresh_lot_title()
         self.btn_undo.setEnabled(bool(st.undo_stack))
+        self.btn_excl_list.setEnabled(bool(st.excluded))
 
         # 이상치 절은 **접힌 제목이 상태를 말한다** — 펼치지 않고도 켜져 있는지,
         # 몇 점이 걸렸는지 보인다(lot 절과 같은 관용구).
@@ -838,6 +839,23 @@ class AnalysisWorkspace(QWidget):
             if where is st.excluded:
                 sync_exclusion(st, keys, False)
             self.bus.exclusion_changed.emit()
+
+    def _open_exclusions(self) -> None:
+        from etreport.ui.widgets.exclusion_dialog import ExclusionDialog
+        ExclusionDialog(self.state, self._restore_points, self).exec()
+
+    def _restore_points(self, keys: list[str]) -> None:
+        """제외 목록에서 고른 점을 되살린다 — 되돌리기와 같은 길(사이드카·알림)."""
+        from etreport.data.loader import sync_exclusion
+        from etreport.ui.widgets.toast import toast
+        st = self.state
+        back = [k for k in keys if k in st.excluded]
+        if not back:
+            return
+        st.excluded.difference_update(back)
+        sync_exclusion(st, back, False)
+        self.bus.exclusion_changed.emit()
+        toast(self, f"측정점 {len(back):,}개를 되살렸습니다")
 
     def _clear_cache(self) -> None:
         from etreport.data import xlio

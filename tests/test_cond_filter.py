@@ -148,15 +148,6 @@ def demo_state(appdata):
     return st
 
 
-@pytest.fixture
-def qapp():
-    try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:                                # pragma: no cover
-        pytest.skip("PySide6 없음")
-    return QApplication.instance() or QApplication([])
-
-
 def test_rail_has_the_filter_and_defers_the_reload(qapp, demo_state):
     """★ 조건은 레일(왼쪽)에 있고, 바꾸면 [적용]이 dirty가 될 뿐이다."""
     from etreport.config.settings import Settings

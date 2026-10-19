@@ -13,7 +13,6 @@ from __future__ import annotations
 import os
 
 import polars as pl
-import pytest
 
 from etreport.model import templates as T
 from etreport.model.specs import TableRowSpec
@@ -171,15 +170,6 @@ def test_ppt_label_width_follows_cat_count():
 
 
 # ── 화면(요약 탭) ─────────────────────────────────────────
-@pytest.fixture(scope="module")
-def qapp():
-    try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:                                # pragma: no cover
-        pytest.skip("PySide6 없음")
-    app = QApplication.instance() or QApplication([])
-    yield app
-    app.processEvents()
 
 
 def test_summary_tab_shows_every_cat_column(qapp, appdata):

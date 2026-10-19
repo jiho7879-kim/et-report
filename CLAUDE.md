@@ -128,6 +128,10 @@ UI는 스모크 수준만 있다(`test_ui_smoke.py`, offscreen). 화면을 바�
 아닌 곳에서 기능을 끝까지 밟아 볼 수 있는 유일한 길이다). **headless 테스트에서 모달 창
 (`QMessageBox`, `QProgressDialog`)은 영원히 멈춘다** — 그 경로를 테스트하려면
 `no_modal_dialogs` 픽스처처럼 반드시 가로채야 한다.
+`qapp`은 `tests/conftest.py`에 **한 벌만** 둔다(세션 범위, QSS 적용) — 파일마다
+다시 만들고 끝에서 `processEvents()`를 부르던 시절에는 밀린 `draw_idle`이 파일마다
+수십 장씩 그려졌다. 남은 창은 `_drop_widgets`가 파일 끝에서 부순다(창이 쌓이면
+뒤쪽 파일의 창 조립이 3초 → 29초가 됐다).
 
 ## 리눅스/WSL에서 못 하는 것
 - **xlsx 읽기·쓰기** — `xlwings`는 COM(Windows Excel)이 필요하다. xlsx 리포메터·

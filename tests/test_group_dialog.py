@@ -52,17 +52,6 @@ def db_path(tmp_path):
     return str(out)
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:                                # pragma: no cover
-        pytest.skip("PySide6 없음")
-    app = QApplication.instance() or QApplication([])
-    yield app
-    app.processEvents()
-
-
 def _dialog(state, db_path=""):
     from etreport.ui.widgets.group_dialog import GroupDialog
     return GroupDialog(state, None, db_path=db_path)

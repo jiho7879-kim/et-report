@@ -23,18 +23,6 @@ def _wait(qapp_cls, loop_cls, ms: int = 400) -> None:
         qapp_cls.processEvents(loop_cls.AllEvents, 20)
 
 
-
-@pytest.fixture(scope="module")
-def qapp():
-    try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:                                # pragma: no cover
-        pytest.skip("PySide6 없음")
-    app = QApplication.instance() or QApplication([])
-    yield app
-    app.processEvents()
-
-
 @pytest.fixture
 def demo_state(appdata):
     from etreport import demo

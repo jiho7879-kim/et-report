@@ -16,19 +16,6 @@ import pytest
 
 
 @pytest.fixture(scope="module")
-def qapp():
-    try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:                                # pragma: no cover
-        pytest.skip("PySide6 없음")
-    app = QApplication.instance() or QApplication([])
-    from etreport.app import _load_style
-    _load_style(app)
-    yield app
-    app.processEvents()
-
-
-@pytest.fixture(scope="module")
 def ws(qapp, tmp_path_factory):
     """분석 화면 하나를 모듈 안에서 돌려 쓴다(창 조립이 이 파일에서 가장 비싸다)."""
     from _pytest.monkeypatch import MonkeyPatch

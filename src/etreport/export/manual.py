@@ -162,6 +162,7 @@ def sections(shots: dict[str, Path] | None = None) -> list[Section]:
                 ("wafer 평균·중앙값", "점 하나 = wafer 하나 — 찍으면 그 wafer가 전부 빠집니다"),
                 ("마우스 1초 올리기", "그 점의 lot · wafer · 그룹 · 조건과 x·y 값이 뜹니다"),
                 ("Ctrl+Z", "방금 뺀 것을 되돌립니다"),
+                ("왼쪽 아래 [목록]", "뺀 점을 lot·wafer·시각별로 보고 골라 되살립니다"),
             ],
             tail=["빼기 전에 마우스를 올려 어느 wafer인지 먼저 확인해 보세요. 한 wafer에서만",
                   "튀는지, 여러 wafer에 흩어져 있는지에 따라 원인이 전혀 다릅니다.",

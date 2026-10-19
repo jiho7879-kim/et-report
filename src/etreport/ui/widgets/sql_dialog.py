@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from etreport.data.exporting import copy_to, fetch_frame, import_sbdf
+from etreport.data.exporting import copy_to, export_sbdf, import_sbdf
 
 log = logging.getLogger(__name__)
 
@@ -252,13 +252,13 @@ class SqlExportDialog(QDialog):
         from etreport.ui.widgets.worker import run_in_background
         sql = self.sql_text()
 
-        def work() -> str:
-            # 수 GB면 분 단위가 걸린다 — 화면을 멈추지 않게 워커에서
-            full = fetch_frame(self.db_path, sql)
-            self.n_rows = len(full)
-            sbdf.export_data(full, p)
+        def work(report) -> str:
+            # 수 GB면 분 단위가 걸린다 — 화면을 멈추지 않게 워커에서, 단계를 알리며
+            self.n_rows = export_sbdf(self.db_path, sql, p, sbdf,
+                                      report=lambda label: report(0, 0, label))
             return p
-        run_in_background(self, "SBDF 저장", work, done=self._done)
+        run_in_background(self, "SBDF 저장", work, done=self._done,
+                          with_progress=True)
 
     def _done(self, path: str) -> None:
         # CSV·parquet 저장은 행 수를 세지 않는다(미리보기도 None을 준다).

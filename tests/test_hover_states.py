@@ -15,7 +15,6 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import pytest
 
 from etreport.ui.theme import TOKENS
 
@@ -40,18 +39,6 @@ C = {
 
 
 # ── 공통 픽스처 ──────────────────────────────────────────────────────────
-@pytest.fixture(scope="module")
-def qapp():
-    """offscreen QApplication + QSS 스타일 적용 (app.py _load_style()와 동일)."""
-    try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:                                # pragma: no cover
-        pytest.skip("PySide6 없음")
-    app = QApplication.instance() or QApplication([])
-    from etreport.app import _load_style
-    _load_style(app)
-    yield app
-    app.processEvents()
 
 
 # ── 헬퍼 ─────────────────────────────────────────────────────────────────

@@ -9,22 +9,44 @@ pipeline.run(§13 예약 실행 포함)이 적재 직후 프리셋 옵션대로 
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from pathlib import Path
 
+import duckdb
+
 log = logging.getLogger(__name__)
 
-def fetch_frame(db_path: str, sql: str):
-    """조회 결과를 pandas 프레임 하나로 — SBDF 저장(SQL 창·적재 후 저장) 공용.
+def export_sbdf(db_path: str, sql: str, out: str, sbdf,
+                report: Callable[[str], None] | None = None) -> int:
+    """조회 결과를 SBDF 파일 하나로 — SQL 창·적재 후 저장 공용. 행 수를 돌려준다.
 
     **메모리를 추정해 미리 거부하지 않는다.** 한때 가용 메모리 × 비율로 사전
     점검을 두었는데, 추정이 보수적이라 예전 버전에서 잘 되던 수 GB 내보내기까지
-    막았다. 이제 실패는 실제로 모자랄 때만 나고(예외가 그대로 올라간다), DuckDB
-    메모리 상한(`readonly_config`)은 결과를 pandas로 옮기는 몫을 막지 않는다.
+    막았다. 실패는 실제로 모자랄 때만 나고, 그때는 메모리를 쓰지 않는 CSV·parquet을
+    안내한다. `report(라벨)`로 단계(조회 → 쓰기)를 알린다 — 수 GB면 분 단위라
+    어느 단계에서 기다리는지 보이지 않으면 멈춘 것과 구별되지 않는다.
     """
     from etreport.data.loader import readonly_query
-    with readonly_query(db_path) as con:
-        return con.execute(sql.strip().rstrip(";")).df()
+    say = report or (lambda _label: None)
+    t0 = time.monotonic()
+    try:
+        say("DB에서 읽는 중…")
+        with readonly_query(db_path) as con:
+            # pandas로 바로 받는다 — polars를 거치면 같은 표가 두 벌 생긴다
+            full = con.execute(sql.strip().rstrip(";")).df()
+        rows, cols = full.shape
+        say(f"{rows:,}행 × {cols:,}열 읽음 ({time.monotonic() - t0:.0f}초) "
+            "· SBDF 쓰는 중…")
+        sbdf.export_data(full, out)
+        del full
+    except (MemoryError, duckdb.OutOfMemoryException) as e:
+        raise MemoryError(
+            f"SBDF로 옮길 메모리가 모자랍니다 — {e}\n\n"
+            "CSV나 parquet으로 저장하면 메모리를 거의 쓰지 않습니다"
+            "(Spotfire에서 같은 결과로 열립니다). 아니면 조건을 좁혀 주세요.") from e
+    log.info("SBDF 저장 %s — %d행, %.0f초", out, rows, time.monotonic() - t0)
+    return rows
 
 
 def import_sbdf() -> object | None:
@@ -105,10 +127,8 @@ def save_wide(preset, on_log: Callable[[str], None] | None = None) -> list[str]:
             say("⚠ SBDF 저장 건너뜀 — spotfire/sbdf 라이브러리를 찾을 수 없습니다")
             return saved
         try:
-            # pandas로 바로 받는다 — polars를 거치면 같은 표가 두 벌 생긴다
-            full = fetch_frame(db_path, "SELECT * FROM et_data")
-            sbdf.export_data(full, str(base) + ".sbdf")
-            del full
+            export_sbdf(db_path, "SELECT * FROM et_data", str(base) + ".sbdf",
+                        sbdf, report=say)
             saved.append(str(base) + ".sbdf")
         except Exception as e:                       # noqa: BLE001
             say(f"⚠ et_data.sbdf 저장 실패 — {e}")

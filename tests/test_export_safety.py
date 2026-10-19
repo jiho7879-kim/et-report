@@ -15,21 +15,37 @@ def con():
     db.close()
 
 
-def test_sbdf_fetch_is_not_gated_by_memory_estimate(tmp_path, monkeypatch):
-    """★ SBDF는 추정으로 미리 거부하지 않는다 — 가용 메모리가 바닥이라 읽혀도 받는다.
+def _wide_db(tmp_path, rows=20000, items=300) -> str:
+    path = tmp_path / "data.duckdb"
+    db = duckdb.connect(str(path))
+    cols = ", ".join(f"random() AS i{n}" for n in range(items))
+    db.execute(f"create table et_data as select range AS k, {cols} from range({rows})")
+    db.close()
+    return str(path)
+
+
+def test_sbdf_is_not_gated_by_memory_estimate(tmp_path, monkeypatch):
+    """★ SBDF는 추정으로 미리 거부하지 않는다 — 가용 메모리가 바닥이라 읽혀도 쓴다.
 
     예전 사전 점검(가용 메모리 × 0.5 ÷ 3)이 예전 버전에서 잘 되던 수 GB
     내보내기까지 막았다. 모자라면 실제 할당에서 실패할 뿐이다.
     """
     from etreport.data import extractor
     monkeypatch.setattr(extractor, "available_memory_bytes", lambda: 10)
-    path = tmp_path / "data.duckdb"
-    db = duckdb.connect(str(path))
-    cols = ", ".join(f"random() AS i{n}" for n in range(300))
-    db.execute(f"create table et_data as select range AS k, {cols} from range(20000)")
-    db.close()
-    full = exporting.fetch_frame(str(path), "select * from et_data;")
-    assert full.shape == (20000, 301)
+    sbdf, labels = Mock(), []
+    n = exporting.export_sbdf(_wide_db(tmp_path), "select * from et_data;",
+                              "out.sbdf", sbdf, report=labels.append)
+    assert n == 20000
+    assert sbdf.export_data.call_args[0][0].shape == (20000, 301)
+    assert "20,000행 × 301열" in labels[-1]          # 단계가 보인다
+
+
+def test_sbdf_memory_failure_points_to_streaming_formats(tmp_path):
+    sbdf = Mock()
+    sbdf.export_data.side_effect = MemoryError("boom")
+    with pytest.raises(MemoryError, match="CSV나 parquet"):
+        exporting.export_sbdf(_wide_db(tmp_path, 10, 2), "select * from et_data",
+                              "out.sbdf", sbdf)
 
 
 def test_handoff_populates_lots_without_applying():
