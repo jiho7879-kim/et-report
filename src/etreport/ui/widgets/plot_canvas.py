@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 import numpy as np
@@ -19,6 +20,8 @@ from PySide6.QtWidgets import QSizePolicy, QToolTip
 from etreport.model.specs import GroupStyle, PlotSpec
 from etreport.model.state import AppState
 from etreport.render import mpl_renderer
+
+log = logging.getLogger(__name__)
 
 #: 점 위에 멈춘 뒤 정보가 뜨기까지(ms)
 HOVER_MS = 1000
@@ -272,6 +275,10 @@ class PlotCanvas(FigureCanvasQTAgg):
             self._click(ev)               # 거의 안 움직였으면 클릭이다
             return
         keys = self._keys_in(press, (ev.x, ev.y))
+        # 현장 재현용 — 드래그가 "안 먹을" 때 무엇을 봤는지 로그에 남긴다
+        log.info("드래그 제외: mode=%s 점 묶음=%s → 측정점 %d개",
+                 getattr(self.spec, "mode", "?"),
+                 [len(xs) for xs, _y, _k in self._series], len(keys))
         if keys:
             self._emit(keys)
 

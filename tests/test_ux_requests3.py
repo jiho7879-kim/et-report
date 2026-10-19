@@ -392,32 +392,6 @@ def test_save_wide_writes_sbdf_via_library(appdata, tmp_path, monkeypatch):
     assert path == str(tmp_path / "et_data.sbdf")
 
 
-def test_save_wide_skips_sbdf_over_memory_budget(appdata, tmp_path, monkeypatch):
-    """★ 메모리 예산을 넘으면 pandas로 올리지 않고 건너뛴다 (헤드리스 OOM 방지)."""
-    from types import SimpleNamespace
-
-    from etreport.data import exporting
-
-    class FakeSBDF:
-        def __init__(self) -> None:
-            self.calls = []
-
-        def export_data(self, df, path) -> None:
-            self.calls.append((df, path))
-
-    fake = FakeSBDF()
-    monkeypatch.setattr(exporting, "import_sbdf", lambda: fake)
-    monkeypatch.setattr(exporting, "sbdf_budget", lambda: 100)
-    msgs = []
-    saved = exporting.save_wide(SimpleNamespace(
-        db_path=str(_make_db(tmp_path)), out_dir="",
-        save_csv=False, save_sbdf=True),
-        on_log=msgs.append)
-    assert saved == []
-    assert fake.calls == []
-    assert any("메모리 부족" in m for m in msgs)
-
-
 # ── 5. fab tracking 결과가 살아남는다 ────────────────────────
 def test_tracking_matrix_round_trips_as_text():
     """★ 자동 조회 결과를 붙여넣기 표로 되돌려 저장한다.

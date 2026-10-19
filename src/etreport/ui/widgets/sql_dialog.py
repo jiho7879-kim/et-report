@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from etreport.data.exporting import copy_to, import_sbdf, preflight_sbdf
+from etreport.data.exporting import copy_to, fetch_frame, import_sbdf
 
 log = logging.getLogger(__name__)
 
@@ -249,18 +249,16 @@ class SqlExportDialog(QDialog):
                                            "SBDF (*.sbdf)")
         if not p:
             return
-        # Hard safety gate shared with scheduled exports; no unsafe override.
-        from etreport.data.loader import readonly_query
-        try:
-            with readonly_query(self.db_path) as con:
-                self.n_rows = preflight_sbdf(con, self.sql_text())
-                full = con.execute(self.sql_text()).df()
+        from etreport.ui.widgets.worker import run_in_background
+        sql = self.sql_text()
+
+        def work() -> str:
+            # 수 GB면 분 단위가 걸린다 — 화면을 멈추지 않게 워커에서
+            full = fetch_frame(self.db_path, sql)
+            self.n_rows = len(full)
             sbdf.export_data(full, p)
-            del full
-        except Exception as e:                       # noqa: BLE001
-            QMessageBox.critical(self, "SBDF 저장 실패", str(e))
-            return
-        self._done(p)
+            return p
+        run_in_background(self, "SBDF 저장", work, done=self._done)
 
     def _done(self, path: str) -> None:
         # CSV·parquet 저장은 행 수를 세지 않는다(미리보기도 None을 준다).

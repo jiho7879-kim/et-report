@@ -275,3 +275,25 @@ def test_hidden_group_leaves_autoscale():
                  Reformatter(rules=[]), [], (4, 3))
     ax = fig.axes[0]
     assert ax.get_xlim()[1] < 10 and ax.get_ylim()[1] < 10
+
+
+def test_wafer_mode_drag_excludes_wafers_in_box(qapp, demo_state):
+    """wafer 평균 점도 드래그 네모로 뺀다 — 네모 안 wafer의 측정점 전부."""
+    from etreport.model.state import StateBus
+    from etreport.ui.tabs.explore import ExploreTab
+
+    demo_state.excluded.clear()
+    demo_state.explore.mode = "avg"
+    tab = ExploreTab(demo_state, StateBus())
+    tab.resize(900, 700)
+    tab.redraw()
+    cv = tab.canvas
+    xs, ys, keys = cv._series[0]
+    ax = cv.figure.axes[0]
+    (x0, y0), (x1, y1) = ax.transData.transform([(xs[0], ys[0]), (xs[0], ys[0])])
+    cv._on_press(_Ev(x0 - 6, y0 - 6))
+    cv._on_motion(_Ev(x1 + 6, y1 + 6))
+    cv._on_release(_Ev(x1 + 6, y1 + 6))
+    assert set(keys[0]) <= demo_state.excluded
+    demo_state.explore.mode = "site"
+    tab.deleteLater()
