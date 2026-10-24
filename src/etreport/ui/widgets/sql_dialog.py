@@ -66,7 +66,8 @@ def preview_query(db_path: str, sql: str,
     조회가 채운 캐시를 돌려준다(`loader.readonly_query`).
     """
     from etreport.data.loader import readonly_query
-    with readonly_query(db_path) as con:
+    # 열을 전부 훑는다 — 상한 아래에서는 200행도 못 읽는다(readonly_query)
+    with readonly_query(db_path, uncapped=True) as con:
         # `.pl()`은 DuckDB 결과 전체를 Arrow 버퍼로 바꾸는 경로를 탄다. LIMIT가
         # 있어도 아주 넓은 결과/큰 문자열에서는 그 버퍼 할당이 실패할 수 있다.
         # 미리보기는 200행이면 충분하므로 DB-API 행만 받고 작게 프레임을 만든다.

@@ -40,6 +40,23 @@ def test_sbdf_is_not_gated_by_memory_estimate(tmp_path, monkeypatch):
     assert "20,000행 × 301열" in labels[-1]          # 단계가 보인다
 
 
+def test_wide_db_export_is_not_blocked_by_read_cap(tmp_path, monkeypatch):
+    """★ 열이 많은 DB도 SQL 창 미리보기·CSV/parquet·SBDF가 읽기 상한에 막히지 않는다.
+
+    DuckDB 스캔은 열마다 블록을 고정해 두어서(열 하나 ≈ 0.5MB) item 5,000열이면
+    결과 크기와 상관없이 2.5GB가 먼저 든다. 2~6GB 상한 아래에서는 미리보기 200행도
+    시작하자마자 `failed to pin block`으로 떨어졌다 — 같은 비율을 작게 만든다.
+    """
+    from etreport.data import loader
+    from etreport.ui.widgets.sql_dialog import preview_query
+    db = _wide_db(tmp_path, rows=40000, items=200)
+    monkeypatch.setattr(loader, "duckdb_memory_limit", lambda total=None: "16MB")
+    sql = "select * from et_data"
+    assert preview_query(db, sql)[0].shape == (200, 201)
+    exporting.copy_to(db, sql, str(tmp_path / "q.parquet"), "parquet")
+    assert exporting.export_sbdf(db, sql, "q.sbdf", Mock()) == 40000
+
+
 def test_sbdf_memory_failure_points_to_streaming_formats(tmp_path):
     sbdf = Mock()
     sbdf.export_data.side_effect = MemoryError("boom")

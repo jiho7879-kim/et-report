@@ -125,7 +125,8 @@ def open_readonly(db_path: str) -> duckdb.DuckDBPyConnection:
 
 
 @contextmanager
-def readonly_query(db_path: str) -> Iterator[duckdb.DuckDBPyConnection]:
+def readonly_query(db_path: str,
+                   uncapped: bool = False) -> Iterator[duckdb.DuckDBPyConnection]:
     """한 번 쓰고 닫는 읽기 전용 연결. **DB를 읽는 자리는 전부 이것을 쓴다.**
 
     DuckDB는 같은 파일·같은 설정의 연결을 **인스턴스 하나로 묶고**, 그 인스턴스의
@@ -138,9 +139,20 @@ def readonly_query(db_path: str) -> Iterator[duckdb.DuckDBPyConnection]:
     캐시를 비우려고 `SET memory_limit`을 잠깐 낮추는 방법은 쓰지 않는다. 상한은
     인스턴스 전역이라 다른 스레드(백그라운드 작업)가 같은 파일을 읽는 중이면
     그 조회가 OOM으로 떨어진다.
+
+    `uncapped=True`는 열을 전부 훑는 조회(SQL 창·내보내기)용이다 — 상한을 물리
+    메모리의 80%(DuckDB 기본값, 초기 버전과 같다)로 올린다. 스캔은 열마다 블록을
+    고정해 두므로(열 하나 ≈ 0.5MB) item 5,000열이면 결과 크기와 상관없이 2.5GB가
+    먼저 든다. 그래서 2~6GB 상한 아래에서는 미리보기 200행조차 시작하자마자
+    `failed to pin block`으로 떨어졌다. 열 때 설정을 바꾸면 같은 파일의 다른 연결과
+    충돌하므로 연 뒤에 올린다 — 인스턴스 전역이지만 **올리는** 쪽이라 다른 조회를
+    떨어뜨리지 않고, 마지막 연결이 닫히면 인스턴스와 함께 사라진다.
+    `RESET memory_limit`은 쓰지 않는다 — 표시 값만 바뀌고 실제 상한은 그대로다.
     """
     con = open_readonly(db_path)
     try:
+        if uncapped and (total := total_memory_bytes()):
+            con.execute(f"SET memory_limit='{int(total * 0.8) >> 20}MiB'")
         yield con
     finally:
         con.close()

@@ -113,7 +113,7 @@ myenv/bin/ruff check --fix .                        # 안전한 것만 자동 �
 | `test_requests_9.py` | 요청 9건 — 리포트 X 스케일·한쪽 범위·흔적 없는 제외·드래그 네모·plot별 제외·그룹 스타일 보존·PPT 색·막대 |
 | `test_requests_14.py` | 요청 14건 — GEN 조건·적재 보전·산점도 설명·공통 legend·SPEC 열·조건 모드(LIKE·부등호)·예약 실행 왕복·계측/tracking 재부착·step_seq 표 |
 | `test_requests_13.py` | 요청 13건 — 단일 exe·리소스 경로·빌드 스탬프·fab tracking 이름 컬럼·조회 조건 자동 채움·boxplot·plot 종류·VARCHAR 읽기·Tukey 필터·예약 실행 |
-| `test_export_safety.py` | 적재 후 자동 [적용] 없음 · SBDF는 메모리 추정으로 미리 거부하지 않는다 · CSV/parquet은 COPY 그대로 |
+| `test_export_safety.py` | 적재 후 자동 [적용] 없음 · SBDF는 메모리 추정으로 미리 거부하지 않는다 · CSV/parquet은 COPY 그대로 · 열이 많은 DB도 SQL 창·내보내기가 읽기 상한에 막히지 않는다 |
 | `test_ui_feature_requests.py` | 실험 조건 열이 범주 축으로 붙는다 · 빈 심볼 · 요약 표 복사(HTML: 병합·색 + TSV) |
 | `test_extract_skip_empty.py` | 빈 청크 건너뛰기 · 날짜 프로브(GEN) · 청크 폭(개발자 모드) |
 | `test_bigset.py` (slow) | 실측 규모 성능·정확성 회귀 (`-s`로 단계별 시간 출력) |
@@ -626,6 +626,15 @@ different configuration`), `duckdb.connect(..., read_only=True)`를 직접 부�
   사고를 막는 것은 아니다 — 그쪽은 미리보기 `LIMIT 200`과 `COPY TO`
   (`data/exporting.py`)가 막는다. SQL 창은 전체 행 수를 세려고 무거운 쿼리를
   한 번 더 돌리지 않는다(미리보기보다 많으면 `200+행`으로 적는다).
+- **단 열을 전부 훑는 자리는 상한을 푼다** — SQL 창(미리보기·CSV·parquet·SBDF)과
+  적재 후 저장(`exporting.copy_to`·`export_sbdf`)은 `readonly_query(..., uncapped=True)`
+  로 물리 메모리의 80%(DuckDB 기본값, 초기 버전과 같다)까지 쓴다. DuckDB 스캔은
+  열마다 블록을 고정해 두어서(열 하나 ≈ 0.5MB) item 5,000열이면 결과 크기와
+  상관없이 2.5GB가 먼저 든다 — 상한 아래에서는 미리보기 200행도 시작하자마자
+  `failed to pin block`으로 떨어졌다("시도조차 못 한다"). 상한은 연결을 **연 뒤에**
+  `SET`으로 올린다(열 때 설정이 다르면 같은 파일의 다른 연결과 충돌하고,
+  `RESET memory_limit`은 표시 값만 바뀌고 실제 상한은 그대로다). 규칙은
+  `test_export_safety.test_wide_db_export_is_not_blocked_by_read_cap`.
 - 컬럼 이름은 고정하지 않고 `data/compat.py`의 `ROLE_ALIASES`로 역할을 추론한다
   (`root_lot_id|lot_id|lot`, `wafer_id|slot_no`, `tkout_time|create_dttm` …).
   long(`item_id`/`value`) 테이블이면 `select_sql()`이 PIVOT으로 wide화한다.

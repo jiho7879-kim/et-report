@@ -32,9 +32,10 @@ def export_sbdf(db_path: str, sql: str, out: str, sbdf,
     t0 = time.monotonic()
     try:
         say("DB에서 읽는 중…")
-        with readonly_query(db_path) as con:
-            # pandas로 바로 받는다 — polars를 거치면 같은 표가 두 벌 생긴다
-            full = con.execute(sql.strip().rstrip(";")).df()
+        with readonly_query(db_path, uncapped=True) as con:
+            # Arrow를 거쳐 pandas로 — `.df()`는 numpy로 옮기며 표를 여러 벌 만든다
+            # (1.2GB 표에서 피크 6.3GB, 이 길은 3.8GB)
+            full = con.execute(sql.strip().rstrip(";")).pl().to_pandas()
         rows, cols = full.shape
         say(f"{rows:,}행 × {cols:,}열 읽음 ({time.monotonic() - t0:.0f}초) "
             "· SBDF 쓰는 중…")
@@ -76,7 +77,7 @@ def copy_to(db_path: str, sql: str, out: str, fmt: str) -> str:
     opts = ("FORMAT CSV, HEADER" if fmt == "csv" else "FORMAT PARQUET")
     target = Path(out)
     tmp = target.with_name(target.name + ".part") if fmt == "csv" else target
-    with readonly_query(db_path) as con:
+    with readonly_query(db_path, uncapped=True) as con:
         con.execute(f"COPY (\n{sql}\n) TO '{str(tmp).replace(chr(39), chr(39) * 2)}'"
                     f" ({opts})")
     if fmt == "csv":
