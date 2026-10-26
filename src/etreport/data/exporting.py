@@ -33,9 +33,15 @@ def export_sbdf(db_path: str, sql: str, out: str, sbdf,
     try:
         say("DB에서 읽는 중…")
         with readonly_query(db_path, uncapped=True) as con:
-            # Arrow를 거쳐 pandas로 — `.df()`는 numpy로 옮기며 표를 여러 벌 만든다
-            # (1.2GB 표에서 피크 6.3GB, 이 길은 3.8GB)
-            full = con.execute(sql.strip().rstrip(";")).pl().to_pandas()
+            # 결과를 묶음 단위로 흘려 Arrow 표 하나로 — DuckDB 결과와 Arrow가 한꺼번에
+            # 두 벌 살지 않는다. pandas 변환은 **연결을 닫은 뒤**에 한다(버퍼 캐시는
+            # 마지막 연결이 닫혀야 풀린다).
+            tbl = (con.execute(sql.strip().rstrip(";"))
+                   .to_arrow_reader(100_000).read_all())
+        # self_destruct: 열을 옮기는 대로 Arrow 버퍼를 풀어 표가 두 벌이 되지 않는다.
+        # 600MB 표(25만 행 × 300열) 피크: 예전 `.pl().to_pandas()` 1.9GB → 1.3GB
+        full = tbl.to_pandas(self_destruct=True, split_blocks=True)
+        del tbl
         rows, cols = full.shape
         say(f"{rows:,}행 × {cols:,}열 읽음 ({time.monotonic() - t0:.0f}초) "
             "· SBDF 쓰는 중…")
