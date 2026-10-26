@@ -17,32 +17,65 @@ import duckdb
 
 log = logging.getLogger(__name__)
 
+#: SBDF 임시 parquet을 쓸 때의 DuckDB 상한 = 바닥값 + 열마다 고정해 두는 블록 몫
+#: (실측 ≈0.5MB, 여유 두 배). 표 크기와 무관하다 — 캐시가 표만큼 자라지 않게.
+COPY_BYTES_PER_COL = 1 << 20
+COPY_BASE_BYTES = 512 << 20
+
+
 def export_sbdf(db_path: str, sql: str, out: str, sbdf,
                 report: Callable[[str], None] | None = None) -> int:
     """조회 결과를 SBDF 파일 하나로 — SQL 창·적재 후 저장 공용. 행 수를 돌려준다.
 
-    **메모리를 추정해 미리 거부하지 않는다.** 한때 가용 메모리 × 비율로 사전
-    점검을 두었는데, 추정이 보수적이라 예전 버전에서 잘 되던 수 GB 내보내기까지
-    막았다. 실패는 실제로 모자랄 때만 나고, 그때는 메모리를 쓰지 않는 CSV·parquet을
-    안내한다. `report(라벨)`로 단계(조회 → 쓰기)를 알린다 — 수 GB면 분 단위라
-    어느 단계에서 기다리는지 보이지 않으면 멈춘 것과 구별되지 않는다.
+    **표 크기 + 열 묶음 하나**만큼만 메모리를 쓴다(직접 pandas로 저장할 때와 같은
+    조건). 세 단계로 나눈다.
+      ① DuckDB가 결과를 임시 parquet에 바로 쓴다(`COPY`, 행 순서 보존). 연결은
+         `loader.private_query` — **열 수로 정한 작은 상한**의 별도 인스턴스다.
+         예전처럼 80%로 풀어 두면 DuckDB가 읽은 블록을 그만큼 캐시로 쥐고 있어서
+         표가 클수록 캐시도 같이 커졌다(600MB 표에서 COPY만 2GB).
+      ② 연결을 닫는다 — 캐시가 인스턴스와 함께 사라진다.
+      ③ parquet에서 열을 `loader.CHUNK_BYTES`씩 읽어 pandas 열로 붙이고 묶음은
+         버린다. 사용자 SQL을 묶음마다 다시 돌리지 않는 이유: `ORDER BY` 없는
+         조회는 실행마다 행 순서가 같다는 보장이 없어 열이 조용히 어긋난다.
+
+    **메모리를 추정해 미리 거부하지 않는다** — 실패는 실제로 모자랄 때만 나고,
+    그때는 메모리를 쓰지 않는 CSV·parquet을 안내한다. `report(라벨)`로 단계를
+    알린다(수 GB면 분 단위라 단계가 안 보이면 멈춘 것과 구별되지 않는다).
     """
-    from etreport.data.loader import readonly_query
+    import pandas as pd
+    import pyarrow.parquet as pq
+
+    from etreport.data.loader import CHUNK_BYTES, private_query
     say = report or (lambda _label: None)
     t0 = time.monotonic()
+    body = sql.strip().rstrip(";")
+    tmp = Path(out).with_name(Path(out).name + ".part.parquet")
     try:
-        say("DB에서 읽는 중…")
-        with readonly_query(db_path, uncapped=True) as con:
-            # 결과를 묶음 단위로 흘려 Arrow 표 하나로 — DuckDB 결과와 Arrow가 한꺼번에
-            # 두 벌 살지 않는다. pandas 변환은 **연결을 닫은 뒤**에 한다(버퍼 캐시는
-            # 마지막 연결이 닫혀야 풀린다).
-            tbl = (con.execute(sql.strip().rstrip(";"))
-                   .to_arrow_reader(100_000).read_all())
-        # self_destruct: 열을 옮기는 대로 Arrow 버퍼를 풀어 표가 두 벌이 되지 않는다.
-        # 600MB 표(25만 행 × 300열) 피크: 예전 `.pl().to_pandas()` 1.9GB → 1.3GB
-        full = tbl.to_pandas(self_destruct=True, split_blocks=True)
-        del tbl
-        rows, cols = full.shape
+        say("DB에서 읽어 임시 파일로 옮기는 중…")
+        with private_query(db_path, f"{COPY_BASE_BYTES >> 20}MiB") as con:
+            ncols = len(con.execute(f"SELECT * FROM (\n{body}\n) LIMIT 0")
+                        .description)
+            # 이 연결만의 인스턴스라 상한을 바꿔도 다른 조회와 상관없다
+            need = COPY_BASE_BYTES + ncols * COPY_BYTES_PER_COL
+            con.execute(f"SET memory_limit='{need >> 20}MiB'")
+            path = str(tmp).replace("'", "''")
+            con.execute(f"COPY (\n{body}\n) TO '{path}' (FORMAT PARQUET)")
+        pf = pq.ParquetFile(tmp)
+        names, rows = pf.schema_arrow.names, pf.metadata.num_rows
+        step = max(1, CHUNK_BYTES // (8 * max(1, rows)))
+        parts = []
+        for i in range(0, len(names), step):
+            say(f"열 {i + 1:,}–{min(i + step, len(names)):,} / {len(names):,} 읽는 중…")
+            # 이름으로 골라도 된다 — COPY가 같은 이름 열을 `a_1`처럼 바꿔 쓴다
+            tbl = pf.read(columns=names[i:i + step])
+            # self_destruct: 열을 옮기는 대로 Arrow 버퍼를 푼다(묶음이 두 벌 살지 않게)
+            parts.append(tbl.to_pandas(self_destruct=True, split_blocks=True))
+            del tbl
+        del pf
+        # 열마다 블록이 따로라 붙일 때 값을 복사하지 않는다(블록을 합치지 않음)
+        full = pd.concat(parts, axis=1) if parts else pd.DataFrame()
+        del parts
+        cols = full.shape[1]
         say(f"{rows:,}행 × {cols:,}열 읽음 ({time.monotonic() - t0:.0f}초) "
             "· SBDF 쓰는 중…")
         sbdf.export_data(full, out)
@@ -52,6 +85,8 @@ def export_sbdf(db_path: str, sql: str, out: str, sbdf,
             f"SBDF로 옮길 메모리가 모자랍니다 — {e}\n\n"
             "CSV나 parquet으로 저장하면 메모리를 거의 쓰지 않습니다"
             "(Spotfire에서 같은 결과로 열립니다). 아니면 조건을 좁혀 주세요.") from e
+    finally:
+        tmp.unlink(missing_ok=True)
     log.info("SBDF 저장 %s — %d행, %.0f초", out, rows, time.monotonic() - t0)
     return rows
 

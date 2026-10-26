@@ -158,6 +158,31 @@ def readonly_query(db_path: str,
         con.close()
 
 
+@contextmanager
+def private_query(db_path: str,
+                  memory_limit: str) -> Iterator[duckdb.DuckDBPyConnection]:
+    """**자기 상한을 가진** 읽기 연결 — 빈 메모리 DB에 파일을 READ_ONLY로 붙인다.
+
+    `readonly_query`의 인스턴스는 같은 파일의 연결이 함께 쓰므로 상한을 내릴 수
+    없다(위 참조). 그런데 DuckDB는 읽은 블록을 상한까지 캐시로 쥐고 있어서, 표를
+    통째로 훑는 내보내기는 상한이 클수록 캐시도 같이 커진다(600MB 표 COPY에 2GB).
+    인스턴스를 따로 두면 상한을 작게 잡아도 아무도 떨어뜨리지 않고, 같은 파일을
+    다른 연결이 열고 있어도 설정 충돌이 없다. 조회는 `USE`로 붙인 DB를 기본으로 본다.
+    """
+    cfg = {k: v for k, v in readonly_config().items() if k != "memory_limit"}
+    con = duckdb.connect(":memory:", config={**cfg, "memory_limit": memory_limit})
+    try:
+        try:
+            con.execute(f"ATTACH '{db_path.replace(chr(39), chr(39) * 2)}'"
+                        " AS src (READ_ONLY)")
+        except duckdb.Error as e:
+            raise RuntimeError(explain_conn_error(e, db_path, write=False)) from e
+        con.execute("USE src")
+        yield con
+    finally:
+        con.close()
+
+
 def explain_conn_error(e: Exception, db_path: str, write: bool) -> str:
     """DuckDB 연결 오류를 사람이 읽을 수 있는 안내로 바꾼다.
 

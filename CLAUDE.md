@@ -629,8 +629,8 @@ different configuration`), `duckdb.connect(..., read_only=True)`를 직접 부�
   사고를 막는 것은 아니다 — 그쪽은 미리보기 `LIMIT 200`과 `COPY TO`
   (`data/exporting.py`)가 막는다. SQL 창은 전체 행 수를 세려고 무거운 쿼리를
   한 번 더 돌리지 않는다(미리보기보다 많으면 `200+행`으로 적는다).
-- **단 열을 전부 훑는 자리는 상한을 푼다** — SQL 창(미리보기·CSV·parquet·SBDF)과
-  적재 후 저장(`exporting.copy_to`·`export_sbdf`)은 `readonly_query(..., uncapped=True)`
+- **단 열을 전부 훑는 자리는 상한을 푼다** — SQL 창(미리보기·CSV·parquet)과
+  적재 후 저장(`exporting.copy_to`)은 `readonly_query(..., uncapped=True)`
   로 물리 메모리의 80%(DuckDB 기본값, 초기 버전과 같다)까지 쓴다. DuckDB 스캔은
   열마다 블록을 고정해 두어서(열 하나 ≈ 0.5MB) item 5,000열이면 결과 크기와
   상관없이 2.5GB가 먼저 든다 — 상한 아래에서는 미리보기 200행도 시작하자마자
@@ -638,6 +638,16 @@ different configuration`), `duckdb.connect(..., read_only=True)`를 직접 부�
   `SET`으로 올린다(열 때 설정이 다르면 같은 파일의 다른 연결과 충돌하고,
   `RESET memory_limit`은 표시 값만 바뀌고 실제 상한은 그대로다). 규칙은
   `test_export_safety.test_wide_db_export_is_not_blocked_by_read_cap`.
+- **SBDF는 표를 메모리에 올려야 하므로 따로 간다**(`exporting.export_sbdf`). DuckDB는
+  읽은 블록을 상한까지 캐시로 쥐고 있어서, 80%로 풀어 둔 채 표를 통째로 받으면
+  캐시·Arrow·pandas가 겹쳐 피크가 표의 3배를 넘었다. 그래서 ① `loader.private_query`
+  (빈 메모리 DB에 파일을 READ_ONLY로 ATTACH — **자기 상한을 가진 별도 인스턴스**라
+  `열 수 × 1MB + 512MB`로 작게 잡아도 아무도 떨어뜨리지 않는다)로 임시 parquet에
+  COPY하고 ② 연결을 닫은 뒤 ③ parquet에서 열을 `CHUNK_BYTES`씩 읽어 pandas로
+  붙인다. 사용자 SQL을 묶음마다 다시 돌리지 않는다 — `ORDER BY` 없는 조회는 행 순서가
+  보장되지 않아 열이 조용히 어긋난다. 실측(25만 행 × 300열, 표 574MB): 피크
+  1.9GB → 1.15GB, 두 배 행(표 1.15GB)은 1.7GB — 표 크기 + 약 0.5GB.
+  규칙은 `test_export_safety.test_sbdf_column_batches_equal_one_shot_read`.
 - 컬럼 이름은 고정하지 않고 `data/compat.py`의 `ROLE_ALIASES`로 역할을 추론한다
   (`root_lot_id|lot_id|lot`, `wafer_id|slot_no`, `tkout_time|create_dttm` …).
   long(`item_id`/`value`) 테이블이면 `select_sql()`이 PIVOT으로 wide화한다.

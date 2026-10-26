@@ -57,6 +57,27 @@ def test_wide_db_export_is_not_blocked_by_read_cap(tmp_path, monkeypatch):
     assert exporting.export_sbdf(db, sql, "q.sbdf", Mock()) == 40000
 
 
+def test_sbdf_column_batches_equal_one_shot_read(tmp_path, monkeypatch):
+    """★ 열을 묶음으로 나눠 붙여도 한 번에 읽은 것과 값·열 순서·행 순서가 같다.
+
+    같은 이름 열(`a_1`로 바뀐다)과 문자열 열도 섞는다. 임시 parquet은 남지 않는다.
+    """
+    from etreport.data import loader
+    db = _wide_db(tmp_path, rows=3000, items=40)
+    monkeypatch.setattr(loader, "CHUNK_BYTES", 8 * 3000 * 7)   # 7열씩 → 6묶음
+    sql = "select i3 as a, i5 as a, 'L' || k as lot, * from et_data order by k desc"
+    sbdf, labels = Mock(), []
+    out = tmp_path / "x.sbdf"
+    assert exporting.export_sbdf(db, sql, str(out), sbdf, report=labels.append) == 3000
+    got = sbdf.export_data.call_args[0][0]
+    with duckdb.connect(db, read_only=True) as c:
+        want = c.execute(sql).df()
+    assert list(got.columns) == ["a", "a_1", *want.columns[2:]]
+    assert (got.to_numpy() == want.to_numpy()).all()
+    assert sum("읽는 중" in s for s in labels) == 7               # 묶음이 보인다
+    assert list(tmp_path.glob("*.part.parquet")) == []
+
+
 def test_sbdf_memory_failure_points_to_streaming_formats(tmp_path):
     sbdf = Mock()
     sbdf.export_data.side_effect = MemoryError("boom")
