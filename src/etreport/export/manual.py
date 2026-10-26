@@ -142,6 +142,10 @@ def sections(shots: dict[str, Path] | None = None) -> list[Section]:
              "         [범위 직접 지정]을 켜면 지금 보이는 축 값이 칸에 채워집니다 —",
              "         빈칸부터 시작하면 자릿수를 손으로 옮겨 적어야 하니까요.",
              "· 스타일 그룹마다 색·심볼·크기를 바꾸고 REF를 지정합니다.",
+             "· 순서   그룹 목록 맨 위에 있는 그룹이 그림 맨 앞에 그려집니다.",
+             "         점이 겹쳐 한 그룹이 가려지면 그 그룹을 ▲로 올리거나 행을",
+             "         끌어 위로 옮기세요. wafer 평균처럼 점이 크고 적을 때 특히",
+             "         쓸모 있습니다. 범례도 이 순서를 따릅니다.",
              "",
              "빨간 사각형이 규격 창(SPECLOW·SPECHIGH), 파란 X가 타깃입니다. 한쪽 규격이",
              "없으면 그 변은 축 끝까지 열어 두고, 쉼표로 쌍을 여럿 넣었으면 창과 타깃도",
@@ -384,8 +388,13 @@ def build_manual(out_path: str | Path, shots: dict[str, Path] | None = None,
         _cover(painter, painter.viewport(), version, len(secs))
         for i, sec in enumerate(secs, 1):
             writer.newPage()
-            _section_page(painter, painter.viewport(), sec, i, len(secs),
-                          version, QImage, QFont, QRectF, Qt)
+            if not _section_page(painter, painter.viewport(), sec, i, len(secs),
+                                 version, QImage, QFont, QRectF, Qt):
+                # 본문이 길어 캡처 자리가 모자라면 다음 쪽에 크게 싣는다
+                writer.newPage()
+                page = painter.viewport()
+                _footer(painter, page, i, len(secs), version, QRectF, Qt, QFont)
+                _shot(painter, page, sec, page.top(), QImage, QFont, QRectF, Qt)
     finally:
         painter.end()
     log.info("사용 설명서 생성: %s", out)
@@ -449,8 +458,14 @@ def _cover(painter, page, version: str, n_sections: int) -> None:
                      Qt.AlignLeft | Qt.AlignTop, toc)
 
 
+#: 본문 아래 남은 높이가 페이지의 이 비율보다 작으면 캡처를 다음 쪽으로 넘긴다.
+#: 줄어든 캡처는 화면 글자가 읽히지 않아 넣으나 마나다.
+MIN_SHOT_RATIO = 0.4
+
+
 def _section_page(painter, page, sec: Section, index: int, total: int,
-                  version: str, QImage, QFont, QRectF, Qt) -> None:
+                  version: str, QImage, QFont, QRectF, Qt) -> bool:
+    """절 한 쪽. 캡처를 이 쪽에 싣지 못했으면 False(호출자가 다음 쪽에 싣는다)."""
     from PySide6.QtGui import QColor
 
     # 머리 — 번호(액센트) + 제목. 번호는 장식이 아니라 차례와 맞는 순서다.
@@ -497,13 +512,25 @@ def _section_page(painter, page, sec: Section, index: int, total: int,
 
     _footer(painter, page, index, total, version, QRectF, Qt, QFont)
 
+    area_top = int(text_end + page.height() * 0.025)
+    if sec.shot is not None and page.bottom() - area_top < page.height() * MIN_SHOT_RATIO:
+        return False
+    _shot(painter, page, sec, area_top, QImage, QFont, QRectF, Qt)
+    return True
+
+
+def _shot(painter, page, sec: Section, area_top: int,
+          QImage, QFont, QRectF, Qt) -> None:
+    """캡처 + 테두리 + 캡션을 `area_top`부터 페이지 아래(꼬리말 위)까지."""
+    from PySide6.QtGui import QColor
+
     if sec.shot is None or not Path(sec.shot).exists():
         return
     img = QImage(str(sec.shot))
     if img.isNull():
         log.warning("캡처를 읽지 못했습니다: %s", sec.shot)
         return
-    area_top = int(text_end + page.height() * 0.025)
+    f = QFont(painter.font())
     area_h = page.bottom() - area_top - int(page.height() * 0.08)
     scaled = img.scaled(page.width(), area_h, Qt.KeepAspectRatio,
                         Qt.SmoothTransformation)
