@@ -210,6 +210,33 @@ def test_hover_shows_lot_and_wafer_without_collecting_at_draw(qapp, demo_state):
     cv.deleteLater()
 
 
+def test_hover_hits_point_on_scaled_display(qapp, demo_state):
+    """화면 배율 150 %에서도 실제 마우스 이벤트가 점을 찾는다.
+
+    figure 크기를 논리 픽셀로 잡던 시절에는 그림이 위젯의 2/3로 그려지고
+    마우스 y가 점과 어긋나 사내 PC(배율 125·150 %)에서 툴팁이 뜨지 않았다.
+    """
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+
+    from etreport.ui.widgets.plot_canvas import PlotCanvas
+
+    cv = PlotCanvas(demo_state)
+    cv.resize(500, 400)
+    cv._set_device_pixel_ratio(1.5)
+    cv.draw_spec(demo_state.explore)
+    assert (cv.figure.bbox.width, cv.figure.bbox.height) == (750, 600)
+    cv._collect_points(demo_state.explore, force=True)
+    xs, ys, keys = cv._series[0]
+    px, py = cv.figure.axes[0].transData.transform((xs[0], ys[0]))
+    pos = QPointF(px / 1.5, cv.height() - py / 1.5)    # Qt 논리 좌표로
+    cv.mouseMoveEvent(QMouseEvent(QEvent.MouseMove, pos, cv.mapToGlobal(pos),
+                                  Qt.NoButton, Qt.NoButton, Qt.NoModifier))
+    assert cv._hover_at is not None
+    assert cv._nearest(*cv._hover_at)[0] == keys[0]
+    cv.deleteLater()
+
+
 def test_inline_and_tracking_columns_reach_plots_and_ppt(qapp, demo_state):
     """inline 계측(숫자) = 산점도 축, fab tracking(문자열) = boxplot 범주 —
     화면·리포트 슬롯 후보·PPT 데이터까지 같은 열로 간다(요청 2026-10-14 §5)."""

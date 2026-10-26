@@ -112,9 +112,13 @@ class PlotCanvas(FigureCanvasQTAgg):
         맞추지 않으면 그림이 위젯보다 크게 그려져 축 이름이 슬롯 밖으로
         삐져나오고(아래 슬롯 위에 겹쳐 보인다) y축 눈금이 잘린다.
         """
+        # 화면 배율(125·150 %)이 있으면 figure dpi에 이미 배율이 곱해져 있다 —
+        # 위젯 크기도 **물리 픽셀**로 바꿔 나눠야 한다. 논리 픽셀로 나누면 그림이
+        # 위젯의 2/3로 그려지고 마우스 좌표가 점과 어긋나 툴팁·클릭이 빗나간다.
         dpi = self.figure.get_dpi() or 100
-        w = max(1.2, self.width() / dpi)
-        h = max(1.0, self.height() / dpi)
+        dpr = self.device_pixel_ratio
+        w = max(1.2, self.width() * dpr / dpi)
+        h = max(1.0, self.height() * dpr / dpi)
         if abs(w - self.figure.get_figwidth()) > 0.01 or \
                 abs(h - self.figure.get_figheight()) > 0.01:
             self.figure.set_size_inches(w, h, forward=False)
@@ -359,9 +363,10 @@ class PlotCanvas(FigureCanvasQTAgg):
             return
         text = self.hover_text(*hit)
         if text:
-            h = self.height()
-            QToolTip.showText(self.mapToGlobal(QPoint(int(at[0]), int(h - at[1]))),
-                              text, self)
+            # matplotlib 좌표는 물리 픽셀·아래가 0, Qt는 논리 픽셀·위가 0이다
+            dpr = self.device_pixel_ratio
+            pos = QPoint(int(at[0] / dpr), int(self.height() - at[1] / dpr))
+            QToolTip.showText(self.mapToGlobal(pos), text, self)
 
     def hover_text(self, key, x: float, y: float) -> str:
         """툴팁 글자 — 측정점이면 그 점의 키, wafer 집계 점이면 wafer와 점 수."""
