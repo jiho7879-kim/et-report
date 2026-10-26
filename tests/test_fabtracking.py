@@ -148,9 +148,15 @@ def test_split_matrix_uses_existing_grouping():
     assert sm.steps == ["M1"]                        # 갈리는 step만 factor 후보
     assert sm.baseline == "Base"                     # 다수 조건이 기준(REF)
     styles = sm.styles_for(["M1"])
-    assert [s.ref for s in styles] == [True, False]
+    assert [s.ref for s in styles] == [False, True]
     assert sm.assignment(["M1"])[wafers.key("PA100", "03")] != \
         sm.assignment(["M1"])[wafers.key("PA100", "01")]
+    # REF를 목록 맨 아래로 옮겨도 wafer는 **자기 조건의 그룹**에 붙는다
+    # (예전에는 목록 위치로 짝지어 Base wafer가 Hi 그룹에 들어갔다)
+    name = {s.gid: s.name for s in styles}
+    asg = sm.assignment(["M1"])
+    assert name[asg[wafers.key("PA100", "01")]].startswith("Base")
+    assert name[asg[wafers.key("PA100", "03")]].startswith("Hi")
 
 
 def test_confound_detection_still_works():

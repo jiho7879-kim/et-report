@@ -227,13 +227,18 @@ def test_hover_hits_point_on_scaled_display(qapp, demo_state):
     cv.draw_spec(demo_state.explore)
     assert (cv.figure.bbox.width, cv.figure.bbox.height) == (750, 600)
     cv._collect_points(demo_state.explore, force=True)
-    xs, ys, keys = cv._series[0]
+    xs, ys, _keys = cv._series[0]
     px, py = cv.figure.axes[0].transData.transform((xs[0], ys[0]))
     pos = QPointF(px / 1.5, cv.height() - py / 1.5)    # Qt 논리 좌표로
     cv.mouseMoveEvent(QMouseEvent(QEvent.MouseMove, pos, cv.mapToGlobal(pos),
                                   Qt.NoButton, Qt.NoButton, Qt.NoModifier))
     assert cv._hover_at is not None
-    assert cv._nearest(*cv._hover_at)[0] == keys[0]
+    # 점이 빽빽하면 1px 반올림으로 옆 점이 잡힐 수 있다 — key가 아니라 자리를 본다
+    # (고치기 전에는 200px쯤 어긋나 아무 점도 못 찾았다)
+    hit = cv._nearest(*cv._hover_at)
+    assert hit is not None
+    hx, hy = cv.figure.axes[0].transData.transform((hit[1], hit[2]))
+    assert abs(hx - px) <= 2 and abs(hy - py) <= 2
     cv.deleteLater()
 
 

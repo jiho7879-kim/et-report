@@ -195,7 +195,12 @@ class SplitMatrix:
         return LABEL_SEP.join(codes)
 
     def styles_for(self, factors: list[str]) -> list[GroupStyle]:
-        """조합별 GroupStyle — baseline 조합은 회색 REF, 나머지는 Okabe-Ito."""
+        """조합별 GroupStyle — baseline 조합은 회색 REF, 나머지는 Okabe-Ito.
+
+        REF는 **목록 맨 아래**에 둔다 — 목록 맨 위가 그림 맨 앞이라(렌더러
+        `front_order`) 위에 두면 회색 REF 점이 split 점을 덮는다. gid는 조합
+        순서 그대로라 순서만 바뀐다(예전 설정·사이드카의 gid와 맞는다).
+        """
         styles: list[GroupStyle] = []
         pal, sym = cycle(PALETTE_OKABE), cycle(SYMBOLS)
         for i, (codes, members) in enumerate(self.combos_for(factors).items()):
@@ -209,7 +214,7 @@ class SplitMatrix:
                 symbol="d" if is_ref else next(sym),
                 ref=is_ref,
             ))
-        return styles
+        return sorted(styles, key=lambda g: g.ref)          # 안정 정렬
 
     # ── 혼입 감지 ─────────────────────────────────────────────
     def confounds(self, factors: list[str]) -> list[Confound]:
@@ -242,9 +247,10 @@ class SplitMatrix:
         """
         from etreport.model import wafers
 
-        styles = self.styles_for(factors)
+        # gid는 조합 순서(`x{i}`)로 정해진다 — `styles_for`의 목록 순서(REF가
+        # 맨 아래)와 짝지으면 어긋나므로 조합을 직접 센다.
         out: dict[tuple[str, str], str] = {}
-        for gid_style, members in zip(styles, self.combos_for(factors).values()):
+        for i, members in enumerate(self.combos_for(factors).values()):
             for lot, waf in members:
-                out[wafers.key(lot, waf)] = gid_style.gid
+                out[wafers.key(lot, waf)] = f"x{i}"
         return out

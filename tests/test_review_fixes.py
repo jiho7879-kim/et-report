@@ -276,8 +276,8 @@ def test_split_labels_survive_separator_in_codes():
     combos = sm.combos_for(["M1"])
     assert set(combos) == {("Base",), ("A · B",)}
     styles = sm.styles_for(["M1"])
-    assert [s.ref for s in styles] == [True, False]     # Base만 REF
-    assert sm.assignment(["M1"])[wafers.key("L1", "02")] == styles[1].gid
+    assert [s.ref for s in styles] == [False, True]     # Base만 REF — 맨 아래
+    assert sm.assignment(["M1"])[wafers.key("L1", "02")] == styles[0].gid   # A · B — REF가 아닌 쪽
 
 
 # ── P3: split_table 인덱싱 ──────────────────────────────────

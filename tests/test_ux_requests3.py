@@ -409,7 +409,7 @@ def test_tracking_matrix_round_trips_as_text():
 
     assert back.steps == sm.steps
     assert back.wide.to_dicts() == sm.wide.to_dicts()
-    assert [s.ref for s in back.styles_for(["M1"])] == [True, False]
+    assert [s.ref for s in back.styles_for(["M1"])] == [False, True]
 
 
 def test_split_baseline_is_carried_by_config():
