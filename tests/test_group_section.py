@@ -177,3 +177,55 @@ def test_hollow_symbol_selection_round_trips(sec):
     sec.cmb_symbol.setCurrentIndex(SYMBOL_CHOICES.index("o-open"))
     sec.from_controls()
     assert sec.state.groups[0].symbol == "o-open"
+
+
+# ── 순서 = 그리는 앞뒤(맨 위가 맨 앞) ───────────────────────────────────
+@pytest.mark.parametrize("mode", ["site", "avg"])
+def test_top_group_is_drawn_in_front_and_legend_keeps_list_order(mode):
+    import polars as pl
+
+    from etreport.data.reformatter import Reformatter
+    from etreport.model.specs import GroupStyle, PlotSpec
+    from etreport.render.mpl_renderer import render
+
+    data = {g: pl.DataFrame({"key": [f"{g}{i}" for i in range(3)], "gid": [g] * 3,
+                             "lot": ["L"] * 3, "wafer": ["1", "2", "3"],
+                             "A": [1.0, 2.0, 3.0], "B": [1.0, 2.0, 3.0]})
+            for g in ("a", "b", "c")}
+    styles = [GroupStyle(gid=g, name=g) for g in ("b", "a", "c")]
+    ax = render(PlotSpec(x="A", y="B", mode=mode), data, styles,
+                Reformatter(rules=[]), [], (4, 3)).axes[0]
+    z = {ln.get_label(): ln.get_zorder() for ln in ax.lines
+         if ln.get_label() in ("a", "b", "c")}
+    assert z["b"] > z["a"] > z["c"]                    # 목록 맨 위가 맨 앞
+    assert ax.get_legend_handles_labels()[1][:3] == ["b", "a", "c"]
+
+
+def test_move_and_drag_reorder_state_groups(sec):
+    st = sec.state
+    if len(st.groups) < 3:
+        pytest.skip("데모 그룹이 3개 미만")
+    gids = [g.gid for g in st.groups]
+    sec.select(2)
+    sec.move(-1)
+    assert [g.gid for g in st.groups] == [gids[0], gids[2], gids[1]]
+    assert sec.current().gid == gids[2]                # 고른 그룹을 따라간다
+    sec.select(0)
+    assert not sec.btn_up.isEnabled()
+    # 끌어 놓기 — 목록 행 순서가 상태로 간다
+    lw = sec.list
+    lw.insertItem(0, lw.takeItem(lw.count() - 1))
+    sec._rows_moved()
+    assert [g.gid for g in st.groups] == [
+        lw.item(r).data(256) for r in range(lw.count())]
+
+
+def test_apply_keeps_group_order(sec):
+    from etreport.data.loader import merge_split_styles
+
+    st = sec.state
+    if st.split is None or len(st.groups) < 2:
+        pytest.skip("데모에 실험 조건 그룹이 없다")
+    st.groups.reverse()
+    want = [g.gid for g in st.groups]
+    assert [g.gid for g in merge_split_styles(st)] == want

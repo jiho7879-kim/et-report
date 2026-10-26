@@ -3,7 +3,7 @@
 예전에는 같은 개념이 세 군데에 있었다: *보이기*는 도크 리스트, *스타일*은
 탐색 인스펙터와 리포트 인스펙터에 **각각 한 벌**, *편집*은 도크 버튼. 리포트
 화면에는 뜻이 다른 `[모든 plot에 적용]`이 둘이나 보였다. 이제 이 섹션 하나가
-`보이기 · 색/심볼/크기 · REF · 편집`을 전부 갖고, **워크스페이스가 한 개만**
+`보이기 · 순서 · 색/심볼/크기 · REF · 편집`을 전부 갖고, **워크스페이스가 한 개만**
 만들어 인스펙터 공용 자리에 둔다.
 
 리스트에서 고른 행이 곧 편집 대상이라 **그룹 고르기 콤보가 사라졌다** — 도크
@@ -12,6 +12,10 @@
 스타일은 여기 말고도 그룹 편집 창·실험 조건 배정에서 바뀔 수 있으므로 변경은
 `groups_changed` **한 방향**으로만 알리고, 그 신호를 되받아 컨트롤을 채울 때는
 시그널을 막아 재귀를 피한다.
+
+목록 순서가 곧 그리는 앞뒤다 — **맨 위 그룹이 맨 앞**(레이어처럼). wafer 집계
+점은 크고 적어서 뒤에 깔린 그룹이 통째로 가려지곤 했다. 순서는 끌어서 놓거나
+▲▼로 바꾸고, 렌더러(`mpl_renderer.front_order`)가 zorder로 반영한다.
 """
 from __future__ import annotations
 
@@ -25,6 +29,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -84,7 +89,27 @@ class GroupSection(ChromeSection):
         self.list.setFixedHeight(108)
         self.list.itemChanged.connect(self._item_changed)
         self.list.currentRowChanged.connect(lambda _i: self.to_controls())
-        self.body.addWidget(self.list)
+        self.list.setDragDropMode(QListWidget.InternalMove)
+        self.list.model().rowsMoved.connect(self._rows_moved)
+        self.btn_up = GhostButton("▲")
+        self.btn_down = GhostButton("▼")
+        lst = QHBoxLayout()
+        lst.setContentsMargins(0, 0, 0, 0)
+        lst.addWidget(self.list, 1)
+        arrows = QVBoxLayout()
+        arrows.setContentsMargins(0, 0, 0, 0)
+        for b, d, tip in ((self.btn_up, -1, "앞으로"), (self.btn_down, 1, "뒤로")):
+            b.setFixedWidth(28)
+            b.setStyleSheet("padding:4px 0;")   # 기본 좌우 padding이 글자를 다 먹는다
+            b.setToolTip(f"고른 그룹을 {tip} — 목록 맨 위 그룹이 plot 맨 앞에 "
+                         "그려집니다.\n행을 끌어서 옮겨도 됩니다.")
+            b.clicked.connect(lambda _c=False, d=d: self.move(d))
+            arrows.addWidget(b)
+        arrows.addStretch(1)
+        lst.addLayout(arrows)
+        w0 = QWidget()
+        w0.setLayout(lst)
+        self.body.addWidget(w0)
 
         self.btn_color = QPushButton("색")
         self.btn_color.setFixedWidth(_SWATCH_W)
@@ -190,6 +215,25 @@ class GroupSection(ChromeSection):
             return self.state.groups[i]
         return None
 
+    def move(self, delta: int) -> None:
+        """고른 그룹을 위(-1)·아래(+1)로 한 칸. 위로 갈수록 앞에 그려진다."""
+        i, gs = self.list.currentRow(), self.state.groups
+        j = i + delta
+        if not (0 <= i < len(gs) and 0 <= j < len(gs)):
+            return
+        gs[i], gs[j] = gs[j], gs[i]
+        self.fill_groups()
+        self.list.setCurrentRow(j)
+        self._announce()
+
+    def _rows_moved(self, *_args) -> None:
+        """끌어 놓은 목록 순서 → 상태. 행의 gid로 다시 줄 세운다."""
+        order = [self.list.item(r).data(Qt.UserRole)
+                 for r in range(self.list.count())]
+        rank = {gid: n for n, gid in enumerate(order)}
+        self.state.groups.sort(key=lambda g: rank.get(g.gid, len(rank)))
+        self._announce()
+
     def _item_changed(self, item: QListWidgetItem) -> None:
         """체크 = 보이기. 그리는 탭은 dirty가 되고 [그리기]/[미리보기]가 반영한다."""
         g = self.state.group(item.data(Qt.UserRole))
@@ -206,6 +250,9 @@ class GroupSection(ChromeSection):
         for w in (self.btn_color, self.cmb_symbol, self.cmb_size, self.chk_ref,
                   self.btn_all):
             w.setEnabled(g is not None)
+        i, n = self.list.currentRow(), len(self.state.groups)
+        self.btn_up.setEnabled(g is not None and i > 0)
+        self.btn_down.setEnabled(g is not None and i < n - 1)
         if g is not None:
             self.btn_color.setStyleSheet(swatch_qss(g.color))
             self.cmb_symbol.setCurrentIndex(

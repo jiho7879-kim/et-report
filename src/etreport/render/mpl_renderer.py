@@ -123,6 +123,17 @@ POINT_GID = "etreport.points"
 _EDGE_ONLY = frozenset({"+", "x", "1", "2", "3", "4", "|", "_"})
 
 
+def front_order(styles: list[GroupStyle]) -> dict[str, float]:
+    """그룹 목록 **맨 위가 맨 앞**에 그려지도록 gid → zorder 가산값(0~1).
+
+    순서를 그리는 순서로 바꾸지 않고 zorder로 주는 이유: 범례는 그린 순서를
+    따르므로, 거꾸로 그리면 범례까지 뒤집힌다. 값은 1 미만이라 점·선이 규격선·
+    타깃 표시와 이루는 층은 그대로다.
+    """
+    n = len(styles)
+    return {st.gid: (n - i) / (n + 1) for i, st in enumerate(styles)}
+
+
 def points(ax, xs, ys, *, color: str, size: float, marker: str,
            label: str | None = None, zorder: float = 3, alpha: float = 0.9,
            hollow: bool = False):
@@ -268,6 +279,7 @@ def render(spec: PlotSpec,
     excluded_keys = (set(excluded["key"]) if excluded is not None
                      and not excluded.is_empty() else set())
     markers = lot_markers(data) if lot_split else {}
+    front = front_order(styles)
     for st in styles:
         if not st.visible or st.gid not in data:
             continue
@@ -277,7 +289,8 @@ def render(spec: PlotSpec,
         for sub, mark, label in _lot_parts(df, lot_split, markers, st):
             if spec.mode != "site":
                 _scatter_aggregate(ax, sub, pairs, st, spec.mode, excluded_keys,
-                                   marker=mark, label=label, hollow=hollow)
+                                   marker=mark, label=label, hollow=hollow,
+                                   zorder=3 + front[st.gid])
                 continue
             for ax_x, ax_y in pairs:
                 if ax_x not in sub.columns or ax_y not in sub.columns:
@@ -285,7 +298,7 @@ def render(spec: PlotSpec,
                 points(ax, sub[ax_x], sub[ax_y], color=st.color,
                        size=st.size, marker=mark,
                        label=label if (ax_x, ax_y) == pairs[0] else None,
-                       hollow=hollow)
+                       hollow=hollow, zorder=3 + front[st.gid])
 
     if spec.mode == "site" and _unpaired(data, pairs):
         ax.text(0.5, 0.5, "x·y가 같은 측정점에 없습니다\n"
@@ -403,7 +416,7 @@ def _scatter_aggregate(ax, df: pl.DataFrame, pairs, st: GroupStyle,
                        agg: str, excluded_keys: set[str],
                        marker: str | None = None,
                        label: str | None = None,
-                       hollow: bool = False) -> None:
+                       hollow: bool = False, zorder: float = 3) -> None:
     """mode=avg/med/std scatter — (lot,wafer) 집계 점 하나씩.
 
     marker·label을 주면 그것을 쓴다(lot 구분). 안 주면 그룹 스타일 그대로다.
@@ -423,7 +436,7 @@ def _scatter_aggregate(ax, df: pl.DataFrame, pairs, st: GroupStyle,
             continue
         points(ax, xs, ys, color=st.color, size=st.size, marker=mark,
                label=name if (ax_x, ax_y) == pairs[0] else None,
-               hollow=hollow)
+               hollow=hollow, zorder=zorder)
 
 
 def _render_trend(spec: PlotSpec,
@@ -484,6 +497,7 @@ def _render_trend(spec: PlotSpec,
     xlo, xhi = manual_range(spec, "x", xlo, xhi)
 
     markers = lot_markers(data) if lot_split else {}
+    front = front_order(styles)
     # 점 스트립은 lot으로 나누지 않는다 — 작은 점이라 모양을 구분하지 않고,
     # wafer 집계는 어차피 (lot, wafer)별이라 나눠도 같은 점이 나온다.
     for st in styles:
@@ -509,7 +523,8 @@ def _render_trend(spec: PlotSpec,
             ax.scatter([xpos[it]] * len(ys), ys, s=(st.size * 0.5) ** 2,
                        facecolors="none" if hollow else st.color,
                        edgecolors=st.color if hollow else "none",
-                       alpha=0.45, linewidths=0.8 if hollow else 0, zorder=2)
+                       alpha=0.45, linewidths=0.8 if hollow else 0,
+                       zorder=2 + front[st.gid])
 
     line_agg = "med" if spec.mode == "site" else spec.mode
     for st in styles:
@@ -529,7 +544,7 @@ def _render_trend(spec: PlotSpec,
             # 회색으로 덮으면 REF 색만 "바꿨는데 안 바뀐다"가 된다.
             line_kw = {"color": st.color, "marker": mark,
                        "markersize": st.size * 0.6, "linewidth": 1.2,
-                       "zorder": 4, "label": label}
+                       "zorder": 4 + front[st.gid], "label": label}
             if _is_hollow_symbol(st.symbol) and not lot_split:
                 line_kw.update(markerfacecolor="none", markeredgecolor=st.color)
             ax.plot(xs, ys, **line_kw)

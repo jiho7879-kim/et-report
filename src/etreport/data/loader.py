@@ -608,8 +608,10 @@ def merge_split_styles(state: AppState) -> list:
     크기·보이기가 기본값으로 돌아가고 손으로 만든 그룹은 목록에서 사라졌다
     (점은 남아 있는데 그릴 스타일이 없어 화면에서 빠졌다). 같은 gid면 예전
     값을 쓰고, split이 만들지 않은 그룹은 `manual_groups`가 쓰는 동안 남긴다.
-    [적용]과 factor 편집(`_apply_split`)이 이 함수 하나를 탄다.
+    **목록 순서도 살린다** — 순서가 곧 그리는 앞뒤다(맨 위가 맨 앞). 새로 생긴
+    그룹은 뒤에 붙는다. [적용]과 factor 편집(`_apply_split`)이 이 함수 하나를 탄다.
     """
+    pos = {g.gid: i for i, g in enumerate(state.groups)}
     keep = {g.gid: g for g in state.groups}
     fresh = state.split.styles_for(state.factors)
     for g in fresh:
@@ -618,7 +620,8 @@ def merge_split_styles(state: AppState) -> list:
             g.name, g.color, g.symbol, g.size, g.visible = (
                 old.name, old.color, old.symbol, old.size, old.visible)
     used = set(state.manual_groups.values())
-    return fresh + [g for g in keep.values() if g.gid in used]
+    out = fresh + [g for g in keep.values() if g.gid in used]
+    return sorted(out, key=lambda g: pos.get(g.gid, len(pos)))   # 안정 정렬
 
 
 def sync_exclusion(state: AppState, key: str | list[str], exclude: bool,
